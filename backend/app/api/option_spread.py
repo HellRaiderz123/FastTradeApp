@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 from app.core.strategies.option_spread_15m.engine import run_option_spread
+from app.db.models import StrategyRun
+from app.db.session import SessionLocal
 
 router = APIRouter()
 
@@ -26,6 +28,7 @@ class OptionSpreadRequest(BaseModel):
 # ============================
 
 class OptionSpreadResponse(BaseModel):
+    run_id: Optional[int] = None
     strategy: str
     approved: bool
     reason: str
@@ -58,23 +61,18 @@ def run_option_spread_api(payload: OptionSpreadRequest):
 
     try:
         result = run_option_spread(payload.dict())
-        run_id = result.get("run_id")
-        if not run_id:
-            # Fallback: last inserted row (safe for now)
-            from app.db.session import SessionLocal
-            from app.db.models import StrategyRun
-
-            db = SessionLocal()
-            try:
-                last_run = (
-                    db.query(StrategyRun)
-                    .order_by(StrategyRun.id.desc())
-                    .first()
-                )
-                if last_run:
-                    result["run_id"] = last_run.id
-            finally:
-                db.close()
+        # Attach run_id from DB (latest run)
+        db = SessionLocal()
+        try:
+            last_run = (
+                db.query(StrategyRun)
+                .order_by(StrategyRun.id.desc())
+                .first()
+            )
+            if last_run:
+                result["run_id"] = last_run.id
+        finally:
+            db.close()
 
         return result
 
