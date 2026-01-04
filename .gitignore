@@ -1,0 +1,70 @@
+# ================================
+# Python
+# ================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+.env
+.env.*
+.venv/
+venv/
+ENV/
+env/
+
+# ================================
+# FastAPI / Uvicorn
+# ================================
+*.log
+uvicorn.log
+
+# ================================
+# Jupyter / ML
+# ================================
+.ipynb_checkpoints/
+*.joblib
+*.pkl
+*.h5
+*.onnx
+models/
+artifacts/
+checkpoints/
+
+# ================================
+# Streamlit (legacy UI)
+# ================================
+.streamlit/
+.streamlit/secrets.toml
+
+# ================================
+# Database
+# ================================
+*.sqlite
+*.sqlite3
+db.sqlite3
+data/
+data/*.db
+
+# ================================
+# Secrets / Broker Keys
+# ================================
+secrets.json
+credentials.json
+kite_token.json
+zerodha_token.json
+
+# ================================
+# Docker
+# ================================
+docker-compose.override.yml
+*.docker.env
+
+# ================================
+# OS / Editor
+# ================================
+.DS_S_
+Thumbs.db
+./backend/app/__pycache__/
+backend/app/__pycache__/main.cpython-311.pyc
