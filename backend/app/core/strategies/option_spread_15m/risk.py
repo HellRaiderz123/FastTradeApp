@@ -7,6 +7,8 @@ If risk.py blocks → trade is NOT allowed.
 
 from typing import Tuple, Dict
 
+MAX_PORTFOLIO_LOSS_PCT = 3.0  # % of capital
+MAX_TRADES_PER_DAY = 3
 
 def pct_from_atm(strike: int, spot: float) -> float:
     """

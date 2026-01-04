@@ -1,6 +1,8 @@
 from app.db.session import SessionLocal
 from app.db.repository import save_strategy_run
 from app.db.models import StrategyRun
+from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
+from app.core.market.expiry import get_current_weekly_expiry
 
 
 """
@@ -214,11 +216,23 @@ def run_option_spread(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "side": "SELL",
                 "strike": short_strike,
                 "type": opt_type,
+                "symbol": build_zerodha_option_symbol(
+                    underlying=underlying,
+                    expiry=get_current_weekly_expiry(underlying),
+                    strike=short_strike,
+                    option_type=opt_type,
+                ),
             },
             {
                 "side": "BUY",
                 "strike": long_strike,
                 "type": opt_type,
+                "symbol": build_zerodha_option_symbol(
+                    underlying=underlying,
+                    expiry=get_current_weekly_expiry(underlying),
+                    strike=long_strike,
+                    option_type=opt_type,
+                ),
             },
         ],
     }

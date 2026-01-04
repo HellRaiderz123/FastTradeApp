@@ -1,6 +1,7 @@
 from app.db.session import engine
 from app.db.models import Base
 from app.db.models_intent import ExecutionIntent
+from app.db.models_control import SystemControl
 
 
 def init_db():

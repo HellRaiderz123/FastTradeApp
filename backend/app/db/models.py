@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, JSON
 from datetime import datetime
 
 from app.db.session import Base
+from app.core.utils.time import now_ist
 
 
 class StrategyRun(Base):
@@ -27,4 +28,9 @@ class StrategyRun(Base):
     context = Column(JSON)
 
     # Timestamp
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+
+    unrealized_pnl = Column(Float, nullable=True)
+    mtm = Column(Float, nullable=True)
+    last_mtm_at = Column(DateTime(timezone=True), nullable=True)
+    pnl = Column(Float, nullable=True)
