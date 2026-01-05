@@ -1,7 +1,6 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import cast
 
 from app.db.session import SessionLocal
 from app.db.models_intent import ExecutionIntent
@@ -12,7 +11,7 @@ from app.core.broker.zerodha.client import get_kite_client
 
 router = APIRouter(prefix="/exit", tags=["Exit"])
 
-EXECUTION_MODE = os.getenv("EXECUTION_MODE") 
+EXECUTION_MODE = os.getenv("EXECUTION_MODE", "PAPER")
 
 
 def get_db():
@@ -46,24 +45,28 @@ def manual_exit(intent_id: str, db: Session = Depends(get_db)):
     else:
         kite = get_kite_client()
         executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=True)
+
+    # 🔒 EXIT EXECUTION (single source of truth)
     exit_result = executor.exit(intent)
 
-   # ✅ Step-7 compliant finalization
-    final_pnl = intent.unrealized_pnl
+    # ✅ FINALIZE INTENT (IMMUTABLE)
+    intent.status = "CLOSED"                    # type: ignore
+    intent.exit_reason = "MANUAL"               # type: ignore
+    intent.closed_at = now_ist()                # type: ignore
+    intent.final_pnl = exit_result["final_pnl"] # type: ignore
 
-    intent.status = "CLOSED"                 # type: ignore
-    intent.closed_at = now_ist()              # type: ignore
-    intent.execution_result = exit_result # type: ignore
-    intent.pnl = final_pnl
-    intent.unrealized_pnl = None              # type: ignore # 🔥 REQUIRED
+    # 🔥 VERY IMPORTANT
+    intent.unrealized_pnl = None                # type: ignore
+    intent.execution_result = exit_result       # type: ignore
 
     db.commit()
-    db.refresh(intent)  
+    db.refresh(intent)
 
     return {
         "intent_id": intent.intent_id,
         "status": intent.status,
         "closed_at": intent.closed_at,
-        "final_pnl": intent.pnl,
+        "final_pnl": intent.final_pnl,
+        "exit_reason": intent.exit_reason,
         "mode": exit_result.get("mode"),
     }

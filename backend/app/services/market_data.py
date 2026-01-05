@@ -10,23 +10,26 @@ import pandas as pd
 import random
 import time
 
+from app.core.broker.zerodha.instruments import get_index_token, load_instruments
+from app.core.broker.zerodha.client import get_kite_client
+from app.core.market.expiry import get_next_weekly_expiry
+
 
 # ============================
 # SPOT PRICE
 # ============================
 
-def get_spot(underlying: str) -> float:
+def get_spot(underlying: str) -> float: # type: ignore
     """
     Fetch live spot price.
     Replace stub with Zerodha / NSE API later.
     """
     # ---- TEMP STUB ----
-    if underlying == "NIFTY":
-        return 22500.0
-    elif underlying == "BANKNIFTY":
-        return 48500.0
-    return 0.0
+    kite = get_kite_client()
+    token = get_index_token(underlying)
 
+    data = kite.ltp([token])
+    return data[token]["last_price"] # type: ignore
 
 # ============================
 # ATM STRIKE
@@ -43,33 +46,28 @@ def pick_atm_strike(underlying: str, spot: float) -> int:
 
 def get_option_chain(underlying: str) -> pd.DataFrame:
     """
-    Returns option chain as DataFrame.
-    Columns expected by your logic:
-    - strike
-    - instrument_type (PE / CE)
-    - tradingsymbol
-    - lot_size
+    REAL option chain from Zerodha instruments.
     """
-    step = 50 if underlying == "NIFTY" else 100
-    atm = pick_atm_strike(underlying, get_spot(underlying))
+    expiry = get_next_weekly_expiry()
+    instruments = load_instruments()
 
-    rows = []
-    for i in range(-10, 11):
-        strike = atm + (i * step)
-        rows.append({
-            "strike": strike,
-            "instrument_type": "PE",
-            "tradingsymbol": f"{underlying}{strike}PE",
-            "lot_size": 50 if underlying == "NIFTY" else 25,
-        })
-        rows.append({
-            "strike": strike,
-            "instrument_type": "CE",
-            "tradingsymbol": f"{underlying}{strike}CE",
-            "lot_size": 50 if underlying == "NIFTY" else 25,
-        })
+    df = instruments[
+        (instruments["name"] == underlying)
+        & (instruments["expiry"] == pd.Timestamp(expiry))
+        & (instruments["segment"] == "NFO-OPT")
+    ].copy()
 
-    return pd.DataFrame(rows)
+    df.rename(
+        columns={
+            "strike": "strike",
+            "instrument_type": "instrument_type",
+            "tradingsymbol": "tradingsymbol",
+            "lot_size": "lot_size",
+        },
+        inplace=True,
+    )
+
+    return df[["strike", "instrument_type", "tradingsymbol", "lot_size"]]
 
 
 # ============================
@@ -78,29 +76,25 @@ def get_option_chain(underlying: str) -> pd.DataFrame:
 
 def get_option_ltp(symbols: List[str]) -> Dict[str, float]:
     """
-    Fetch LTP for option symbols.
+    Fetch REAL option LTP from Zerodha.
     """
-    ltp_map = {}
-    for sym in symbols:
-        # ---- TEMP STUB ----
-        ltp_map[sym] = round(random.uniform(10, 250), 2)
-    return ltp_map
+    kite = get_kite_client()
+
+    symbols = [f"NFO:{sym}" for sym in symbols]
+    data = kite.ltp(symbols)
+
+    return {
+        sym.split(":")[1]: info["last_price"]
+        for sym, info in data.items()
+    }
+
 
 
 # ============================
 # OI ENRICHMENT
 # ============================
 
-def enrich_chain_with_live_oi(
-    chain_df: pd.DataFrame,
-    atm: int,
-    underlying: str
-) -> pd.DataFrame:
-    """
-    Adds OI column to option chain.
-    """
-    df = chain_df.copy()
-    df["oi"] = df["strike"].apply(
-        lambda s: max(0, int(1_00_000 - abs(s - atm) * 50))
-    )
-    return df
+def enrich_chain_with_live_oi(chain_df: pd.DataFrame, *_):
+    chain_df["oi"] = None
+    return chain_df
+

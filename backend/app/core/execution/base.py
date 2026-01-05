@@ -30,3 +30,12 @@ class ExecutionAdapter(ABC):
         Exit all open positions for intent.
         """
         pass
+
+from typing import Dict, Any
+
+class SignalResult(Dict[str, Any]):
+    """
+    Standard signal format used everywhere.
+    """
+    pass
+

@@ -58,15 +58,45 @@ def update_paper_mtm(db: Session):
         .all()
     )
 
+    if not intents:
+        return []
+
     for intent in intents:
-        try:
-            pnl = executor.mtm(intent)
-        except Exception as e:
-            # MTM must NEVER crash system
-            print(f"⚠️ MTM failed for intent {intent.intent_id}: {e}")
+        ticket = intent.ticket
+
+        # ---- VALIDATION (FAIL FAST) ----
+        if not ticket or "legs" not in ticket:
             continue
 
-        intent.pnl = cast(float, pnl) # type: ignore
-        intent.last_mtm_at = now_ist() # type: ignore
+        lot_size = ticket.get("lot_size", 1)
+        lots = ticket.get("lots", 1)
+        quantity = lot_size * lots
+
+        symbols = [leg["symbol"] for leg in ticket["legs"]]
+
+        # ---- LIVE LTP ----
+        ltp_map = get_ltp(symbols)
+
+        pnl = 0.0
+
+        # ---- MTM PER LEG ----
+        for leg in ticket["legs"]:
+            symbol = leg["symbol"]
+            entry_price = leg.get("price")     # 🔥 STORED PRICE
+            current_price = ltp_map.get(symbol)
+
+            if entry_price is None or current_price is None:
+                continue
+
+            if leg["side"] == "SELL":
+                leg_pnl = (entry_price - current_price) * quantity
+            else:  # BUY
+                leg_pnl = (current_price - entry_price) * quantity
+
+            pnl += leg_pnl
+
+        # ---- PERSIST ----
+        intent.pnl = round(pnl, 2)
+        intent.last_mtm_at = now_ist()
 
     db.commit()

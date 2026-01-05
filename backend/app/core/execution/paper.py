@@ -13,30 +13,39 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
     def execute(self, intent):
         ticket = intent.ticket
+
+        # 1️⃣ Build symbol list (prefer stored symbol if exists)
         symbols = []
-
         for leg in ticket["legs"]:
-            symbols.append(f'{leg["strike"]}{leg["type"]}')
+            symbol = leg.get("symbol") or f'{leg["strike"]}{leg["type"]}'
+            leg["symbol"] = symbol          # 🔐 normalize once
+            symbols.append(symbol)
 
-        ltp = get_ltp(symbols)
+        # 2️⃣ Fetch LTP
+        ltp_map = get_ltp(symbols)
 
-        credit = 0.0
+        entry_credit = 0.0
 
+        # 3️⃣ 🔥 STORE EXECUTED PRICE PER LEG (CRITICAL)
         for leg in ticket["legs"]:
-            sym = f'{leg["strike"]}{leg["type"]}'
-            price = ltp[sym]
+            symbol = leg["symbol"]
+            price = ltp_map[symbol]
+
+            leg["price"] = price            # ✅ THIS LINE FIXES EVERYTHING
 
             if leg["side"] == "SELL":
-                credit += price
+                entry_credit += price
             else:
-                credit -= price
+                entry_credit -= price
 
+        # 4️⃣ Return execution snapshot
         return {
             "filled_at": now_ist().isoformat(),
-            "entry_credit": credit,
-            "ltp_used": ltp,
+            "entry_credit": entry_credit,
+            "ltp_used": ltp_map,
             "mode": "PAPER",
         }
+
 
     def mtm(self, intent) -> float:
         """
@@ -58,15 +67,26 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
         return pnl
 
-    def exit(self, intent) -> Dict[str, Any]:
-        """
-        Close paper trade immediately at LTP.
-        """
-        pnl = self.mtm(intent)
+    def exit(self, intent):
+        ticket = intent.ticket
+        symbols = [leg["symbol"] for leg in ticket["legs"]]
+
+        ltp_map = get_ltp(symbols)
+
+        exit_cost = 0.0
+        for leg in ticket["legs"]:
+            price = ltp_map[leg["symbol"]]
+            if leg["side"] == "SELL":
+                exit_cost += price
+            else:
+                exit_cost -= price
+
+        final_pnl = round(intent.entry_credit - exit_cost, 2)
 
         return {
-            "exited_at": now_ist().isoformat(),
             "mode": "PAPER",
-            "reason": "MANUAL_EXIT",
+            "exit_cost": exit_cost,
+            "final_pnl": final_pnl,
+            "closed_at": now_ist().isoformat(),
         }
     

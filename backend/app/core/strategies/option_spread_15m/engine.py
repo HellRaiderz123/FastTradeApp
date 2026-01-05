@@ -3,7 +3,8 @@ from app.db.repository import save_strategy_run
 from app.db.models import StrategyRun
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 from app.core.market.expiry import get_current_weekly_expiry
-
+from app.core.signals.orchestrator import generate_signal
+from sqlalchemy.orm import Session
 
 """
 engine.py
@@ -56,7 +57,7 @@ def _log_strategy_run(result: dict, underlying: str) -> Optional[StrategyRun]:
     finally:
         db.close()
 
-def run_option_spread(payload: Dict[str, Any]) -> Dict[str, Any]:
+def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     MAIN ENTRY POINT for 15m option spread strategy.
 
@@ -79,12 +80,12 @@ def run_option_spread(payload: Dict[str, Any]) -> Dict[str, Any]:
     # =====================================================
     # 1️⃣ SIGNAL GENERATION (ML + TA)
     # =====================================================
-    sig = recommend_smart_option(
-        underlying=payload["underlying"],
-        interval=payload.get("interval", "15minute"),
-        use_ml=payload.get("use_ml", True),
-        min_confidence=payload.get("min_confidence", 75),
+    sig = generate_signal(
+        db=db,
+        symbol=payload["underlying"],
+        use_ml=payload.get("use_ml", False),
     )
+
 
     confidence = float(sig.get("confidence", 0.0))
 

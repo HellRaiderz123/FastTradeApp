@@ -1,13 +1,19 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 from app.core.strategies.option_spread_15m.engine import run_option_spread
 from app.db.models import StrategyRun
+from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
-
 router = APIRouter()
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 # ============================
 # REQUEST MODEL
@@ -49,7 +55,7 @@ class OptionSpreadResponse(BaseModel):
     "/option-spread/15m/run",
     response_model=OptionSpreadResponse,
 )
-def run_option_spread_api(payload: OptionSpreadRequest):
+def run_option_spread_api(payload: OptionSpreadRequest,  db: Session = Depends(get_db),):
     """
     Run 15m Option Spread strategy (Bull Put / Bear Call).
 
@@ -60,20 +66,7 @@ def run_option_spread_api(payload: OptionSpreadRequest):
     """
 
     try:
-        result = run_option_spread(payload.dict())
-        # Attach run_id from DB (latest run)
-        db = SessionLocal()
-        try:
-            last_run = (
-                db.query(StrategyRun)
-                .order_by(StrategyRun.id.desc())
-                .first()
-            )
-            if last_run:
-                result["run_id"] = last_run.id
-        finally:
-            db.close()
-
+        result = run_option_spread(db=db, payload=payload.dict())
         return result
 
 
