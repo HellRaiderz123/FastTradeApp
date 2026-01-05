@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE = 'http://10.0.2.2:8000'; // Android emulator localhost
+const API_BASE = 'http://192.168.31.244:8000'; // Android emulator localhost
 // For iOS: use 'http://localhost:8000'
 // For physical device: use your actual IP
 

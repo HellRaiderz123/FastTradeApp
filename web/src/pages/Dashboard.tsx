@@ -1,26 +1,69 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { TrendingUp, DollarSign, Activity, Target } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
+import { accountAPI, journalAPI } from '../lib/api';
 
 const Dashboard: React.FC = () => {
-  const { capital, dailyPnL, trades } = useTradeStore();
+  const { capital, dailyPnL, trades, accountProfile, loading, setCapital, setAccountProfile, setLoading } = useTradeStore();
 
-  const pnlPercent = ((dailyPnL / capital) * 100).toFixed(2);
+  useEffect(() => {
+    fetchAccountData();
+    fetchRecentTrades();
+    
+    // Refresh every 30 seconds
+    const interval = setInterval(() => {
+      fetchAccountData();
+    }, 30000);
+    
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchAccountData = async () => {
+    try {
+      const response = await accountAPI.getProfile();
+      setAccountProfile(response.data);
+      setCapital(response.data.capital);
+    } catch (error) {
+      console.error('Failed to fetch account data:', error);
+      // Fallback to default if API fails
+    }
+  };
+
+  const fetchRecentTrades = async () => {
+    try {
+      setLoading(true);
+      const response = await journalAPI.getStrategyRuns(10);
+      // Process response if needed
+    } catch (error) {
+      console.error('Failed to fetch trades:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const displayCapital = accountProfile?.capital || capital;
+  const pnlPercent = ((dailyPnL / displayCapital) * 100).toFixed(2);
   const winCount = trades.filter((t) => t.pnl > 0).length;
   const winRate = trades.length > 0 ? ((winCount / trades.length) * 100).toFixed(1) : '0';
 
-  // Sample data for charts
-  const chartData = [
-    { time: '09:15', balance: 100000, pnl: 0 },
-    { time: '09:45', balance: 101200, pnl: 1200 },
-    { time: '10:15', balance: 101800, pnl: 1800 },
-    { time: '10:45', balance: 100900, pnl: 900 },
-    { time: '11:15', balance: 102500, pnl: 2500 },
-    { time: '11:45', balance: 103200, pnl: 3200 },
-    { time: '12:15', balance: 102100, pnl: 2100 },
-    { time: '12:45', balance: 103800, pnl: 3800 },
-  ];
+  // Generate chart data based on trades or use defaults
+  const chartData = trades.length > 0
+    ? trades.slice(0, 8).map((t, i) => ({
+        time: `T${i + 1}`,
+        balance: displayCapital + (t.pnl || 0),
+        pnl: t.pnl || 0,
+      }))
+    : [
+        { time: '09:15', balance: displayCapital, pnl: 0 },
+        { time: '09:45', balance: displayCapital + 1200, pnl: 1200 },
+        { time: '10:15', balance: displayCapital + 1800, pnl: 1800 },
+        { time: '10:45', balance: displayCapital + 900, pnl: 900 },
+        { time: '11:15', balance: displayCapital + 2500, pnl: 2500 },
+        { time: '11:45', balance: displayCapital + 3200, pnl: 3200 },
+        { time: '12:15', balance: displayCapital + 2100, pnl: 2100 },
+        { time: '12:45', balance: displayCapital + 3800, pnl: 3800 },
+      ];
 
   const tradeStats = [
     { time: '09:00', trades: 1, wins: 1 },
@@ -37,8 +80,8 @@ const Dashboard: React.FC = () => {
         <MetricCard
           icon={DollarSign}
           label="Capital"
-          value={`₹${capital.toLocaleString()}`}
-          change="+0%"
+          value={`₹${displayCapital.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+          change={accountProfile ? 'From Zerodha' : 'Loading...'}
           color="blue"
         />
         <MetricCard
@@ -95,13 +138,20 @@ const Dashboard: React.FC = () => {
 
         {/* Quick Stats */}
         <div className="card-glass p-6 space-y-4">
-          <h3 className="text-lg font-semibold text-white">Quick Stats</h3>
+          <h3 className="text-lg font-semibold text-white">Account Info</h3>
           <div className="space-y-3">
-            <StatItem label="Avg Win" value="₹2,400" />
-            <StatItem label="Avg Loss" value="₹1,200" />
-            <StatItem label="Profit Factor" value="2.0x" />
-            <StatItem label="Max Drawdown" value="-1.2%" />
-            <StatItem label="Sharpe Ratio" value="1.85" />
+            {accountProfile && (
+              <>
+                <StatItem label="User ID" value={accountProfile.user_id || 'N/A'} />
+                <StatItem label="Email" value={accountProfile.email || 'N/A'} />
+                <StatItem label="Equity" value={`₹${Math.round(accountProfile.equity || 0).toLocaleString('en-IN')}`} />
+                <StatItem label="Net Worth" value={`₹${Math.round(accountProfile.net_worth || 0).toLocaleString('en-IN')}`} />
+                <StatItem label="Available Margin" value={`₹${Math.round(accountProfile.margins_available || 0).toLocaleString('en-IN')}`} />
+              </>
+            )}
+            {!accountProfile && (
+              <p className="text-slate-400 text-sm">Loading account data...</p>
+            )}
           </div>
         </div>
       </div>

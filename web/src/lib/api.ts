@@ -9,6 +9,15 @@ const api = axios.create({
   },
 });
 
+// Account APIs
+export const accountAPI = {
+  getProfile: () =>
+    api.get('/account/profile'),
+  
+  getCapital: () =>
+    api.get('/account/capital'),
+};
+
 // Strategy APIs
 export const strategyAPI = {
   runStrategy: (payload: any) =>
@@ -17,8 +26,11 @@ export const strategyAPI = {
 
 // Execution APIs
 export const executionAPI = {
-  createIntent: (runId: number) =>
-    api.post(`/intent/create`, { run_id: runId }),
+  createIntent: (runId: number, capital?: number) =>
+    api.post(`/intent/create`, { 
+      run_id: runId,
+      ...(capital && { capital })
+    }),
   
   executeIntent: (intentId: string, idempotencyKey: string) =>
     api.post(`/execute/paper/${intentId}`, {

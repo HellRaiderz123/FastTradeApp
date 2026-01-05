@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertCircle, CheckCircle, Clock, X } from 'lucide-react';
-import { strategyAPI, executionAPI } from '../lib/api';
+import { strategyAPI, executionAPI, accountAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 
 const Strategies: React.FC = () => {
@@ -14,6 +14,21 @@ const Strategies: React.FC = () => {
 
   const underlyings = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
   const riskModes = ['Conservative', 'Balanced', 'Aggressive'];
+
+  // Fetch real capital on component mount
+  useEffect(() => {
+    fetchCapital();
+  }, []);
+
+  const fetchCapital = async () => {
+    try {
+      const response = await accountAPI.getCapital();
+      setCapital(response.data.capital);
+    } catch (error) {
+      console.error('Failed to fetch capital:', error);
+      // Keep default value if API fails
+    }
+  };
 
   const handleRunStrategy = async () => {
     setLoading(true);
@@ -42,7 +57,7 @@ const Strategies: React.FC = () => {
     if (!strategyResult || !strategyResult.run_id) return;
 
     try {
-      // Create intent
+      // Create intent (capital will be fetched from Zerodha if not provided)
       const intentRes = await executionAPI.createIntent(strategyResult.run_id);
       const intent = intentRes.data;
 

@@ -22,11 +22,24 @@ export interface Signal {
   iv_regime: string;
 }
 
+export interface AccountProfile {
+  user_id: string;
+  email: string;
+  phone: string;
+  capital: number;
+  margins_available: number;
+  margins_utilised: number;
+  equity: number;
+  net_worth: number;
+}
+
 interface TradeStore {
   trades: Trade[];
   capital: number;
   dailyPnL: number;
   systemEnabled: boolean;
+  accountProfile: AccountProfile | null;
+  loading: boolean;
   
   setTrades: (trades: Trade[]) => void;
   addTrade: (trade: Trade) => void;
@@ -34,6 +47,8 @@ interface TradeStore {
   setCapital: (capital: number) => void;
   setDailyPnL: (pnl: number) => void;
   setSystemEnabled: (enabled: boolean) => void;
+  setAccountProfile: (profile: AccountProfile | null) => void;
+  setLoading: (loading: boolean) => void;
 }
 
 export const useTradeStore = create<TradeStore>((set) => ({
@@ -41,6 +56,8 @@ export const useTradeStore = create<TradeStore>((set) => ({
   capital: 100000,
   dailyPnL: 0,
   systemEnabled: true,
+  accountProfile: null,
+  loading: false,
   
   setTrades: (trades) => set({ trades }),
   addTrade: (trade) => set((state) => ({ trades: [...state.trades, trade] })),
@@ -51,6 +68,8 @@ export const useTradeStore = create<TradeStore>((set) => ({
   setCapital: (capital) => set({ capital }),
   setDailyPnL: (dailyPnL) => set({ dailyPnL }),
   setSystemEnabled: (systemEnabled) => set({ systemEnabled }),
+  setAccountProfile: (accountProfile) => set({ accountProfile }),
+  setLoading: (loading) => set({ loading }),
 }));
 
 interface SignalStore {

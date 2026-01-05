@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import cast, Optional
+import logging
 
 from app.db.session import SessionLocal
 from app.db.intent_repo import create_execution_intent
@@ -14,6 +15,9 @@ from app.core.risk.tp_sl_calculator import (
     get_risk_percentage_from_mode,
 )
 from app.core.risk.risk_limits_config import get_risk_limits
+from app.core.broker.zerodha.client import get_kite_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/intent", tags=["Execution Intent"])
 
@@ -29,7 +33,7 @@ def get_db():
 @router.post("/create")
 def create_intent(
     run_id: int,
-    capital: float = 100000,
+    capital: Optional[float] = None,
     risk_mode: str = "BALANCED",
     risk_profile: Optional[str] = None,  # Can override with 'conservative', 'balanced', 'aggressive'
     db: Session = Depends(get_db)
@@ -39,11 +43,25 @@ def create_intent(
     
     Args:
         run_id: Strategy run ID
-        capital: Available capital for this trade
+        capital: Available capital for this trade (if None, fetches from Zerodha)
         risk_mode: Risk mode for TP/SL calculation (CONSERVATIVE/BALANCED/AGGRESSIVE)
         risk_profile: Risk profile for trade limits (conservative/balanced/aggressive)
         db: Database session
     """
+    # 🔹 Fetch real capital from Zerodha if not provided
+    if capital is None:
+        try:
+            kite = get_kite_client()
+            margins = kite.margins()
+            capital = margins["equity"]["available"]
+            logger.info(f"📊 Fetched capital from Zerodha: ₹{capital}")
+        except Exception as e:
+            logger.error(f"Failed to fetch capital from Zerodha: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch account capital: {str(e)}"
+            )
+    
     # 🔒 Manual kill switch
     if not is_trading_enabled(db):
         raise HTTPException(

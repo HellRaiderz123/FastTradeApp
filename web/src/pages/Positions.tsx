@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, X } from 'lucide-react';
-import { paperAPI, exitAPI } from '../lib/api';
+import { paperAPI, exitAPI, journalAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 
 const Positions: React.FC = () => {
   const { trades, setTrades } = useTradeStore();
   const [loading, setLoading] = useState(false);
+  const [localTrades, setLocalTrades] = useState<any[]>([]);
 
   useEffect(() => {
     fetchPositions();
@@ -15,11 +16,15 @@ const Positions: React.FC = () => {
 
   const fetchPositions = async () => {
     try {
-      // In real app, fetch from backend
-      // const response = await paperAPI.getPositions();
-      // setTrades(response.data);
+      setLoading(true);
+      // Fetch execution intents (active trades)
+      const response = await journalAPI.getExecutionIntents(50);
+      const activeIntents = response.data.filter((intent: any) => intent.status === 'EXECUTED');
+      setLocalTrades(activeIntents);
     } catch (error) {
       console.error('Failed to fetch positions:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -27,7 +32,7 @@ const Positions: React.FC = () => {
     setLoading(true);
     try {
       await exitAPI.manualExit(tradeId.toString());
-      setTrades(trades.filter((t) => t.id !== tradeId));
+      setLocalTrades(localTrades.filter((t) => t.id !== tradeId));
       alert('Position closed successfully!');
     } catch (error) {
       console.error('Failed to close position:', error);
@@ -37,8 +42,9 @@ const Positions: React.FC = () => {
     }
   };
 
-  const openPositions = trades.filter((t) => t.status === 'EXECUTED');
-  const totalPnL = openPositions.reduce((sum, t) => sum + t.pnl, 0);
+  const displayTrades = localTrades.length > 0 ? localTrades : trades;
+  const openPositions = displayTrades.filter((t) => t.status === 'EXECUTED');
+  const totalPnL = openPositions.reduce((sum, t) => sum + (t.pnl || 0), 0);
   const totalPnLPercent = openPositions.length > 0 ? (totalPnL / 100000) * 100 : 0;
 
   return (
@@ -63,14 +69,14 @@ const Positions: React.FC = () => {
         />
         <SummaryCard
           label="Largest Win"
-          value={`₹${Math.max(0, ...openPositions.map((t) => t.pnl)).toLocaleString()}`}
+          value={`₹${Math.max(0, ...openPositions.map((t) => t.pnl || 0)).toLocaleString()}`}
           color="green"
         />
       </div>
 
       {/* Positions List */}
       <div className="card-glass p-6">
-        <h2 className="text-2xl font-bold mb-6 text-white">Open Positions</h2>
+        <h2 className="text-2xl font-bold mb-6 text-white">Open Positions {loading && '(updating...)'}</h2>
 
         {openPositions.length === 0 ? (
           <div className="text-center py-12">

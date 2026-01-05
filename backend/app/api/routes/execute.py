@@ -33,7 +33,14 @@ def execute_paper(
 ):
     intent = get_intent_by_id(db, intent_id)
 
-    capital = 100000  # later from user/account
+    # 🔹 Fetch real capital from Zerodha
+    try:
+        kite = get_kite_client()
+        margins = kite.margins()
+        capital = margins["equity"]["available"]
+    except Exception:
+        # Fallback to hardcoded value if API fails
+        capital = 100000
 
     if check_portfolio_kill_switch(db, capital):
         raise HTTPException(
