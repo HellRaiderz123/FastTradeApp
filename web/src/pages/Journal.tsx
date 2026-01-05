@@ -13,6 +13,7 @@ interface JournalEntry {
   pnl: number;
   pnl_percent: number;
   status: string;
+  created_at: string;
 }
 
 const Journal: React.FC = () => {
@@ -166,8 +167,8 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
 
         <div className="flex items-center gap-8 text-right">
           <div>
-            <p className="text-xs text-slate-400">Entry Time</p>
-            <p className="text-sm font-medium text-white">{new Date(entry.entry_time).toLocaleString()}</p>
+            <p className="text-xs text-slate-400">Created Time</p>
+            <p className="text-sm font-medium text-white">{new Date(entry.created_at).toLocaleString()}</p>
           </div>
           <div>
             <p className="text-xs text-slate-400">P&L</p>

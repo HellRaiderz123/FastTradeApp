@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 
 
 class StrategyRunOut(BaseModel):
@@ -15,5 +15,31 @@ class StrategyRunOut(BaseModel):
 
     created_at: datetime
 
+    class Config:
+        orm_mode = True
+
+
+class ExecutionIntentOut(BaseModel):
+    id: int
+    intent_id: str
+    run_id: int
+    strategy: str
+    underlying: str
+    status: str
+    executed: bool
+    ticket: Optional[Any]
+    
+    avg_price: Optional[float]
+    pnl: Optional[float]
+    unrealized_pnl: Optional[float]
+    
+    tp: Optional[float]
+    sl: Optional[float]
+    exit_reason: Optional[str]
+    
+    entry_credit: Optional[float]
+    created_at: datetime
+    closed_at: Optional[datetime]
+    
     class Config:
         orm_mode = True

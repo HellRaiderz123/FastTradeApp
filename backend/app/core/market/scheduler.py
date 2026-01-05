@@ -19,6 +19,8 @@ def _update():
     db = SessionLocal()
     try:
         fetch_15m_candles(db, "NIFTY")
+        fetch_15m_candles(db, "BANKNIFTY")
+        fetch_15m_candles(db, "FINNIFTY")
         logger.info("✅ 15m candles updated")
     except Exception:
         logger.exception("❌ Candle update failed")
