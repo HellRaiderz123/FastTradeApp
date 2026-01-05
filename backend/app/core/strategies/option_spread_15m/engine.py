@@ -5,7 +5,7 @@ from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 from app.core.market.expiry import get_current_weekly_expiry
 from sqlalchemy.orm import Session
 
-from backend.app.core.signals.signals import generate_signal
+from app.core.signals.signals import generate_signal
 
 """
 engine.py
