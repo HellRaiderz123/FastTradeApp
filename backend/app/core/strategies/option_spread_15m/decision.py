@@ -3,6 +3,7 @@ decision.py
 ------------
 Pure strategy-decision logic.
 Decides WHAT strategy to take, not HOW.
+Now with quality-based filtering.
 """
 
 from typing import Dict, Any, Tuple
@@ -27,40 +28,54 @@ def decide_strategy(
         - NO_TRADE
     """
 
-    rec = sig.get("recommendation")
     bias = ctx.get("bias", "NEUTRAL")
-
-    # Direction helpers (exactly like Streamlit)
-    take_bull = rec == "BUY_CE" or (bias == "BULLISH" and rec != "BUY_PE")
-    take_bear = rec == "BUY_PE" or (bias == "BEARISH" and rec != "BUY_CE")
-
     market_mode = ctx.get("market_mode")
     iv_regime = ctx.get("iv_regime")
+    quality_score = ctx.get("quality_score", 0)
+    quality_checks = ctx.get("quality_checks", {})
+
+    # ================================================
+    # QUALITY GATE (minimum 4/8 required)
+    # ================================================
+    if quality_score < 4:
+        return "NO_TRADE", f"Insufficient quality score ({quality_score}/8)"
+
+    # Direction helpers
+    take_bull = bias == "BULLISH"
+    take_bear = bias == "BEARISH"
 
     # =================================================
     # TRENDING MARKET → DIRECTIONAL CREDIT SPREADS
     # =================================================
     if market_mode == "TRENDING" and iv_regime in ["LOW", "NORMAL"]:
 
-        # PATCH 6 logic preserved
+        # Lower confidence needed for LOW IV (spreads are appropriate)
         spread_min_conf = 65 if iv_regime == "LOW" else min_confidence
 
         if confidence >= spread_min_conf:
             if take_bull:
-                return "BULL_PUT", "Trending market with bullish bias"
+                return "BULL_PUT", f"Trending bullish (conf={confidence:.0f}%, quality={quality_score}/8)"
             if take_bear:
-                return "BEAR_CALL", "Trending market with bearish bias"
+                return "BEAR_CALL", f"Trending bearish (conf={confidence:.0f}%, quality={quality_score}/8)"
             return "NO_TRADE", "Trend present but directional bias unclear"
 
-        return "NO_TRADE", "Trend present but confidence too low"
+        return "NO_TRADE", f"Trend present but confidence too low ({confidence:.0f}% < {spread_min_conf}%)"
 
     # =================================================
     # RANGE MARKET + HIGH IV → IRON CONDOR
     # =================================================
     if market_mode == "RANGE" and iv_regime == "HIGH":
-        return "IRON_CONDOR", "Range-bound market with high IV"
+        if quality_score >= 5:  # Stricter for IC
+            return "IRON_CONDOR", "Range-bound market with high IV (IC appropriate)"
+        return "NO_TRADE", "Range market + high IV but insufficient quality"
 
     # =================================================
-    # EVERYTHING ELSE → NO TRADE
+    # NEUTRAL/LOW IV + RANGE → NO TRADE (wait for trend)
     # =================================================
-    return "NO_TRADE", "Unfavorable volatility or structure"
+    if market_mode == "RANGE" and iv_regime in ["LOW", "NORMAL"]:
+        return "NO_TRADE", "Range market with low IV → Unfavorable for spreads"
+
+    # =================================================
+    # FALLBACK
+    # =================================================
+    return "NO_TRADE", f"Unfavorable structure (mode={market_mode}, iv={iv_regime})"

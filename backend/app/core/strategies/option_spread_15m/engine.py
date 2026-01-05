@@ -3,8 +3,9 @@ from app.db.repository import save_strategy_run
 from app.db.models import StrategyRun
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 from app.core.market.expiry import get_current_weekly_expiry
-from app.core.signals.orchestrator import generate_signal
 from sqlalchemy.orm import Session
+
+from backend.app.core.signals.signals import generate_signal
 
 """
 engine.py
@@ -16,7 +17,6 @@ This replaces the Streamlit implementation entirely.
 from typing import Dict, Any, Optional
 
 # Services
-from app.services.signals import recommend_smart_option
 from app.services.market_data import (
     get_spot,
     pick_atm_strike,
