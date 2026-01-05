@@ -8,7 +8,12 @@ from app.api.routes.paper_mtm import router as paper_mtm_router
 from app.api.routes.exit import router as exit_router
 from app.api.routes.auto_exit import router as auto_exit_router
 from app.api.system_control import router as system_router
-from app.core.market.scheduler import start_candle_scheduler, stop_scheduler
+from app.core.market.scheduler import (
+    start_candle_scheduler,
+    start_vix_scheduler,
+    initialize_vix_data,
+    stop_scheduler,
+)
 import logging
 
 logging.basicConfig(
@@ -22,7 +27,14 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # 🔹 Startup
     logger.info("🚀 App starting")
+    
+    # Initialize VIX historic data
+    logger.info("📊 Initializing VIX system...")
+    initialize_vix_data()
+    
+    # Start schedulers
     start_candle_scheduler()
+    start_vix_scheduler()
 
     yield  # 👈 App runs here
 

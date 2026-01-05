@@ -1,10 +1,28 @@
 from datetime import date
+from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.db.models_intent import ExecutionIntent
+from app.core.risk.risk_limits_config import RiskLimits, DEFAULT_RISK_LIMITS
 
 
-def check_daily_trade_limit(db: Session) -> bool:
+def check_daily_trade_limit(
+    db: Session,
+    risk_config: Optional[RiskLimits] = None,
+) -> bool:
+    """
+    Check if daily trade limit has been exceeded.
+    
+    Args:
+        db: Database session
+        risk_config: RiskLimits configuration (uses default if None)
+        
+    Returns:
+        True if limit exceeded, False if allowed
+    """
+    if risk_config is None:
+        risk_config = DEFAULT_RISK_LIMITS
+    
     today = date.today()
 
     count = (
@@ -15,4 +33,4 @@ def check_daily_trade_limit(db: Session) -> bool:
         .count()
     )
 
-    return count >= 3
+    return count >= risk_config.max_trades_per_day

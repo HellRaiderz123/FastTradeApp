@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import cast
+from typing import cast, Optional
 
 from app.db.session import SessionLocal
 from app.db.intent_repo import create_execution_intent
@@ -9,6 +9,11 @@ from app.db.models_intent import ExecutionIntent
 
 from app.core.risk.trade_limit import check_daily_trade_limit
 from app.core.risk.system_guard import is_trading_enabled
+from app.core.risk.tp_sl_calculator import (
+    calculate_tp_sl_from_ticket,
+    get_risk_percentage_from_mode,
+)
+from app.core.risk.risk_limits_config import get_risk_limits
 
 router = APIRouter(prefix="/intent", tags=["Execution Intent"])
 
@@ -22,7 +27,23 @@ def get_db():
 
 
 @router.post("/create")
-def create_intent(run_id: int, db: Session = Depends(get_db)):
+def create_intent(
+    run_id: int,
+    capital: float = 100000,
+    risk_mode: str = "BALANCED",
+    risk_profile: Optional[str] = None,  # Can override with 'conservative', 'balanced', 'aggressive'
+    db: Session = Depends(get_db)
+):
+    """
+    Create execution intent with configurable risk parameters.
+    
+    Args:
+        run_id: Strategy run ID
+        capital: Available capital for this trade
+        risk_mode: Risk mode for TP/SL calculation (CONSERVATIVE/BALANCED/AGGRESSIVE)
+        risk_profile: Risk profile for trade limits (conservative/balanced/aggressive)
+        db: Database session
+    """
     # 🔒 Manual kill switch
     if not is_trading_enabled(db):
         raise HTTPException(
@@ -44,12 +65,23 @@ def create_intent(run_id: int, db: Session = Depends(get_db)):
             detail="No executable ticket available for this run",
         )
 
-    # 🔒 Daily trade limit guard
-    if check_daily_trade_limit(db):
+    # Get risk configuration based on profile
+    risk_config = get_risk_limits(profile=risk_profile)
+
+    # 🔒 Daily trade limit guard with configurable limit
+    if check_daily_trade_limit(db, risk_config=risk_config):
         raise HTTPException(
             status_code=429,
-            detail="Daily trade limit reached",
+            detail=f"Daily trade limit of {risk_config.max_trades_per_day} reached",
         )
+
+    # Calculate dynamic TP/SL based on capital and risk mode
+    risk_pct = get_risk_percentage_from_mode(risk_mode)
+    tp_sl = calculate_tp_sl_from_ticket(
+        ticket=run.ticket,
+        capital=capital,
+        risk_percentage=risk_pct,
+    )
 
     intent = create_execution_intent(
         db=db,
@@ -57,14 +89,19 @@ def create_intent(run_id: int, db: Session = Depends(get_db)):
         strategy=str(run.strategy),
         underlying=str(run.underlying),
         ticket=run.ticket,
-        tp=1500.0,    # TODO: make configurable
-        sl=-2000.0,   # TODO: make configurable
+        tp=tp_sl["tp"],     # Dynamic TP
+        sl=tp_sl["sl"],     # Dynamic SL
     )
 
     return {
         "intent_id": intent.intent_id,
         "status": intent.status,
         "expires_at": intent.expires_at,
+        "tp_sl": tp_sl,  # Include calculated TP/SL in response
+        "risk_limits": {
+            "max_portfolio_loss_pct": risk_config.max_portfolio_loss_pct,
+            "max_trades_per_day": risk_config.max_trades_per_day,
+        }
     }
 
 

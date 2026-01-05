@@ -178,8 +178,8 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
             "bb_lower": round(float(last["bb_lower"]), 2),
             "volatility_pct": round(float(last["volatility_pct"]), 4),
             "volume_ratio": round(float(last["volume_ratio"]), 2),
-            "india_vix": 10.1,  # TODO: Fetch from external API
-            "iv_rank": 7.26,  # TODO: Fetch from external IV API
+            # India VIX & IV Rank are now fetched from APIs in signals.py
+            # and added via enrich_signal_with_iv()
         },
         
         # Trend Analysis
@@ -188,46 +188,93 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
 
 
 def compute_rsi(series: pd.Series, period: int = 14):
-    """RSI (Relative Strength Index)"""
+    """RSI (Relative Strength Index) - Professional TA-Lib standard"""
     delta = series.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = -delta.clip(upper=0).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    
+    # Separate gains and losses
+    gains = delta.where(delta > 0, 0)
+    losses = -delta.where(delta < 0, 0)
+    
+    # Wilder's smoothing for RSI (same as ATR)
+    avg_gain = pd.Series(index=series.index, dtype=float)
+    avg_loss = pd.Series(index=series.index, dtype=float)
+    
+    avg_gain.iloc[period] = gains.iloc[1:period+1].mean()
+    avg_loss.iloc[period] = losses.iloc[1:period+1].mean()
+    
+    # Wilder's smoothing for rest
+    for i in range(period + 1, len(series)):
+        avg_gain.iloc[i] = (avg_gain.iloc[i-1] * (period - 1) + gains.iloc[i]) / period
+        avg_loss.iloc[i] = (avg_loss.iloc[i-1] * (period - 1) + losses.iloc[i]) / period
+    
+    # Calculate RS and RSI
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    
+    return rsi
 
 
 def compute_adx(df: pd.DataFrame, period: int = 14):
-    """ADX (Average Directional Index) - Simplified"""
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
+    """ADX (Average Directional Index) - TA-Lib standard with Wilder's smoothing"""
+    high = df["high"].values
+    low = df["low"].values
+    close = df["close"].values
     
-    # True Range
-    tr1 = high - low
-    tr2 = abs(high - close.shift())
-    tr3 = abs(low - close.shift())
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
+    # True Range calculation
+    tr = np.maximum(
+        high[1:] - low[1:],
+        np.maximum(
+            np.abs(high[1:] - close[:-1]),
+            np.abs(low[1:] - close[:-1])
+        )
+    )
     
-    # Directional Movement
-    up = high.diff()
-    down = low.diff() * -1
-    pos_dm = up.copy()
-    pos_dm[up <= down] = 0
-    pos_dm[up < 0] = 0
-    neg_dm = down.copy()
-    neg_dm[down <= up] = 0
-    neg_dm[down < 0] = 0
+    # Up and Down moves
+    up_move = high[1:] - high[:-1]
+    down_move = low[:-1] - low[1:]
     
-    pos_di = (pos_dm.rolling(period).sum() / atr) * 100
-    neg_di = (neg_dm.rolling(period).sum() / atr) * 100
+    # +DM and -DM
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
     
-    di_diff = abs(pos_di - neg_di)
-    di_sum = pos_di + neg_di
-    di_ratio = di_diff / di_sum
-    adx = di_ratio.rolling(period).mean() * 100
+    # Wilder's smoothing for ATR
+    atr = np.zeros(len(tr))
+    atr[period-1] = tr[:period].mean()
+    for i in range(period, len(tr)):
+        atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
     
-    return adx
+    # Wilder's smoothing for DMs
+    plus_dm_smooth = np.zeros(len(plus_dm))
+    minus_dm_smooth = np.zeros(len(minus_dm))
+    plus_dm_smooth[period-1] = plus_dm[:period].sum()
+    minus_dm_smooth[period-1] = minus_dm[:period].sum()
+    
+    for i in range(period, len(plus_dm)):
+        plus_dm_smooth[i] = plus_dm_smooth[i-1] - plus_dm_smooth[i-1]/period + plus_dm[i]
+        minus_dm_smooth[i] = minus_dm_smooth[i-1] - minus_dm_smooth[i-1]/period + minus_dm[i]
+    
+    # +DI and -DI
+    plus_di = np.divide(plus_dm_smooth, atr, where=atr!=0, out=np.zeros_like(atr)) * 100
+    minus_di = np.divide(minus_dm_smooth, atr, where=atr!=0, out=np.zeros_like(atr)) * 100
+    
+    # DX
+    di_sum = plus_di + minus_di
+    dx = np.divide(
+        np.abs(plus_di - minus_di),
+        di_sum,
+        where=di_sum!=0,
+        out=np.zeros_like(di_sum)
+    ) * 100
+    
+    # ADX with Wilder's smoothing
+    adx = np.zeros(len(dx))
+    adx[2*period-2] = dx[period-1:2*period-1].mean()
+    for i in range(2*period-1, len(dx)):
+        adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
+    
+    # Prepend NaN for the removed first value and convert to Series
+    adx_series = pd.Series([np.nan] + list(adx), index=df.index)
+    return adx_series.bfill()
 
 
 def compute_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):

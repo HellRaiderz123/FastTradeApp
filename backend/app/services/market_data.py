@@ -9,11 +9,16 @@ from typing import List, Dict
 import pandas as pd
 import random
 import time
+import logging
 
 from app.core.broker.zerodha.instruments import get_index_token, load_instruments
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.market.expiry import get_next_weekly_expiry
+from sqlalchemy.orm import Session
+from app.db.session import SessionLocal
+from app.db.models_candles import Candle15m
 
+logger = logging.getLogger(__name__)
 
 # ============================
 # SPOT PRICE
@@ -21,15 +26,36 @@ from app.core.market.expiry import get_next_weekly_expiry
 
 def get_spot(underlying: str) -> float: # type: ignore
     """
-    Fetch live spot price.
-    Replace stub with Zerodha / NSE API later.
+    Fetch live spot price from Zerodha.
+    Falls back to latest candle close if API unavailable.
     """
-    # ---- TEMP STUB ----
-    kite = get_kite_client()
-    token = get_index_token(underlying)
-
-    data = kite.ltp([token])
-    return data[token]["last_price"] # type: ignore
+    try:
+        kite = get_kite_client()
+        token = get_index_token(underlying)
+        data = kite.ltp([token])
+        spot = data[token]["last_price"]
+        logger.info(f"✅ Got live spot from Zerodha: {underlying} = {spot}")
+        return spot
+    except Exception as e:
+        logger.warning(f"⚠️  Zerodha API failed ({e}), falling back to latest candle")
+        # Fallback: use latest candle close price
+        db = SessionLocal()
+        try:
+            latest = (
+                db.query(Candle15m)
+                .filter(Candle15m.symbol == underlying.upper())
+                .order_by(Candle15m.timestamp.desc())
+                .first()
+            )
+            
+            if latest:
+                logger.info(f"✅ Using latest candle close as spot: {underlying} = {latest.close}")
+                return latest.close
+            else:
+                logger.error(f"❌ No candle data found for {underlying}")
+                raise RuntimeError(f"No spot data available for {underlying}")
+        finally:
+            db.close()
 
 # ============================
 # ATM STRIKE
@@ -53,7 +79,7 @@ def get_option_chain(underlying: str) -> pd.DataFrame:
 
     df = instruments[
         (instruments["name"] == underlying)
-        & (instruments["expiry"] == pd.Timestamp(expiry))
+        & (instruments["expiry"] == expiry)  # expiry is already a date object
         & (instruments["segment"] == "NFO-OPT")
     ].copy()
 
@@ -77,16 +103,21 @@ def get_option_chain(underlying: str) -> pd.DataFrame:
 def get_option_ltp(symbols: List[str]) -> Dict[str, float]:
     """
     Fetch REAL option LTP from Zerodha.
+    Falls back to 0 if API unavailable.
     """
-    kite = get_kite_client()
-
-    symbols = [f"NFO:{sym}" for sym in symbols]
-    data = kite.ltp(symbols)
-
-    return {
-        sym.split(":")[1]: info["last_price"]
-        for sym, info in data.items()
-    }
+    try:
+        kite = get_kite_client()
+        symbols_nfo = [f"NFO:{sym}" for sym in symbols]
+        data = kite.ltp(symbols_nfo)
+        logger.info(f"✅ Got LTP for {len(data)} option symbols from Zerodha")
+        return {
+            sym.split(":")[1]: info["last_price"]
+            for sym, info in data.items()
+        }
+    except Exception as e:
+        logger.warning(f"⚠️  Could not fetch option LTP ({e}), using 0 as fallback")
+        # Fallback: return 0 for all symbols
+        return {sym: 0.0 for sym in symbols}
 
 
 
@@ -94,7 +125,31 @@ def get_option_ltp(symbols: List[str]) -> Dict[str, float]:
 # OI ENRICHMENT
 # ============================
 
-def enrich_chain_with_live_oi(chain_df: pd.DataFrame, *_):
-    chain_df["oi"] = None
+def enrich_chain_with_live_oi(chain_df: pd.DataFrame, *_) -> pd.DataFrame:
+    """
+    Enrich option chain with live LTP from Zerodha.
+    """
+    # Always add these columns
+    if "ltp" not in chain_df.columns:
+        chain_df["ltp"] = 0.0
+    if "oi" not in chain_df.columns:
+        chain_df["oi"] = None
+    
+    if chain_df.empty:
+        return chain_df
+    
+    try:
+        # Get LTP for all symbols
+        symbols = chain_df["tradingsymbol"].tolist()
+        ltp_data = get_option_ltp(symbols)
+        
+        # Update LTP column
+        chain_df["ltp"] = chain_df["tradingsymbol"].map(ltp_data)
+        logger.info(f"✅ Enriched option chain with {len(ltp_data)} LTP values")
+        
+    except Exception as e:
+        logger.warning(f"⚠️  Could not enrich chain ({e}), using 0 for LTP")
+        chain_df["ltp"] = 0.0
+    
     return chain_df
 

@@ -104,48 +104,15 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         min_confidence=payload.get("min_confidence", 75),
     )
 
-    if strategy_mode == "NO_TRADE":
-        result = {
-            "strategy": "NO_TRADE",
-            "approved": False,
-            "reason": strategy_reason,
-            "signal": sig,
-            "context": ctx,
-        }
-
-        run = _log_strategy_run(result, payload["underlying"])
-        if run:
-            result["run_id"] = run.id
-        return result
-
-
     # =====================================================
-    # 4️⃣ MARKET DATA
+    # 4️⃣ MARKET DATA (FETCH FOR ALL CASES - for analysis)
     # =====================================================
     underlying = payload["underlying"]
     spot = get_spot(underlying)
     atm = pick_atm_strike(underlying, spot)
 
-    # Needed later for lot size
-    chain = get_option_chain(underlying)
-    lot_size = int(chain.iloc[0]["lot_size"]) if not chain.empty else 0
-
-    if lot_size <= 0:
-        result = {
-            "strategy": strategy_mode,
-            "approved": False,
-            "reason": "Lot size unavailable from option chain",
-            "signal": sig,
-            "context": ctx,
-        }
-
-        run = _log_strategy_run(result, payload["underlying"])
-        if run:
-            result["run_id"] = run.id
-        return result
-
     # =====================================================
-    # 5️⃣ STRIKE SELECTION
+    # 5️⃣ STRIKE SELECTION (CALCULATE FOR ALL CASES)
     # =====================================================
     strikes = compute_spread_strikes(
         underlying=underlying,
@@ -155,6 +122,49 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         iv_regime=str(ctx.get("iv_regime") or "LOW"),
         recommendation=str(sig.get("recommendation") or "NO_TRADE"),
     )
+
+    if strategy_mode == "NO_TRADE":
+        result = {
+            "strategy": "NO_TRADE",
+            "approved": False,
+            "reason": strategy_reason,
+            "signal": sig,
+            "context": ctx,
+            "spot": spot,
+            "atm": atm,
+            "strike_meta": strikes.get("meta"),
+        }
+
+        run = _log_strategy_run(result, payload["underlying"])
+        if run:
+            result["run_id"] = run.id
+        return result
+
+    # Needed later for lot size
+    chain = get_option_chain(underlying)
+    
+    # Enrich with live LTP
+    from app.services.market_data import enrich_chain_with_live_oi
+    chain = enrich_chain_with_live_oi(chain)
+    
+    lot_size = int(chain.iloc[0]["lot_size"]) if not chain.empty else 0
+
+    if lot_size <= 0:
+        result = {
+            "strategy": strategy_mode,
+            "approved": False,
+            "reason": "Lot size unavailable from option chain",
+            "signal": sig,
+            "context": ctx,
+            "spot": spot,
+            "atm": atm,
+            "strike_meta": strikes.get("meta"),
+        }
+
+        run = _log_strategy_run(result, payload["underlying"])
+        if run:
+            result["run_id"] = run.id
+        return result
 
 
     if strategy_mode == "BULL_PUT":

@@ -5,10 +5,8 @@ Hard risk gates for option spreads.
 If risk.py blocks → trade is NOT allowed.
 """
 
-from typing import Tuple, Dict
-
-MAX_PORTFOLIO_LOSS_PCT = 3.0  # % of capital
-MAX_TRADES_PER_DAY = 3
+from typing import Tuple, Dict, Optional
+from app.core.risk.risk_limits_config import RiskLimits, DEFAULT_RISK_LIMITS
 
 def pct_from_atm(strike: int, spot: float) -> float:
     """
@@ -17,25 +15,24 @@ def pct_from_atm(strike: int, spot: float) -> float:
     return abs(strike - spot) / spot * 100.0
 
 
-def get_risk_limits(iv_regime: str) -> Dict[str, float]:
+def get_risk_limits(
+    iv_regime: str,
+    config: Optional[RiskLimits] = None
+) -> Dict[str, float]:
     """
-    Risk limits exactly as in your Streamlit code.
+    Get risk limits for IV regime from configuration.
+    
+    Args:
+        iv_regime: One of 'LOW', 'NORMAL', 'HIGH'
+        config: RiskLimits config object (uses default if None)
+        
+    Returns:
+        Dict with 'min_atm_dist_pct' and 'max_risk_pct_capital'
     """
-    if iv_regime == "LOW":
-        return {
-            "min_atm_dist_pct": 0.5,
-            "max_risk_pct_capital": 4.0,
-        }
-    elif iv_regime == "NORMAL":
-        return {
-            "min_atm_dist_pct": 0.6,
-            "max_risk_pct_capital": 2.0,
-        }
-    else:  # HIGH IV
-        return {
-            "min_atm_dist_pct": 0.8,
-            "max_risk_pct_capital": 1.0,
-        }
+    if config is None:
+        config = DEFAULT_RISK_LIMITS
+    
+    return config.get_iv_regime_limits(iv_regime)
 
 
 def check_spread_risk(
@@ -47,9 +44,20 @@ def check_spread_risk(
     lot_size: int,
     lots: int,
     iv_regime: str,
+    risk_config: Optional[RiskLimits] = None,
 ) -> Tuple[bool, str, Dict[str, float]]:
     """
     Final risk gate for spread.
+    
+    Args:
+        short_strike: Strike price of short position
+        long_strike: Strike price of long position (protection)
+        spot: Current spot price
+        capital: Available capital
+        lot_size: Lot size of contract
+        lots: Number of lots
+        iv_regime: IV regime (LOW/NORMAL/HIGH)
+        risk_config: RiskLimits configuration (uses default if None)
 
     Returns:
         (is_safe, reason, metrics)
@@ -57,7 +65,7 @@ def check_spread_risk(
 
     metrics: Dict[str, float] = {}
 
-    limits = get_risk_limits(iv_regime)
+    limits = get_risk_limits(iv_regime, risk_config)
 
     # ============================
     # STRIKE DISTANCE CHECK
