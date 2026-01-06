@@ -147,24 +147,21 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     from app.services.market_data import enrich_chain_with_live_oi
     chain = enrich_chain_with_live_oi(chain)
     
-    lot_size = int(chain.iloc[0]["lot_size"]) if not chain.empty else 0
-
-    if lot_size <= 0:
-        result = {
-            "strategy": strategy_mode,
-            "approved": False,
-            "reason": "Lot size unavailable from option chain",
-            "signal": sig,
-            "context": ctx,
-            "spot": spot,
-            "atm": atm,
-            "strike_meta": strikes.get("meta"),
+    # Get lot_size from chain, with fallback based on underlying
+    if not chain.empty:
+        lot_size = int(chain.iloc[0]["lot_size"])
+    else:
+        # Fallback to standard lot sizes
+        lot_size_map = {
+            "NIFTY": 50,
+            "BANKNIFTY": 20,
+            "FINNIFTY": 40,
         }
-
-        run = _log_strategy_run(result, payload["underlying"])
-        if run:
-            result["run_id"] = run.id
-        return result
+        lot_size = lot_size_map.get(underlying, 50)
+        import logging
+        logging.getLogger(__name__).warning(
+            f"⚠️  Option chain empty for {underlying}, using fallback lot size: {lot_size}"
+        )
 
 
     if strategy_mode == "BULL_PUT":

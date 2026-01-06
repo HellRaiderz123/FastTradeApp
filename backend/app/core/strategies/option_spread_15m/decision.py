@@ -47,16 +47,20 @@ def decide_strategy(
     # =================================================
     # TRENDING MARKET → DIRECTIONAL CREDIT SPREADS
     # =================================================
-    if market_mode == "TRENDING" and iv_regime in ["LOW", "NORMAL"]:
+    if market_mode == "TRENDING":
 
         # Lower confidence needed for LOW IV (spreads are appropriate)
-        spread_min_conf = 65 if iv_regime == "LOW" else min_confidence
+        # HIGH IV is actually better for spreads (higher premiums)
+        if iv_regime == "LOW":
+            spread_min_conf = 65
+        else:
+            spread_min_conf = min_confidence
 
         if confidence >= spread_min_conf:
             if take_bull:
-                return "BULL_PUT", f"Trending bullish (conf={confidence:.0f}%, quality={quality_score}/8)"
+                return "BULL_PUT", f"Trending bullish (conf={confidence:.0f}%, iv={iv_regime}, quality={quality_score}/8)"
             if take_bear:
-                return "BEAR_CALL", f"Trending bearish (conf={confidence:.0f}%, quality={quality_score}/8)"
+                return "BEAR_CALL", f"Trending bearish (conf={confidence:.0f}%, iv={iv_regime}, quality={quality_score}/8)"
             return "NO_TRADE", "Trend present but directional bias unclear"
 
         return "NO_TRADE", f"Trend present but confidence too low ({confidence:.0f}% < {spread_min_conf}%)"

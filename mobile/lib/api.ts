@@ -19,8 +19,8 @@ export const strategyAPI = {
 
 // Execution APIs
 export const executionAPI = {
-  createIntent: (runId: number) =>
-    api.post(`/intent/create`, { run_id: runId }),
+  createIntent: (runId: number, riskMode: string) =>
+    api.post(`/intent/create?run_id=${runId}&risk_mode=${riskMode}`, {}),
   
   executeIntent: (intentId: string, idempotencyKey: string) =>
     api.post(`/execute/paper/${intentId}`, {}, {

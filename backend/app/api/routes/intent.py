@@ -53,7 +53,7 @@ def create_intent(
         try:
             kite = get_kite_client()
             margins = kite.margins()
-            capital = margins["equity"]["available"]
+            capital = margins["equity"]["available"]["live_balance"]
             logger.info(f"📊 Fetched capital from Zerodha: ₹{capital}")
         except Exception as e:
             logger.error(f"Failed to fetch capital from Zerodha: {str(e)}")

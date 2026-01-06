@@ -13,7 +13,7 @@ import logging
 
 from app.core.broker.zerodha.instruments import get_index_token, load_instruments
 from app.core.broker.zerodha.client import get_kite_client
-from app.core.market.expiry import get_next_weekly_expiry
+from app.core.market.expiry import get_next_valid_expiry, get_next_weekly_expiry
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.db.models_candles import Candle15m
@@ -32,8 +32,14 @@ def get_spot(underlying: str) -> float: # type: ignore
     try:
         kite = get_kite_client()
         token = get_index_token(underlying)
+        token_key = str(token)
         data = kite.ltp([token])
-        spot = data[token]["last_price"]
+        if token_key not in data:
+            logger.warning(f"Spot token {token} not found in price feed")
+        spot = data[token_key].get("last_price")
+        if spot is None or spot <= 0:
+            logger.warning("Invalid LTP received from broker")
+        #spot = data[token]["last_price"]
         logger.info(f"✅ Got live spot from Zerodha: {underlying} = {spot}")
         return spot
     except Exception as e:
@@ -71,29 +77,31 @@ def pick_atm_strike(underlying: str, spot: float) -> int:
 # ============================
 
 def get_option_chain(underlying: str) -> pd.DataFrame:
-    """
-    REAL option chain from Zerodha instruments.
-    """
-    expiry = get_next_weekly_expiry()
     instruments = load_instruments()
+
+    if instruments.empty:
+        logger.warning("⚠️ No instruments loaded")
+        return pd.DataFrame(columns=["strike", "instrument_type", "tradingsymbol", "lot_size"])
+
+    expiry = get_next_valid_expiry(instruments, underlying)
+    if not expiry:
+        logger.warning(f"⚠️ No valid expiry found for {underlying}")
+        return pd.DataFrame(columns=["strike", "instrument_type", "tradingsymbol", "lot_size"])
 
     df = instruments[
         (instruments["name"] == underlying)
-        & (instruments["expiry"] == expiry)  # expiry is already a date object
-        & (instruments["segment"] == "NFO-OPT")
+        & (pd.to_datetime(instruments["expiry"]).dt.date == expiry)
+        & (instruments["segment"].str.contains("OPT"))
     ].copy()
 
-    df.rename(
-        columns={
-            "strike": "strike",
-            "instrument_type": "instrument_type",
-            "tradingsymbol": "tradingsymbol",
-            "lot_size": "lot_size",
-        },
-        inplace=True,
-    )
+    if df.empty:
+        logger.warning(f"⚠️ Option chain empty for {underlying} expiry {expiry}")
+        return pd.DataFrame(columns=["strike", "instrument_type", "tradingsymbol", "lot_size"])
+
+    df["strike"] = df["strike"].astype(float)
 
     return df[["strike", "instrument_type", "tradingsymbol", "lot_size"]]
+
 
 
 # ============================

@@ -11,15 +11,16 @@
     "preview": "expo preview"
   },
   "dependencies": {
-    "expo": "^50.0.0",
-    "expo-router": "^3.4.8",
-    "expo-status-bar": "^1.11.1",
-    "react": "18.2.0",
-    "react-native": "0.73.11",
+    "@react-native-async-storage/async-storage": "1.21.0",
+    "@types/react": "~18.2.45",
     "axios": "^1.6.0",
-    "zustand": "^4.4.0",
     "date-fns": "^2.30.0",
-    "@react-native-async-storage/async-storage": "^1.23.1"
+    "expo": "^50.0.0",
+    "expo-router": "~3.4.10",
+    "expo-status-bar": "~1.11.1",
+    "react": "18.2.0",
+    "react-native": "0.73.6",
+    "zustand": "^4.4.0"
   },
   "devDependencies": {
     "@babel/core": "^7.23.0",

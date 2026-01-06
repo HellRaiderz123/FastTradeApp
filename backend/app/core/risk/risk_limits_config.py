@@ -30,7 +30,7 @@ class RiskLimits:
             },
             "HIGH": {
                 "min_atm_dist_pct": 0.8,
-                "max_risk_pct_capital": 1.0,
+                "max_risk_pct_capital": 5.0,
             },
         }
     )
@@ -57,7 +57,7 @@ class RiskProfile:
         iv_regime_limits={
             "LOW": {"min_atm_dist_pct": 0.5, "max_risk_pct_capital": 2.0},
             "NORMAL": {"min_atm_dist_pct": 0.6, "max_risk_pct_capital": 1.5},
-            "HIGH": {"min_atm_dist_pct": 0.8, "max_risk_pct_capital": 1.0},
+            "HIGH": {"min_atm_dist_pct": 0.8, "max_risk_pct_capital": 5.0},
         }
     )
     
@@ -67,7 +67,7 @@ class RiskProfile:
         iv_regime_limits={
             "LOW": {"min_atm_dist_pct": 0.5, "max_risk_pct_capital": 4.0},
             "NORMAL": {"min_atm_dist_pct": 0.6, "max_risk_pct_capital": 2.0},
-            "HIGH": {"min_atm_dist_pct": 0.8, "max_risk_pct_capital": 1.0},
+            "HIGH": {"min_atm_dist_pct": 0.8, "max_risk_pct_capital": 5.0},
         }
     )
     

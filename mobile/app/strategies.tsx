@@ -41,7 +41,7 @@ const StrategiesScreen = () => {
     if (!strategyResult || !strategyResult.run_id) return;
 
     try {
-      const intentRes = await executionAPI.createIntent(strategyResult.run_id);
+      const intentRes = await executionAPI.createIntent(strategyResult.run_id, riskMode);
       const intent = intentRes.data;
 
       await executionAPI.confirmIntent(intent.intent_id);

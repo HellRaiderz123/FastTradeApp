@@ -8,22 +8,25 @@ class ZerodhaExecutionAdapter:
         self.kite = kite_client
         self.dry_run = dry_run
 
+    # ============================
+    # EXECUTION (DRY-RUN ONLY)
+    # ============================
     def execute(self, intent) -> Dict[str, Any]:
         orders = self._build_orders(intent)
 
         if self.dry_run:
-            # 🔒 SAFE validation call
-            self.kite.instruments("NFO")  # fails if token invalid
             return {
                 "mode": "ZERODHA_DRY_RUN",
                 "orders": orders,
                 "created_at": now_ist().isoformat(),
             }
 
-        # 🔴 LIVE (later)
-        # place orders via kite.place_order(...)
-        raise NotImplementedError
+        # 🔴 LIVE execution to be added later
+        raise NotImplementedError("Live Zerodha execution not enabled")
 
+    # ============================
+    # EXIT
+    # ============================
     def exit(self, intent) -> Dict[str, Any]:
         exit_orders = self._build_exit_orders(intent)
 
@@ -34,23 +37,25 @@ class ZerodhaExecutionAdapter:
                 "exited_at": now_ist().isoformat(),
             }
 
-        raise NotImplementedError
+        raise NotImplementedError("Live Zerodha exit not enabled")
 
-    def _build_orders(self, intent):
-        orders = []
-
+    # ============================
+    # ORDER BUILDERS
+    # ============================
+    def _build_orders(self, intent) -> List[Dict[str, Any]]:
         ticket = intent.ticket
-        lots = ticket["lots"]
-        lot_size = ticket["lot_size"]
+        qty = ticket["lots"] * ticket["lot_size"]
 
-        qty = lots * lot_size
+        orders = []
 
         for leg in ticket["legs"]:
             tradingsymbol = build_zerodha_option_symbol(
                 underlying=intent.underlying,
+                expiry=intent.expiry,          # ✅ REQUIRED
                 strike=leg["strike"],
-                option_type=leg["type"],    
+                option_type=leg["type"],
             )
+
             orders.append({
                 "tradingsymbol": tradingsymbol,
                 "exchange": "NFO",
@@ -63,22 +68,22 @@ class ZerodhaExecutionAdapter:
 
         return orders
 
-    # ✅ OPTIONAL but recommended
     def _build_exit_orders(self, intent) -> List[Dict[str, Any]]:
         ticket = intent.ticket
-        lots = ticket["lots"]
-        lot_size = ticket["lot_size"]
-        qty = lots * lot_size
+        qty = ticket["lots"] * ticket["lot_size"]
 
         exit_orders = []
 
         for leg in ticket["legs"]:
+            tradingsymbol = build_zerodha_option_symbol(
+                underlying=intent.underlying,
+                expiry=intent.expiry,
+                strike=leg["strike"],
+                option_type=leg["type"],
+            )
+
             exit_orders.append({
-                "tradingsymbol": self._map_symbol(
-                    underlying=intent.underlying,
-                    strike=leg["strike"],
-                    opt_type=leg["type"],
-                ),
+                "tradingsymbol": tradingsymbol,
                 "exchange": "NFO",
                 "transaction_type": "BUY" if leg["side"] == "SELL" else "SELL",
                 "quantity": qty,
@@ -89,39 +94,34 @@ class ZerodhaExecutionAdapter:
 
         return exit_orders
 
-    def _map_symbol(self, underlying: str, strike: int, opt_type: str) -> str:
-        """
-        TEMP mapping — replace with expiry-aware mapping later
-        """
-        # Example placeholder
-        return f"{underlying}{strike}{opt_type}"
-    
+    # ============================
+    # MTM (READ ONLY)
+    # ============================
     def mtm(self, intent) -> float:
         """
-        READ-ONLY MTM using Zerodha LTP
-        No orders, no execution
+        Mark-to-market PnL using Zerodha LTP.
+        Requires entry_price per leg.
         """
 
         ticket = intent.ticket
-        symbols = []
+        qty = ticket["lot_size"] * ticket["lots"]
 
+        symbols = []
         for leg in ticket["legs"]:
             symbols.append(f"NFO:{leg['symbol']}")
 
-        # Zerodha LTP fetch
         ltp_map = self.kite.ltp(symbols)
 
         pnl = 0.0
 
         for leg in ticket["legs"]:
             sym = f"NFO:{leg['symbol']}"
-            price = ltp_map[sym]["last_price"]
-
-            qty = ticket["lot_size"] * ticket["lots"]
+            ltp = ltp_map[sym]["last_price"]
+            entry = leg["entry_price"]  # ✅ MUST exist
 
             if leg["side"] == "SELL":
-                pnl += price * qty
+                pnl += (entry - ltp) * qty
             else:
-                pnl -= price * qty
+                pnl += (ltp - entry) * qty
 
         return pnl

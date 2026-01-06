@@ -1,5 +1,25 @@
 from datetime import date, timedelta
 
+import pandas as pd
+
+def get_next_valid_expiry(instruments: pd.DataFrame, underlying: str):
+    today = pd.Timestamp.today().date()
+
+    expiries = (
+        instruments[
+            (instruments["name"] == underlying)
+            & (instruments["segment"] == "NFO-OPT")
+        ]["expiry"]
+        .dropna()
+        .drop_duplicates()
+        .sort_values()
+    )
+
+    expiries = pd.to_datetime(expiries).dt.date
+    future_expiries = expiries[expiries >= today]
+
+    return future_expiries.iloc[0] if not future_expiries.empty else None
+
 def get_next_weekly_expiry(today: date | None = None) -> date:
     """
     Returns next Thursday expiry.

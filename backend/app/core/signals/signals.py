@@ -4,9 +4,9 @@ signals.py
 Orchestrates signal generation from multiple sources:
 1. TA engine (real indicators)
 2. ML model (optional)
-3. External data (IV, VIX APIs)
+3. External data (India VIX, VIX Rank)
 
-Merges them into comprehensive market signal.
+Merges them into a comprehensive market signal.
 """
 
 from sqlalchemy.orm import Session
@@ -32,91 +32,103 @@ def generate_signal(
     db: Session,
     symbol: str,
     use_ml: bool = False,
-    iv_rank: Optional[float] = None,
+    vix_rank: Optional[float] = None,     # 🔧 renamed (was iv_rank)
     india_vix: Optional[float] = None,
     iv_regime: Optional[str] = None,
     ml_app_response: Optional[Dict] = None,
 ) -> Dict:
     """
     COMPREHENSIVE signal generation.
-    
-    Args:
-        db: Database session
-        symbol: NIFTY, BANKNIFTY, etc.
-        use_ml: Enable ML model
-        iv_rank: IV Rank (0-100) from external API
-        india_vix: India VIX value from external API
-        iv_regime: Force IV regime (LOW/NORMAL/HIGH)
-        ml_app_response: Response from external ML app
-    
+
     Returns:
-        Comprehensive signal with all data:
         {
-            signal, confidence, bias, iv_regime,
-            quality_checks, quality_score, trade_readiness_score,
-            indicators: {adx, rsi, macd, stoch, vix, iv_rank, ...},
-            trend_score
+            signal, confidence, bias,
+            iv_regime, india_vix, vix_rank,
+            quality_checks, quality_score,
+            trade_readiness_score,
+            indicators: {...}
         }
     """
-    
-    # ================================================
-    # STEP 1: TA Signal from candles
-    # ================================================
+
+    # =====================================================
+    # STEP 1: TA Signal
+    # =====================================================
     ta_sig = ta_signal_15m(db, symbol)
-    
-    # ================================================
-    # STEP 2: Fetch VIX/IV data if not provided
-    # ================================================
-    # If caller didn't provide VIX/IV, fetch from APIs
-    if not iv_rank or not india_vix:
-        logger.info("📊 Fetching live VIX/IV data from APIs...")
+
+    # =====================================================
+    # STEP 2: Fetch VIX data if missing
+    # =====================================================
+    if india_vix is None or vix_rank is None:
+        logger.info("📊 Fetching live VIX data from APIs...")
+
         try:
-            vix_iv_data = get_vix_iv_data_cached()
-            
-            if not iv_rank:
-                iv_rank = vix_iv_data.get("iv_rank")
-                logger.info(f"   ✅ IV Rank: {iv_rank} (from {vix_iv_data.get('iv_source')})")
-            
-            if not india_vix:
-                india_vix = vix_iv_data.get("india_vix")
-                logger.info(f"   ✅ India VIX: {india_vix} (from {vix_iv_data.get('vix_source')})")
-        
+            vix_data = get_vix_iv_data_cached()
+
+            if india_vix is None:
+                india_vix = vix_data.get("india_vix")
+                logger.info(
+                    f"   ✅ India VIX: {india_vix} "
+                    f"(from {vix_data.get('vix_source')})"
+                )
+
+            if vix_rank is None:
+                vix_rank = vix_data.get("vix_rank")
+                logger.info(
+                    f"   ✅ VIX Rank: {vix_rank} "
+                    f"(from {vix_data.get('vix_rank_source')})"
+                )
+
         except Exception as e:
-            logger.warning(f"⚠️  Could not fetch VIX/IV data: {e} - using defaults")
-    
-    # ================================================
-    # STEP 3: Determine IV regime if not provided
-    # ================================================
-    if not iv_regime and iv_rank is not None and india_vix is not None:
-        iv_regime = determine_iv_regime(india_vix, iv_rank)
-        logger.info(f"   ✅ IV Regime: {iv_regime}")
-    
-    # ================================================
-    # STEP 4: Enrich with external IV/VIX data
-    # ================================================
-    if iv_rank or india_vix or iv_regime:
-        ta_sig = enrich_signal_with_iv(
-            ta_sig,
-            iv_rank=iv_rank,
+            logger.warning(f"⚠️ Failed to fetch VIX data: {e}")
+
+    # =====================================================
+    # STEP 3: Determine IV regime (ALWAYS if missing)
+    # =====================================================
+    if iv_regime is None and india_vix is not None:
+        iv_regime = determine_iv_regime(
             india_vix=india_vix,
-            iv_regime=iv_regime,
+            vix_rank=vix_rank,
         )
-    
-    # ================================================
-    # STEP 5: ML Model (optional override)
-    # ================================================
+        logger.info(f"   🧠 IV Regime determined: {iv_regime}")
+
+    # Absolute safety fallback (never return null)
+    if iv_regime is None:
+        iv_regime = "NORMAL"
+        logger.warning("⚠️ IV regime unresolved — defaulting to NORMAL")
+
+    # =====================================================
+    # STEP 4: Enrich TA signal with VIX context
+    # =====================================================
+    ta_sig = enrich_signal_with_iv(
+        ta_sig,
+        india_vix=india_vix,
+        vix_rank=vix_rank,
+        iv_regime=iv_regime,
+    )
+
+    # =====================================================
+    # STEP 5: ML Override (optional)
+    # =====================================================
     final_sig = ta_sig
-    
+
     if use_ml:
-        # Option A: Use internal ML (placeholder)
         ml = ml_signal(symbol)
         if ml.get("confidence", 0) > ta_sig.get("confidence", 0):
             final_sig = merge_signals(ta_sig, ml_signal=ml)
-    
+
     elif ml_app_response:
-        # Option B: Use external ML app response
         ml = parse_ml_app_response(ml_app_response)
         if ml.get("confidence", 0) > ta_sig.get("confidence", 0):
             final_sig = merge_signals(ta_sig, ml_signal=ml)
-    
+
+    # =====================================================
+    # STEP 6: Ensure IV fields are present in response
+    # =====================================================
+    final_sig.setdefault("context", {})
+    final_sig["context"].update({
+        "india_vix": india_vix,
+        "vix_rank": vix_rank,
+        "iv_regime": iv_regime,
+    })
+
     return final_sig

@@ -46,29 +46,27 @@ def check_spread_risk(
     iv_regime: str,
     risk_config: Optional[RiskLimits] = None,
 ) -> Tuple[bool, str, Dict[str, float]]:
-    """
-    Final risk gate for spread.
-    
-    Args:
-        short_strike: Strike price of short position
-        long_strike: Strike price of long position (protection)
-        spot: Current spot price
-        capital: Available capital
-        lot_size: Lot size of contract
-        lots: Number of lots
-        iv_regime: IV regime (LOW/NORMAL/HIGH)
-        risk_config: RiskLimits configuration (uses default if None)
-
-    Returns:
-        (is_safe, reason, metrics)
-    """
 
     metrics: Dict[str, float] = {}
 
     limits = get_risk_limits(iv_regime, risk_config)
 
     # ============================
-    # STRIKE DISTANCE CHECK
+    # THEORETICAL RISK (ALWAYS)
+    # ============================
+    width = abs(short_strike - long_strike)
+    max_loss = width * lot_size * lots
+    metrics["max_loss"] = max_loss
+
+    if capital > 0:
+        risk_pct = (max_loss / capital) * 100.0
+    else:
+        risk_pct = float("inf")
+
+    metrics["risk_pct_capital"] = risk_pct
+
+    # ============================
+    # STRUCTURE CHECK
     # ============================
     dist_pct = pct_from_atm(short_strike, spot)
     metrics["strike_dist_pct"] = dist_pct
@@ -81,21 +79,14 @@ def check_spread_risk(
         )
 
     # ============================
-    # MAX LOSS / CAPITAL RISK
+    # CAPITAL RISK CHECK
     # ============================
-    width = abs(short_strike - long_strike)
-    max_loss = width * lot_size * lots
-    metrics["max_loss"] = max_loss
-
     if capital <= 0:
         return (
             False,
             "Capital not available",
             metrics,
         )
-
-    risk_pct = (max_loss / capital) * 100.0
-    metrics["risk_pct_capital"] = risk_pct
 
     if risk_pct > limits["max_risk_pct_capital"]:
         return (
