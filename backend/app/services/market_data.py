@@ -32,16 +32,26 @@ def get_spot(underlying: str) -> float: # type: ignore
     try:
         kite = get_kite_client()
         token = get_index_token(underlying)
-        token_key = str(token)
+        
+        # Zerodha LTP returns data with integer token as key
         data = kite.ltp([token])
-        if token_key not in data:
-            logger.warning(f"Spot token {token} not found in price feed")
-        spot = data[token_key].get("last_price")
+        
+        # Check if token is in response (as integer or string)
+        if token not in data and str(token) not in data:
+            raise KeyError(f"Token {token} not in price response: {list(data.keys())}")
+        
+        # Get the data for this token
+        price_data = data.get(token) or data.get(str(token))
+        if not price_data:
+            raise ValueError(f"No price data for token {token}")
+        
+        spot = price_data.get("last_price")
         if spot is None or spot <= 0:
-            logger.warning("Invalid LTP received from broker")
-        #spot = data[token]["last_price"]
+            raise ValueError(f"Invalid spot price: {spot}")
+        
         logger.info(f"✅ Got live spot from Zerodha: {underlying} = {spot}")
         return spot
+        
     except Exception as e:
         logger.warning(f"⚠️  Zerodha API failed ({e}), falling back to latest candle")
         # Fallback: use latest candle close price

@@ -16,6 +16,12 @@ export const accountAPI = {
   
   getCapital: () =>
     api.get('/account/capital'),
+  
+  getDailyCapital: (days: number = 30) =>
+    api.get(`/account/daily-capital?days=${days}`),
+  
+  recordDailyCapital: (capital: number, date?: string) =>
+    api.post('/account/daily-capital', { capital, date }),
 };
 
 // Strategy APIs

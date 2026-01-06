@@ -36,6 +36,29 @@ class StrategyRun(Base):
     pnl = Column(Float, nullable=True)
 
 
+class DailyCapital(Base):
+    """Store daily capital details for portfolio growth tracking."""
+    __tablename__ = "daily_capital"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Date (one record per day)
+    trade_date = Column(Date, index=True, unique=True)
+    
+    # Capital snapshot
+    opening_capital = Column(Float)  # Capital at start of day
+    closing_capital = Column(Float)  # Capital at end of day
+    daily_pnl = Column(Float, default=0.0)  # P&L for the day
+    
+    # Derived metrics
+    daily_return_pct = Column(Float, nullable=True)  # (closing - opening) / opening * 100
+    
+    # Metadata
+    source = Column(String, default="zerodha")  # zerodha, manual, etc.
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+
+
 class VixHistoric(Base):
     """Store historic VIX data for IV Rank calculation."""
     __tablename__ = "vix_historic"

@@ -1,19 +1,30 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { TrendingUp, DollarSign, Activity, Target } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
 import { accountAPI, journalAPI } from '../lib/api';
 
+interface DailyCapitalData {
+  date: string;
+  opening_capital: number;
+  closing_capital: number;
+  daily_pnl: number;
+  daily_return_pct: number;
+}
+
 const Dashboard: React.FC = () => {
   const { capital, dailyPnL, trades, accountProfile, loading, setCapital, setAccountProfile, setLoading } = useTradeStore();
+  const [dailyCapitalHistory, setDailyCapitalHistory] = useState<DailyCapitalData[]>([]);
 
   useEffect(() => {
     fetchAccountData();
+    fetchDailyCapitalHistory();
     fetchRecentTrades();
     
     // Refresh every 30 seconds
     const interval = setInterval(() => {
       fetchAccountData();
+      fetchDailyCapitalHistory();
     }, 30000);
     
     return () => clearInterval(interval);
@@ -27,6 +38,15 @@ const Dashboard: React.FC = () => {
     } catch (error) {
       console.error('Failed to fetch account data:', error);
       // Fallback to default if API fails
+    }
+  };
+
+  const fetchDailyCapitalHistory = async () => {
+    try {
+      const response = await accountAPI.getDailyCapital(30);
+      setDailyCapitalHistory(response.data);
+    } catch (error) {
+      console.error('Failed to fetch daily capital history:', error);
     }
   };
 
@@ -47,8 +67,15 @@ const Dashboard: React.FC = () => {
   const winCount = trades.filter((t) => t.pnl > 0).length;
   const winRate = trades.length > 0 ? ((winCount / trades.length) * 100).toFixed(1) : '0';
 
-  // Generate chart data based on trades or use defaults
-  const chartData = trades.length > 0
+  // Use daily capital history if available, otherwise generate from trades
+  const chartData = dailyCapitalHistory.length > 0
+    ? dailyCapitalHistory.map((item) => ({
+        time: new Date(item.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' }),
+        balance: item.closing_capital,
+        pnl: item.daily_pnl,
+        date: item.date,
+      }))
+    : trades.length > 0
     ? trades.slice(0, 8).map((t, i) => ({
         time: `T${i + 1}`,
         balance: displayCapital + (t.pnl || 0),
@@ -65,13 +92,22 @@ const Dashboard: React.FC = () => {
         { time: '12:45', balance: displayCapital + 3800, pnl: 3800 },
       ];
 
-  const tradeStats = [
-    { time: '09:00', trades: 1, wins: 1 },
-    { time: '10:00', trades: 2, wins: 2 },
-    { time: '11:00', trades: 3, wins: 2 },
-    { time: '12:00', trades: 4, wins: 3 },
-    { time: '13:00', trades: 5, wins: 4 },
-  ];
+  // Generate trade stats from actual trades
+  const tradeStats = trades.length > 0
+    ? [
+        {
+          totalTrades: trades.length,
+          wins: trades.filter(t => t.pnl > 0).length,
+          losses: trades.filter(t => t.pnl < 0).length,
+          averageWin: trades.filter(t => t.pnl > 0).length > 0 
+            ? trades.filter(t => t.pnl > 0).reduce((sum, t) => sum + (t.pnl || 0), 0) / trades.filter(t => t.pnl > 0).length
+            : 0,
+          averageLoss: trades.filter(t => t.pnl < 0).length > 0
+            ? trades.filter(t => t.pnl < 0).reduce((sum, t) => sum + (t.pnl || 0), 0) / trades.filter(t => t.pnl < 0).length
+            : 0,
+        }
+      ]
+    : [];
 
   return (
     <div className="space-y-6">
@@ -158,25 +194,33 @@ const Dashboard: React.FC = () => {
 
       {/* Trade Activity */}
       <div className="card-glass p-6">
-        <h3 className="text-lg font-semibold mb-4 text-white">Trade Activity</h3>
-        <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={tradeStats}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey="time" stroke="#94a3b8" />
-            <YAxis stroke="#94a3b8" />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#1e293b',
-                border: '1px solid #475569',
-                borderRadius: '8px',
-              }}
-              labelStyle={{ color: '#f1f5f9' }}
-            />
-            <Legend />
-            <Bar dataKey="trades" fill="#3B82F6" />
-            <Bar dataKey="wins" fill="#10B981" />
-          </BarChart>
-        </ResponsiveContainer>
+        <h3 className="text-lg font-semibold mb-4 text-white">Trade Statistics</h3>
+        {tradeStats.length > 0 && tradeStats[0].totalTrades > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-sm">Total Trades</p>
+              <p className="text-2xl font-bold text-white">{tradeStats[0].totalTrades}</p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-sm">Wins</p>
+              <p className="text-2xl font-bold text-green-400">{tradeStats[0].wins}</p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-sm">Losses</p>
+              <p className="text-2xl font-bold text-red-400">{tradeStats[0].losses}</p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-sm">Avg Win</p>
+              <p className="text-2xl font-bold text-green-400">₹{Math.round(tradeStats[0].averageWin).toLocaleString()}</p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-sm">Avg Loss</p>
+              <p className="text-2xl font-bold text-red-400">₹{Math.round(Math.abs(tradeStats[0].averageLoss)).toLocaleString()}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-center text-slate-400 py-8">No trades yet</p>
+        )}
       </div>
 
       {/* Recent Trades */}
