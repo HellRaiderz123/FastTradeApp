@@ -78,3 +78,30 @@ class VixHistoric(Base):
     source = Column(String)  # 'zerodha', 'nse', 'api', etc.
     created_at = Column(DateTime(timezone=True), default=now_ist)
     updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+
+
+class StrategyConfig(Base):
+    """User-configured strategy instances"""
+    __tablename__ = "strategy_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Identification
+    name = Column(String, unique=True, index=True)
+    description = Column(String, nullable=True)
+    
+    # Strategy details
+    strategy_type = Column(String)  # option_spread_15m, etc.
+    underlying = Column(String)  # NIFTY, BANKNIFTY, FINNIFTY
+    
+    # Configuration
+    parameters = Column(JSON)  # {risk_mode, lots, capital_percent, etc.}
+    
+    # State
+    enabled = Column(Boolean, default=False)
+    deployed_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+    created_by = Column(String, default="system")

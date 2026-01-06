@@ -6,6 +6,8 @@ from app.api.routes import journal
 from app.api.routes import intent
 from app.api.routes import execute
 from app.api.routes import account
+from app.api.routes import strategies
+from app.api.routes import execution_v2
 from app.api.routes.paper_mtm import router as paper_mtm_router
 from app.api.routes.exit import router as exit_router
 from app.api.routes.auto_exit import router as auto_exit_router
@@ -30,13 +32,12 @@ async def lifespan(app: FastAPI):
     # 🔹 Startup
     logger.info("🚀 App starting")
     
-    # Initialize VIX historic data
-    logger.info("📊 Initializing VIX system...")
-    initialize_vix_data()
+    # Skip heavy initialization for Phase 1 testing
+    # initialize_vix_data() can be called manually when needed
     
-    # Start schedulers
-    start_candle_scheduler()
-    start_vix_scheduler()
+    # Start schedulers (optional for Phase 1)
+    # start_candle_scheduler()
+    # start_vix_scheduler()
 
     yield  # 👈 App runs here
 
@@ -92,6 +93,8 @@ app.include_router(journal.router)
 app.include_router(intent.router)
 app.include_router(execute.router)
 app.include_router(account.router)
+app.include_router(strategies.router)
+app.include_router(execution_v2.router)
 app.include_router(paper_mtm_router)
 
 app.include_router(exit_router)

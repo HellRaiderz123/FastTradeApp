@@ -265,3 +265,43 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     if run:
         result["run_id"] = run.id
     return result
+
+
+# =====================================================
+# STRATEGY CLASS (for registry)
+# =====================================================
+
+class OptionSpread15m:
+    """Option Spread 15m Strategy - multi-strategy compatible"""
+    
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute strategy.
+        
+        Args:
+            context: {
+                underlying: str,
+                parameters: Dict,
+                config_id: int (optional)
+            }
+        
+        Returns:
+            Strategy execution result
+        """
+        db = SessionLocal()
+        try:
+            payload = {
+                "underlying": context.get("underlying"),
+                "interval": "15minute",
+                "use_ml": context.get("parameters", {}).get("use_ml", False),
+                "min_confidence": context.get("parameters", {}).get("min_confidence", 75),
+                "risk_mode": context.get("parameters", {}).get("risk_mode", "Conservative"),
+                "lots": context.get("parameters", {}).get("lots", 1),
+                "capital": context.get("parameters", {}).get("capital", 100000),
+            }
+            
+            return run_option_spread(db, payload)
+        
+        finally:
+            db.close()
+
