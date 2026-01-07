@@ -8,6 +8,7 @@ from app.api.routes import execute
 from app.api.routes import account
 from app.api.routes import strategies
 from app.api.routes import execution_v2
+from app.api.routes import settings
 from app.api.routes.paper_mtm import router as paper_mtm_router
 from app.api.routes.exit import router as exit_router
 from app.api.routes.auto_exit import router as auto_exit_router
@@ -95,6 +96,7 @@ app.include_router(execute.router)
 app.include_router(account.router)
 app.include_router(strategies.router)
 app.include_router(execution_v2.router)
+app.include_router(settings.router)
 app.include_router(paper_mtm_router)
 
 app.include_router(exit_router)

@@ -24,14 +24,41 @@ export const accountAPI = {
     api.post('/account/daily-capital', { capital, date }),
 };
 
-// Strategy APIs
+// Strategy APIs (CRUD)
 export const strategyAPI = {
+  // Legacy - Run strategy directly
   runStrategy: (payload: any) =>
     api.post('/strategy/option-spread/15m/run', payload),
+  
+  // Phase 1 - Strategy Management
+  listStrategies: (enabledOnly?: boolean) =>
+    api.get('/strategies', { params: { enabled_only: enabledOnly } }),
+  
+  getStrategy: (id: number) =>
+    api.get(`/strategies/${id}`),
+  
+  createStrategy: (data: any) =>
+    api.post('/strategies', data),
+  
+  updateStrategy: (id: number, data: any) =>
+    api.put(`/strategies/${id}`, data),
+  
+  deleteStrategy: (id: number) =>
+    api.delete(`/strategies/${id}`),
+  
+  enableStrategy: (id: number) =>
+    api.post(`/strategies/${id}/enable`),
+  
+  disableStrategy: (id: number) =>
+    api.post(`/strategies/${id}/disable`),
+  
+  getStatus: (id: number) =>
+    api.get(`/strategies/${id}/status`),
 };
 
 // Execution APIs
 export const executionAPI = {
+  // Legacy
   createIntent: (runId: number, capital?: number) =>
     api.post(`/intent/create`, { 
       run_id: runId,
@@ -45,6 +72,27 @@ export const executionAPI = {
   
   confirmIntent: (intentId: string) =>
     api.post(`/intent/confirm/${intentId}`, {}),
+  
+  // Phase 2 - Registry-based execution
+  executeSingle: (strategyId: number, context?: any) =>
+    api.post('/strategies/run/single', {
+      strategy_id: strategyId,
+      additional_context: context,
+    }),
+  
+  executeMultiple: (strategyIds: number[], context?: any) =>
+    api.post('/strategies/run/multiple', {
+      strategy_ids: strategyIds,
+      additional_context: context,
+    }),
+  
+  executeAll: (context?: any) =>
+    api.post('/strategies/run/all', {
+      additional_context: context,
+    }),
+  
+  getExecutionStatus: (strategyId: number) =>
+    api.get(`/strategies/run/${strategyId}/status`),
 };
 
 // Exit APIs
@@ -79,6 +127,24 @@ export const systemAPI = {
   enable: () => api.post('/system/enable', {}),
   disable: () => api.post('/system/disable', {}),
   status: () => api.get('/system/status'),
+};
+
+// Settings APIs
+export const settingsAPI = {
+  getZerodhaSettings: () =>
+    api.get('/settings/zerodha'),
+  
+  saveZerodhaCredentials: (credentials: { api_key: string; api_secret: string }) =>
+    api.post('/settings/zerodha/credentials', credentials),
+  
+  saveZerodhaToken: (token: { access_token: string }) =>
+    api.post('/settings/zerodha/token', token),
+  
+  generateZerodhaToken: (data: { request_token: string }) =>
+    api.post('/settings/zerodha/generate-token', data),
+  
+  setExecutionMode: (mode: string) =>
+    api.post(`/settings/execution-mode`, {}, { params: { mode } }),
 };
 
 export default api;

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Settings as SettingsIcon, Save, Bell, Lock, Eye } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings as SettingsIcon, Save, Bell, Lock, Eye, EyeOff, CheckCircle, XCircle } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
+import { settingsAPI } from '../lib/api';
 
 const Settings: React.FC = () => {
   const { capital, setCapital } = useTradeStore();
@@ -14,6 +15,56 @@ const Settings: React.FC = () => {
     darkMode: true,
   });
   const [saved, setSaved] = useState(false);
+  
+  // Zerodha settings
+  const [zerodhaStatus, setZerodhaStatus] = useState({
+    api_key_set: false,
+    access_token_set: false,
+    execution_mode: 'ZERODHA_DRY_RUN',
+  });
+  const [zerodhaForm, setZerodhaForm] = useState({
+    apiKey: '',
+    apiSecret: '',
+    requestToken: '',
+    accessToken: '',
+    executionMode: 'ZERODHA_DRY_RUN',
+  });
+  const [zerodhaLoading, setZerodhaLoading] = useState(false);
+  const [zerodhaMessage, setZerodhaMessage] = useState('');
+  const [showSecrets, setShowSecrets] = useState({
+    apiSecret: false,
+    accessToken: false,
+  });
+
+  useEffect(() => {
+    console.log('Settings component mounted - loading Zerodha settings');
+    loadZerodhaSettings();
+    // Refresh every second to sync with backend
+    const interval = setInterval(() => {
+      loadZerodhaSettings();
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadZerodhaSettings = async () => {
+    try {
+      const response = await settingsAPI.getZerodhaSettings();
+      // Handle axios response structure - data is nested in .data
+      const data = response.data || response;
+      console.log('Zerodha settings loaded:', data);
+      setZerodhaStatus({
+        api_key_set: data.api_key_set === true,
+        access_token_set: data.access_token_set === true,
+        execution_mode: data.execution_mode || 'ZERODHA_DRY_RUN',
+      });
+      setZerodhaForm(prev => ({ 
+        ...prev, 
+        executionMode: data.execution_mode || 'ZERODHA_DRY_RUN' 
+      }));
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    }
+  };
 
   const handleChange = (key: string, value: any) => {
     setSettings({ ...settings, [key]: value });
@@ -23,6 +74,100 @@ const Settings: React.FC = () => {
     setCapital(settings.capital);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleSaveZerodhaCredentials = async () => {
+    if (!zerodhaForm.apiKey.trim() || !zerodhaForm.apiSecret.trim()) {
+      setZerodhaMessage('API Key and Secret cannot be empty');
+      return;
+    }
+    
+    try {
+      setZerodhaLoading(true);
+      await settingsAPI.saveZerodhaCredentials({
+        api_key: zerodhaForm.apiKey,
+        api_secret: zerodhaForm.apiSecret,
+      });
+      setZerodhaMessage('✓ Credentials saved successfully');
+      setZerodhaForm(prev => ({ ...prev, apiKey: '', apiSecret: '' }));
+      // Refresh immediately and again after delay
+      await loadZerodhaSettings();
+      setTimeout(() => loadZerodhaSettings(), 500);
+      setTimeout(() => setZerodhaMessage(''), 3000);
+    } catch (error: any) {
+      console.error('Error:', error);
+      setZerodhaMessage(error.response?.data?.detail || 'Error saving credentials');
+    } finally {
+      setZerodhaLoading(false);
+    }
+  };
+
+  const handleSaveZerodhaToken = async () => {
+    if (!zerodhaForm.accessToken.trim()) {
+      setZerodhaMessage('Access token cannot be empty');
+      return;
+    }
+    
+    try {
+      setZerodhaLoading(true);
+      await settingsAPI.saveZerodhaToken({
+        access_token: zerodhaForm.accessToken,
+      });
+      setZerodhaMessage('✓ Access token saved successfully');
+      setZerodhaForm(prev => ({ ...prev, accessToken: '' }));
+      // Refresh immediately and again after delay
+      await loadZerodhaSettings();
+      setTimeout(() => loadZerodhaSettings(), 500);
+      setTimeout(() => setZerodhaMessage(''), 3000);
+    } catch (error: any) {
+      console.error('Error:', error);
+      setZerodhaMessage(error.response?.data?.detail || 'Error saving token');
+    } finally {
+      setZerodhaLoading(false);
+    }
+  };
+
+  const handleGenerateAccessToken = async () => {
+    if (!zerodhaForm.requestToken.trim()) {
+      setZerodhaMessage('Request token cannot be empty');
+      return;
+    }
+    
+    try {
+      setZerodhaLoading(true);
+      const response = await settingsAPI.generateZerodhaToken({
+        request_token: zerodhaForm.requestToken,
+      });
+      setZerodhaMessage('✓ Access token generated successfully!');
+      setZerodhaForm(prev => ({ ...prev, requestToken: '', accessToken: response.access_token }));
+      // Refresh immediately and again after delay
+      await loadZerodhaSettings();
+      setTimeout(() => loadZerodhaSettings(), 500);
+      setTimeout(() => setZerodhaMessage(''), 3000);
+    } catch (error: any) {
+      console.error('Error:', error);
+      setZerodhaMessage(error.response?.data?.detail || 'Error generating token');
+    } finally {
+      setZerodhaLoading(false);
+    }
+  };
+
+  const handleSetExecutionMode = async (mode: string) => {
+    try {
+      setZerodhaLoading(true);
+      await settingsAPI.setExecutionMode(mode);
+      setZerodhaForm(prev => ({ ...prev, executionMode: mode }));
+      setZerodhaMessage(`✓ Mode changed to ${mode}`);
+      // Refresh immediately and again after delay
+      await loadZerodhaSettings();
+      setTimeout(() => loadZerodhaSettings(), 500);
+      setTimeout(() => setZerodhaMessage(''), 3000);
+    } catch (error: any) {
+      console.error('Error:', error);
+      setZerodhaMessage(error.response?.data?.detail || 'Error changing mode');
+    } finally {
+      setZerodhaLoading(false);
+    }
   };
 
   return (
@@ -58,27 +203,222 @@ const Settings: React.FC = () => {
       </SettingsCard>
 
       {/* API Keys */}
-      <SettingsCard title="Integrations">
+      <SettingsCard title="Zerodha Configuration">
+        {/* Status */}
+        <div className="mb-6 p-4 bg-slate-800 rounded-lg border border-slate-700">
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex-1">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">API Key Status:</span>
+                  <div className="flex items-center gap-1">
+                    {zerodhaStatus?.api_key_set ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-green-400" />
+                        <span className="text-green-400">Configured</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-4 h-4 text-red-400" />
+                        <span className="text-red-400">Not Set</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Access Token Status:</span>
+                  <div className="flex items-center gap-1">
+                    {zerodhaStatus?.access_token_set ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-green-400" />
+                        <span className="text-green-400">Configured</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-4 h-4 text-red-400" />
+                        <span className="text-red-400">Not Set</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                console.log('Refreshing settings...');
+                loadZerodhaSettings();
+              }}
+              className="ml-4 px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded transition"
+            >
+              🔄 Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Credentials Form */}
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">Zerodha API Key</label>
             <input
-              type="password"
-              defaultValue="●●●●●●●●●●●●"
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500"
-              disabled
+              type="text"
+              placeholder="Your API Key from Zerodha"
+              value={zerodhaForm.apiKey}
+              onChange={(e) => setZerodhaForm({ ...zerodhaForm, apiKey: e.target.value })}
+              disabled={zerodhaLoading}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
             />
-            <p className="text-xs text-slate-400 mt-1">Change in environment variables</p>
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Execution Mode</label>
-            <select className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500">
-              <option>PAPER (Recommended)</option>
-              <option>ZERODHA_DRY_RUN</option>
-            </select>
-            <p className="text-xs text-slate-400 mt-1">Paper mode is safe for testing</p>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Zerodha API Secret</label>
+            <div className="relative">
+              <input
+                type={showSecrets.apiSecret ? 'text' : 'password'}
+                placeholder="Your API Secret from Zerodha"
+                value={zerodhaForm.apiSecret}
+                onChange={(e) => setZerodhaForm({ ...zerodhaForm, apiSecret: e.target.value })}
+                disabled={zerodhaLoading}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+              />
+              <button
+                onClick={() => setShowSecrets({ ...showSecrets, apiSecret: !showSecrets.apiSecret })}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+              >
+                {showSecrets.apiSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
+
+          <button
+            onClick={handleSaveZerodhaCredentials}
+            disabled={zerodhaLoading}
+            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+          >
+            <Save className="w-4 h-4" />
+            {zerodhaLoading ? 'Saving...' : 'Save Credentials'}
+          </button>
         </div>
+
+        {/* Access Token Generation */}
+        <div className="space-y-4 mt-6 pt-6 border-t border-slate-700">
+          <h3 className="text-sm font-semibold text-slate-300">Generate Access Token</h3>
+          <p className="text-xs text-slate-400">
+            1. Go to <a href="https://kite.zerodha.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">Zerodha login</a>
+            <br />
+            2. Check browser console or Network tab for "request_token"
+            <br />
+            3. Paste the request token below - access token will be generated and saved automatically
+          </p>
+          
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Request Token (from Zerodha OAuth)</label>
+            <div className="relative">
+              <input
+                type={showSecrets.accessToken ? 'text' : 'password'}
+                placeholder="Paste request token here"
+                value={zerodhaForm.requestToken}
+                onChange={(e) => setZerodhaForm({ ...zerodhaForm, requestToken: e.target.value })}
+                disabled={zerodhaLoading}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+              />
+              <button
+                onClick={() => setShowSecrets({ ...showSecrets, accessToken: !showSecrets.accessToken })}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+              >
+                {showSecrets.accessToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            onClick={handleGenerateAccessToken}
+            disabled={zerodhaLoading || !zerodhaStatus.api_key_set}
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+          >
+            <Save className="w-4 h-4" />
+            {zerodhaLoading ? 'Generating & Saving...' : 'Generate & Save Access Token'}
+          </button>
+          {!zerodhaStatus.api_key_set && (
+            <p className="text-xs text-red-400">⚠️ Save API credentials first</p>
+          )}
+          <p className="text-xs text-slate-400 bg-slate-800 p-2 rounded">
+            ✓ Access token will be automatically saved to .env when generated
+          </p>
+        </div>
+
+        {/* Manual Access Token (Optional) */}
+        <div className="space-y-4 mt-6 pt-6 border-t border-slate-700">
+          <h3 className="text-sm font-semibold text-slate-300">Manual Token (Optional)</h3>
+          <p className="text-xs text-slate-400">
+            Or paste an access token manually if you already have one
+          </p>
+          
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Access Token</label>
+            <div className="relative">
+              <input
+                type={showSecrets.accessToken ? 'text' : 'password'}
+                placeholder="Your access token"
+                value={zerodhaForm.accessToken}
+                onChange={(e) => setZerodhaForm({ ...zerodhaForm, accessToken: e.target.value })}
+                disabled={zerodhaLoading}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+              />
+              <button
+                onClick={() => setShowSecrets({ ...showSecrets, accessToken: !showSecrets.accessToken })}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+              >
+                {showSecrets.accessToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            onClick={handleSaveZerodhaToken}
+            disabled={zerodhaLoading}
+            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+          >
+            <Save className="w-4 h-4" />
+            {zerodhaLoading ? 'Saving...' : 'Save Manually'}
+          </button>
+        </div>
+
+        {/* Execution Mode */}
+        <div className="space-y-4 mt-6 pt-6 border-t border-slate-700">
+          <label className="block text-sm font-medium text-slate-300">Execution Mode</label>
+          <div className="grid grid-cols-3 gap-2">
+            {['ZERODHA_DRY_RUN', 'ZERODHA_LIVE', 'PAPER_TRADING'].map((mode) => (
+              <button
+                key={mode}
+                onClick={() => handleSetExecutionMode(mode)}
+                disabled={zerodhaLoading}
+                className={`py-2 px-3 rounded-lg font-semibold transition text-sm ${
+                  zerodhaForm.executionMode === mode
+                    ? 'bg-green-600 text-white'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                } disabled:opacity-50`}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-400">
+            {zerodhaForm.executionMode === 'ZERODHA_DRY_RUN' && 'Simulated trading - no real trades'}
+            {zerodhaForm.executionMode === 'ZERODHA_LIVE' && '⚠️ Real trading - use with caution'}
+            {zerodhaForm.executionMode === 'PAPER_TRADING' && 'Paper trading mode'}
+          </p>
+        </div>
+
+        {/* Message */}
+        {zerodhaMessage && (
+          <div className={`mt-4 p-3 rounded-lg text-sm font-semibold ${
+            zerodhaMessage.includes('✓') 
+              ? 'bg-green-900 text-green-200' 
+              : 'bg-red-900 text-red-200'
+          }`}>
+            {zerodhaMessage}
+          </div>
+        )}
       </SettingsCard>
 
       {/* Account */}

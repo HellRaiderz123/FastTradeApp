@@ -6,6 +6,8 @@ Supports single and multi-strategy parallel execution.
 """
 
 import logging
+import json
+import math
 from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -17,6 +19,21 @@ from app.db.models import StrategyConfig
 from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_json_value(value: Any) -> Any:
+    """
+    Sanitize values to be JSON serializable.
+    Converts NaN, Infinity, -Infinity to None.
+    """
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+    elif isinstance(value, dict):
+        return {k: sanitize_json_value(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [sanitize_json_value(v) for v in value]
+    return value
 
 
 class StrategyExecutor:

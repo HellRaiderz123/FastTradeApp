@@ -5,6 +5,8 @@ New endpoints for executing strategies via StrategyRegistry (v2).
 Coexists with legacy /execute/paper endpoints.
 """
 
+import logging
+import math
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -12,6 +14,28 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.core.strategies.executor import StrategyExecutor, MultiStrategyExecutor
+
+logger = logging.getLogger(__name__)
+
+
+def sanitize_json_value(value):
+    """
+    Convert non-JSON-compliant float values (inf, -inf, nan) to None or string.
+    Recursively handles dicts and lists.
+    """
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        elif math.isinf(value):
+            return "Infinity" if value > 0 else "-Infinity"
+        else:
+            return value
+    elif isinstance(value, dict):
+        return {k: sanitize_json_value(v) for k, v in value.items()}
+    elif isinstance(value, (list, tuple)):
+        return [sanitize_json_value(v) for v in value]
+    else:
+        return value
 
 router = APIRouter(prefix="/strategies/run", tags=["Strategy Execution"])
 
@@ -58,20 +82,29 @@ def execute_single_strategy(
     Returns the strategy execution result.
     """
     try:
+        logger.info(f"Executing single strategy: {request.strategy_id}")
         executor = StrategyExecutor(request.strategy_id, db)
         
         if not executor.load_config():
+            logger.error(f"Failed to load config for strategy {request.strategy_id}")
             raise HTTPException(
                 status_code=404,
                 detail=f"Strategy {request.strategy_id} not found or not enabled"
             )
         
+        logger.info(f"Config loaded, executing strategy {request.strategy_id}")
         result = executor.execute(request.additional_context)
+        logger.info(f"Strategy {request.strategy_id} execution complete")
+        
+        # Sanitize result to remove non-JSON-compliant values (inf, nan)
+        result = sanitize_json_value(result)
+        
         return result
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Strategy execution error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -91,6 +124,10 @@ def execute_all_enabled(
     try:
         executor = MultiStrategyExecutor(db)
         result = executor.execute_parallel(request.additional_context)
+        
+        # Sanitize result to remove non-JSON-compliant values (inf, nan)
+        result = sanitize_json_value(result)
+        
         return result
         
     except Exception as e:
@@ -120,6 +157,10 @@ def execute_multiple_strategies(
             request.strategy_ids,
             request.additional_context
         )
+        
+        # Sanitize result to remove non-JSON-compliant values (inf, nan)
+        result = sanitize_json_value(result)
+        
         return result
         
     except Exception as e:

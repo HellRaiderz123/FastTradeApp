@@ -59,4 +59,22 @@ export const systemAPI = {
   status: () => api.get('/system/status'),
 };
 
+// Settings APIs
+export const settingsAPI = {
+  getZerodhaSettings: () =>
+    api.get('/settings/zerodha'),
+  
+  saveZerodhaCredentials: (credentials: { api_key: string; api_secret: string }) =>
+    api.post('/settings/zerodha/credentials', credentials),
+  
+  saveZerodhaToken: (token: { access_token: string }) =>
+    api.post('/settings/zerodha/token', token),
+  
+  generateZerodhaToken: (credentials: { api_key: string; api_secret: string }) =>
+    api.post('/settings/zerodha/generate-token', credentials),
+  
+  setExecutionMode: (mode: string) =>
+    api.post(`/settings/execution-mode?mode=${mode}`),
+};
+
 export default api;

@@ -7,6 +7,7 @@ import { systemAPI } from './lib/api';
 import DashboardScreen from './app/dashboard';
 import StrategiesScreen from './app/strategies';
 import PositionsScreen from './app/positions';
+import SettingsScreen from './app/settings';
 
 const Tab = createBottomTabNavigator();
 
@@ -14,15 +15,6 @@ const JournalScreen = () => (
   <SafeAreaView style={styles.container}>
     <ScrollView contentContainerStyle={styles.scrollContent}>
       <Text style={styles.title}>Trade Journal</Text>
-      <ComingSoonPlaceholder />
-    </ScrollView>
-  </SafeAreaView>
-);
-
-const SettingsScreen = () => (
-  <SafeAreaView style={styles.container}>
-    <ScrollView contentContainerStyle={styles.scrollContent}>
-      <Text style={styles.title}>Settings</Text>
       <ComingSoonPlaceholder />
     </ScrollView>
   </SafeAreaView>
