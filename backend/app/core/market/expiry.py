@@ -72,3 +72,21 @@ def get_current_weekly_expiry(underlying: str) -> date:
     # you may want next week's expiry (optional enhancement)
     return expiry
 
+
+def get_weekly_expiry_for_date(underlying: str, asof_date: date) -> date:
+    """Return the weekly expiry date for a given underlying as-of a past date.
+
+    Uses WEEKLY_EXPIRY_WEEKDAY mapping. Returns the next expiry date that is
+    >= asof_date (including the same day).
+    """
+    underlying = (underlying or "").upper().strip()
+
+    expiry_weekday = WEEKLY_EXPIRY_WEEKDAY.get(underlying)
+    if expiry_weekday is None:
+        raise ValueError(f"No weekly expiry rule defined for {underlying}")
+
+    weekday_today = asof_date.weekday()  # Monday=0
+    days_ahead = (expiry_weekday - weekday_today) % 7
+    expiry = asof_date + timedelta(days=days_ahead)
+    return expiry
+

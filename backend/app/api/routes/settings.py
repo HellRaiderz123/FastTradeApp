@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv, set_key
 
+from app.core.execution.mode import normalize_execution_mode
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
@@ -54,7 +56,7 @@ def get_zerodha_settings():
     return SettingsResponse(
         api_key_set=bool(get_env_value("ZERODHA_API_KEY")),
         access_token_set=bool(get_env_value("ZERODHA_ACCESS_TOKEN")),
-        execution_mode=get_env_value("EXECUTION_MODE") or "ZERODHA_DRY_RUN"
+        execution_mode=normalize_execution_mode(get_env_value("EXECUTION_MODE"))
     )
 
 
@@ -214,21 +216,22 @@ def set_execution_mode(mode: str):
         {"status": "success", "mode": "mode_value"}
     """
     try:
+        normalized = normalize_execution_mode(mode)
         valid_modes = ["ZERODHA_LIVE", "ZERODHA_DRY_RUN", "PAPER_TRADING", "BACKTEST"]
-        
-        if mode not in valid_modes:
+
+        if normalized not in valid_modes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid execution mode. Valid modes: {', '.join(valid_modes)}"
             )
-        
-        set_key(str(ENV_FILE), "EXECUTION_MODE", mode)
-        os.environ["EXECUTION_MODE"] = mode
-        
-        logger.info(f"Execution mode changed to {mode}")
+
+        set_key(str(ENV_FILE), "EXECUTION_MODE", normalized)
+        os.environ["EXECUTION_MODE"] = normalized
+
+        logger.info(f"Execution mode changed to {normalized}")
         return {
             "status": "success",
-            "mode": mode
+            "mode": normalized
         }
     except HTTPException:
         raise

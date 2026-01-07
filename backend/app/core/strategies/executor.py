@@ -55,12 +55,16 @@ class StrategyExecutor:
     def load_config(self) -> bool:
         """Load strategy config from database"""
         try:
-            self.config = self.db.query(StrategyConfig).filter_by(
-                id=self.strategy_id,
-                enabled=True
-            ).first()
-            
-            if not self.config:
+            # Query by id first, then validate enabled.
+            # This avoids edge cases where SQLite boolean values are stored as text/integer
+            # and strict SQL comparisons can miss truthy values.
+            self.config = (
+                self.db.query(StrategyConfig)
+                .filter(StrategyConfig.id == self.strategy_id)
+                .first()
+            )
+
+            if not self.config or not bool(self.config.enabled):
                 logger.error(f"Strategy config not found or not enabled: {self.strategy_id}")
                 return False
             

@@ -15,6 +15,7 @@ This replaces the Streamlit implementation entirely.
 """
 
 from typing import Dict, Any, Optional
+import os
 
 # Services
 from app.services.market_data import (
@@ -103,6 +104,25 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         confidence=confidence,
         min_confidence=payload.get("min_confidence", 75),
     )
+
+    # =====================================================
+    # BACKTEST MODE: signal-only (no live Zerodha calls)
+    # =====================================================
+    backtest_mode = bool(payload.get("backtest")) or (os.getenv("BACKTEST_MODE") == "1")
+    if backtest_mode:
+        spot = float(payload.get("spot") or 0.0)
+        result = {
+            "strategy": strategy_mode,
+            "approved": strategy_mode != "NO_TRADE",
+            "reason": f"BACKTEST_MODE: {strategy_reason}",
+            "signal": sig,
+            "context": ctx,
+            "spot": spot,
+        }
+        run = _log_strategy_run(result, payload.get("underlying") or "")
+        if run:
+            result["run_id"] = run.id
+        return result
 
     # =====================================================
     # 4️⃣ MARKET DATA (FETCH FOR ALL CASES - for analysis)
@@ -361,14 +381,21 @@ class OptionSpread15m:
         """
         db = SessionLocal()
         try:
+            candle = context.get("candle") or {}
+            spot = candle.get("close") if isinstance(candle, dict) else None
+
+            underlying = context.get("backtest_symbol") or context.get("underlying")
+
             payload = {
-                "underlying": context.get("underlying"),
+                "underlying": underlying,
                 "interval": "15minute",
                 "use_ml": context.get("parameters", {}).get("use_ml", False),
                 "min_confidence": context.get("parameters", {}).get("min_confidence", 75),
                 "risk_mode": context.get("parameters", {}).get("risk_mode", "Conservative"),
                 "lots": context.get("parameters", {}).get("lots", 1),
                 "capital": context.get("parameters", {}).get("capital", 100000),
+                "backtest": True if spot is not None else False,
+                "spot": float(spot) if spot is not None else None,
             }
             
             return run_option_spread(db, payload)

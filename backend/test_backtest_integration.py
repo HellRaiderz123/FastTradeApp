@@ -28,18 +28,26 @@ from sqlalchemy.orm import Session
 db = Session(bind=engine)
 
 print("\n[2] Creating test strategy config...")
-strategy = StrategyConfig(
-    name="Test Strategy",
-    description="Quick test",
-    underlying="NIFTY",  # FIX: Was None, now "NIFTY"
-    enabled=True,
-    strategy_type="mock",
-    parameters={"min_confidence": 60, "lots": 1},
-)
-db.add(strategy)
-db.commit()
-db.refresh(strategy)
-print(f"    ✅ Strategy created with ID: {strategy.id}")
+TEST_NAME = "Test Strategy (mock)"
+strategy = db.query(StrategyConfig).filter(
+    StrategyConfig.name == TEST_NAME,
+    StrategyConfig.strategy_type == "mock",
+).first()
+if strategy:
+    print(f"    ✅ Reusing existing strategy ID: {strategy.id}")
+else:
+    strategy = StrategyConfig(
+        name=TEST_NAME,
+        description="Quick test",
+        underlying="NIFTY",  # FIX: Was None, now "NIFTY"
+        enabled=True,
+        strategy_type="mock",
+        parameters={"min_confidence": 60, "lots": 1},
+    )
+    db.add(strategy)
+    db.commit()
+    db.refresh(strategy)
+    print(f"    ✅ Strategy created with ID: {strategy.id}")
 
 # Run backtest
 print("\n[3] Running backtest...")

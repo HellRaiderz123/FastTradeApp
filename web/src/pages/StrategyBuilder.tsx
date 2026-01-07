@@ -49,6 +49,11 @@ const StrategyBuilder: React.FC = () => {
   const [selectedExpiry, setSelectedExpiry] = useState<string>('');
   const [fetchingSpot, setFetchingSpot] = useState(true);
   const [strategyName, setStrategyName] = useState('');
+  const [tpPct, setTpPct] = useState<number>(0);
+  const [slPct, setSlPct] = useState<number>(0);
+  const [trailingSlPct, setTrailingSlPct] = useState<number>(0);
+  const [entryTime, setEntryTime] = useState<string>('09:20');
+  const [exitTime, setExitTime] = useState<string>('15:20');
   const [savedStrategies, setSavedStrategies] = useState<any[]>([]);
   const [loadingStrategies, setLoadingStrategies] = useState(false);
 
@@ -524,6 +529,11 @@ const StrategyBuilder: React.FC = () => {
         strategy_type: 'option_spread_custom',
         underlying: 'NIFTY',
         parameters: {
+          tp_pct: tpPct,
+          sl_pct: slPct,
+          trailing_sl_pct: trailingSlPct,
+          entry_time: entryTime,
+          exit_time: exitTime,
           expiry: selectedExpiry,
           spot_at_creation: spot,
           legs: legs.map(leg => ({
@@ -549,6 +559,12 @@ const StrategyBuilder: React.FC = () => {
       } else {
         // Create new
         const response = await strategyAPI.createStrategy(strategyData);
+        const created = response?.data || response;
+        if (created?.id) {
+          // Newly created strategies default to disabled in backend; enable so it can run.
+          await strategyAPI.enableStrategy(created.id);
+          setStrategyId(created.id);
+        }
         setSaveStatus('success');
         alert('Strategy saved successfully!');
       }
@@ -603,6 +619,12 @@ const StrategyBuilder: React.FC = () => {
       setSpot(params.spot_at_creation || spot);
       setStrategyId(strategy.id);
       setStrategyName(strategy.name);
+
+      setTpPct(Number(params.tp_pct) || 0);
+      setSlPct(Number(params.sl_pct) || 0);
+      setTrailingSlPct(Number(params.trailing_sl_pct) || 0);
+      setEntryTime(params.entry_time || '09:20');
+      setExitTime(params.exit_time || '15:20');
       
       // If we have saved Greeks, use them
       if (params.greeks) {
@@ -639,6 +661,11 @@ const StrategyBuilder: React.FC = () => {
     setGreeks(null);
     setPayoffData([]);
     setSaveStatus('idle');
+    setTpPct(0);
+    setSlPct(0);
+    setTrailingSlPct(0);
+    setEntryTime('09:20');
+    setExitTime('15:20');
   };
 
   return (
@@ -744,6 +771,7 @@ const StrategyBuilder: React.FC = () => {
                 value={spot.toFixed(2)}
                 onChange={(e) => setSpot(Number(e.target.value))}
                 className="flex-1 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                aria-label="Spot price"
               />
               <button
                 onClick={() => { setSpot(atm); console.log('Reset spot to ATM:', atm); }}
@@ -765,6 +793,7 @@ const StrategyBuilder: React.FC = () => {
               value={selectedExpiry || ''}
               onChange={(e) => setSelectedExpiry(e.target.value)}
               className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                aria-label="Expiry date"
             >
               {expiryDates.length === 0 ? (
                 <option value="">Loading expiries...</option>
@@ -811,6 +840,7 @@ const StrategyBuilder: React.FC = () => {
                         value={leg.type}
                         onChange={(e) => updateLeg(leg.id, 'type', e.target.value)}
                         className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                        aria-label="Leg action"
                       >
                         <option>BUY</option>
                         <option>SELL</option>
@@ -819,6 +849,7 @@ const StrategyBuilder: React.FC = () => {
                         value={leg.option_type}
                         onChange={(e) => updateLeg(leg.id, 'option_type', e.target.value)}
                         className="px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                        aria-label="Option type"
                       >
                         <option>CE</option>
                         <option>PE</option>
@@ -827,6 +858,8 @@ const StrategyBuilder: React.FC = () => {
                     <button
                       onClick={() => removeLeg(leg.id)}
                       className="p-1 hover:bg-red-600 rounded text-red-300"
+                      title="Remove leg"
+                      aria-label="Remove leg"
                     >
                       <Trash2 size={16} />
                     </button>
@@ -840,6 +873,7 @@ const StrategyBuilder: React.FC = () => {
                         value={leg.strike}
                         onChange={(e) => updateLeg(leg.id, 'strike', Number(e.target.value))}
                         className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                        aria-label="Strike"
                       />
                     </div>
                     <div>
@@ -851,6 +885,7 @@ const StrategyBuilder: React.FC = () => {
                         min={1}
                         step={1}
                         className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                        aria-label="Lots"
                       />
                     </div>
                   </div>
@@ -862,6 +897,7 @@ const StrategyBuilder: React.FC = () => {
                       value={leg.premium || 0}
                       onChange={(e) => updateLeg(leg.id, 'premium', Number(e.target.value))}
                       className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                      aria-label="Premium"
                     />
                   </div>
                 </div>
@@ -1120,7 +1156,74 @@ const StrategyBuilder: React.FC = () => {
                 placeholder="e.g., Bull Call Spread - NIFTY"
                 className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
                 onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+                aria-label="Strategy name"
               />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="block text-sm text-slate-300">Profit Target (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={tpPct}
+                  onChange={(e) => setTpPct(Number(e.target.value) || 0)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                  aria-label="Profit target percent"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm text-slate-300">Stop Loss (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={300}
+                  step={1}
+                  value={slPct}
+                  onChange={(e) => setSlPct(Number(e.target.value) || 0)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                  aria-label="Stop loss percent"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm text-slate-300">Trailing SL (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={300}
+                  step={1}
+                  value={trailingSlPct}
+                  onChange={(e) => setTrailingSlPct(Number(e.target.value) || 0)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                  aria-label="Trailing stop loss percent"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm text-slate-300">Entry Time</label>
+                <input
+                  type="time"
+                  value={entryTime}
+                  onChange={(e) => setEntryTime(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                  aria-label="Entry time"
+                />
+              </div>
+
+              <div className="space-y-1 col-span-2">
+                <label className="block text-sm text-slate-300">Exit Time</label>
+                <input
+                  type="time"
+                  value={exitTime}
+                  onChange={(e) => setExitTime(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                  aria-label="Exit time"
+                />
+              </div>
             </div>
 
             {saveStatus === 'error' && (

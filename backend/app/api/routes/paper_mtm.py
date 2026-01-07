@@ -10,10 +10,11 @@ from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.utils.time import now_ist
 from app.core.market.ltp import get_ltp
 from app.core.broker.zerodha.client import get_kite_client
+from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_mode
 
 router = APIRouter(prefix="/paper", tags=["Paper Trading"])
 
-EXECUTION_MODE = os.getenv("EXECUTION_MODE") 
+EXECUTION_MODE = os.getenv("EXECUTION_MODE")  # legacy; do not rely on this at runtime
 
 
 def get_db():
@@ -26,11 +27,13 @@ def get_db():
 
 @router.post("/mtm/update")
 def update_mtm(db: Session = Depends(get_db)):
-    if EXECUTION_MODE == "PAPER":
+    execution_mode = get_execution_mode()
+
+    if is_paper_mode(execution_mode):
         executor = PaperExecutionAdapter()
     else:
         kite = get_kite_client()
-        executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=True)
+        executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=not is_live_mode(execution_mode))
 
     intents = (
         db.query(ExecutionIntent)

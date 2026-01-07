@@ -1,4 +1,3 @@
-import os
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from typing import Dict, Any, cast
@@ -8,13 +7,12 @@ from app.db.intent_query import get_intent_by_id
 from app.core.execution.paper import PaperExecutionAdapter
 from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.utils.time import now_ist
-from app.core.execution.credit import compute_entry_credit
+from app.core.execution.credit import compute_entry_credit_total
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.risk.kill_switch import check_portfolio_kill_switch
+from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode, is_zerodha_dry_run
 
 router = APIRouter(prefix="/execute", tags=["Execution"])
-
-EXECUTION_MODE = os.getenv("EXECUTION_MODE", "PAPER")
 
 
 def get_db():
@@ -74,11 +72,12 @@ def execute_paper(
     intent.status = "EXECUTING" # type: ignore
     db.commit()
 
-    if EXECUTION_MODE == "PAPER":
+    mode = get_execution_mode()
+    if is_paper_mode(mode):
         executor = PaperExecutionAdapter()
     else:
         kite = get_kite_client()
-        executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=True)
+        executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=not is_live_mode(mode))
 
     try:
         result = executor.execute(intent)
@@ -93,7 +92,7 @@ def execute_paper(
     intent.execution_result = result # type: ignore
     entry_credit = result.get("entry_credit")
     if entry_credit is None:
-        entry_credit = compute_entry_credit(intent.ticket)
+        entry_credit = compute_entry_credit_total(intent.ticket)
     intent.entry_credit = entry_credit # pyright: ignore[reportAttributeAccessIssue]
     intent.last_mtm_at = now_ist() # type: ignore
     

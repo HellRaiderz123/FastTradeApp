@@ -77,8 +77,10 @@ class StrategyRegistry:
 def register_default_strategies():
     """Register built-in strategies at startup"""
     from app.core.strategies.option_spread_15m.engine import OptionSpread15m
+    from app.core.strategies.option_spread_custom.engine import OptionSpreadCustom
     
     StrategyRegistry.register('option_spread_15m', OptionSpread15m)
+    StrategyRegistry.register('option_spread_custom', OptionSpreadCustom)
     logger.info("✅ Default strategies registered")
 
 

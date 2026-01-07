@@ -1,17 +1,81 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TrendingUp, TrendingDown, X } from 'lucide-react';
-import { paperAPI, exitAPI, journalAPI } from '../lib/api';
+import { exitAPI, journalAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 
 const Positions: React.FC = () => {
   const { trades, setTrades } = useTradeStore();
   const [loading, setLoading] = useState(false);
   const [localTrades, setLocalTrades] = useState<any[]>([]);
+  const wsRef = useRef<WebSocket | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetchPositions();
-    const interval = setInterval(fetchPositions, 30000); // Refresh every 30s
-    return () => clearInterval(interval);
+
+    // Poll as a fallback (e.g., if WS is blocked)
+    pollRef.current = window.setInterval(fetchPositions, 30000);
+
+    // Live updates via WebSocket
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const wsUrl = `${proto}://${window.location.host}/api/ws/positions`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        // Once live is connected, polling is less important.
+        if (pollRef.current) {
+          window.clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg?.type !== 'positions_update') return;
+          const updates = Array.isArray(msg?.intents) ? msg.intents : [];
+
+          setLocalTrades((prev) => {
+            const byId = new Map<string, any>();
+            for (const t of Array.isArray(prev) ? prev : []) {
+              const id = String(t?.intent_id ?? '');
+              if (id) byId.set(id, t);
+            }
+            for (const u of updates) {
+              const id = String(u?.intent_id ?? '');
+              if (!id) continue;
+              byId.set(id, { ...(byId.get(id) || {}), ...u });
+            }
+            return Array.from(byId.values());
+          });
+        } catch (e) {
+          // ignore malformed messages
+        }
+      };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        // Restore polling if live stream drops
+        if (!pollRef.current) {
+          pollRef.current = window.setInterval(fetchPositions, 30000);
+        }
+      };
+
+      ws.onerror = () => {
+        // Let onclose restore polling
+      };
+    } catch (e) {
+      // Keep polling only
+    }
+
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+      pollRef.current = null;
+      if (wsRef.current) wsRef.current.close();
+      wsRef.current = null;
+    };
   }, []);
 
   const fetchPositions = async () => {
@@ -19,7 +83,9 @@ const Positions: React.FC = () => {
       setLoading(true);
       // Fetch execution intents (active trades)
       const response = await journalAPI.getExecutionIntents(50);
-      const activeIntents = response.data.filter((intent: any) => intent.status === 'EXECUTED');
+      const data = response?.data;
+      const intents = Array.isArray(data) ? data : [];
+      const activeIntents = intents.filter((intent: any) => intent?.status === 'EXECUTED');
       setLocalTrades(activeIntents);
     } catch (error) {
       console.error('Failed to fetch positions:', error);
@@ -28,11 +94,11 @@ const Positions: React.FC = () => {
     }
   };
 
-  const handleClosePosition = async (tradeId: number) => {
+  const handleClosePosition = async (intentId: string) => {
     setLoading(true);
     try {
-      await exitAPI.manualExit(tradeId.toString());
-      setLocalTrades(localTrades.filter((t) => t.id !== tradeId));
+      await exitAPI.manualExit(intentId);
+      setLocalTrades(localTrades.filter((t) => t.intent_id !== intentId));
       alert('Position closed successfully!');
     } catch (error) {
       console.error('Failed to close position:', error);
@@ -43,7 +109,7 @@ const Positions: React.FC = () => {
   };
 
   const displayTrades = localTrades.length > 0 ? localTrades : trades;
-  const openPositions = displayTrades.filter((t) => t.status === 'EXECUTED');
+  const openPositions = displayTrades.filter((t) => t?.status === 'EXECUTED');
   const totalPnL = openPositions.reduce((sum, t) => sum + (t.pnl || 0), 0);
   const totalPnLPercent = openPositions.length > 0 ? (totalPnL / 100000) * 100 : 0;
 
@@ -87,9 +153,9 @@ const Positions: React.FC = () => {
           <div className="space-y-4">
             {openPositions.map((trade) => (
               <PositionCard
-                key={trade.id}
+                key={trade.intent_id || trade.id}
                 trade={trade}
-                onClose={() => handleClosePosition(trade.id)}
+                onClose={() => handleClosePosition(String(trade.intent_id || ''))}
                 loading={loading}
               />
             ))}
@@ -155,9 +221,21 @@ interface PositionCardProps {
 }
 
 const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) => {
-  const isProfitable = trade.pnl >= 0;
-  const tpHit = trade.pnl >= trade.tp;
-  const slHit = trade.pnl <= trade.sl;
+  const pnl = Number(trade?.pnl ?? trade?.unrealized_pnl ?? 0);
+  const tp = trade?.tp !== null && trade?.tp !== undefined ? Number(trade.tp) : null;
+  const sl = trade?.sl !== null && trade?.sl !== undefined ? Number(trade.sl) : null;
+  const entryCredit = Number(trade?.entry_credit ?? trade?.entry_price ?? 0);
+
+  const isProfitable = pnl >= 0;
+  const tpHit = tp !== null ? pnl >= tp : false;
+  const slHit = sl !== null ? pnl <= sl : false;
+
+  const openedAtRaw = trade?.created_at ?? trade?.entry_time ?? trade?.filled_at;
+  const openedAtLabel = openedAtRaw ? new Date(openedAtRaw).toLocaleString() : '-';
+
+  // If pnl is computed as (entry_credit - cost_to_close), then cost_to_close = entry_credit - pnl.
+  const currentValue = entryCredit - pnl;
+  const pnlPercent = entryCredit !== 0 ? (pnl / Math.abs(entryCredit)) * 100 : null;
 
   return (
     <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition">
@@ -170,12 +248,14 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
           )}
           <div>
             <p className="font-semibold text-white">{trade.strategy}</p>
-            <p className="text-xs text-slate-400">{trade.underlying} • Opened: {new Date(trade.entry_time).toLocaleString()}</p>
+            <p className="text-xs text-slate-400">{trade.underlying} • Opened: {openedAtLabel}</p>
           </div>
         </div>
         <button
           onClick={onClose}
           disabled={loading}
+          aria-label="Close position"
+          title="Close position"
           className="text-slate-400 hover:text-red-400 transition"
         >
           <X className="w-5 h-5" />
@@ -185,26 +265,26 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4 py-3 border-t border-b border-slate-700">
         <div>
           <p className="text-xs text-slate-400">Entry</p>
-          <p className="font-semibold text-white">₹{trade.entry_price.toLocaleString()}</p>
+          <p className="font-semibold text-white">₹{entryCredit.toLocaleString()}</p>
         </div>
         <div>
           <p className="text-xs text-slate-400">Current</p>
-          <p className="font-semibold text-white">₹{trade.current_price.toLocaleString()}</p>
+          <p className="font-semibold text-white">₹{Number.isFinite(currentValue) ? currentValue.toLocaleString() : '-'}</p>
         </div>
         <div>
           <p className="text-xs text-slate-400">P&L</p>
           <p className={`font-semibold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
-            ₹{Math.abs(trade.pnl).toLocaleString()}
+            ₹{Math.abs(pnl).toLocaleString()}
           </p>
         </div>
         <div>
-          <p className="text-xs text-slate-400">TP: {trade.tp}</p>
+          <p className="text-xs text-slate-400">TP: {tp ?? '-'}</p>
           <p className={`font-semibold ${tpHit ? 'text-green-400 animate-pulse' : 'text-slate-300'}`}>
             {tpHit ? '✓ TP Hit' : '-'}
           </p>
         </div>
         <div>
-          <p className="text-xs text-slate-400">SL: {trade.sl}</p>
+          <p className="text-xs text-slate-400">SL: {sl ?? '-'}</p>
           <p className={`font-semibold ${slHit ? 'text-red-400 animate-pulse' : 'text-slate-300'}`}>
             {slHit ? '✗ SL Hit' : '-'}
           </p>
@@ -213,7 +293,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
 
       <div className="flex justify-between items-center mt-3">
         <p className={`text-sm font-medium ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
-          {isProfitable ? '+' : ''}{trade.pnl_percent.toFixed(2)}%
+          {pnlPercent === null ? '-' : `${isProfitable ? '+' : ''}${pnlPercent.toFixed(2)}%`}
         </p>
         <button
           onClick={onClose}

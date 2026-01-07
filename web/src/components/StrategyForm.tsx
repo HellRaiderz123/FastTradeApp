@@ -14,16 +14,25 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
   initialData,
 }) => {
   const [loading, setLoading] = useState(false);
+  const defaultParameters = {
+    risk_mode: 'CONSERVATIVE',
+    lots: 1,
+    capital: 100000,
+    min_confidence: 75,
+    tp_pct: 0,
+    sl_pct: 0,
+    trailing_sl_pct: 0,
+    entry_time: '09:20',
+    exit_time: '15:20',
+  };
   const [formData, setFormData] = useState({
     name: initialData?.name || '',
     description: initialData?.description || '',
     strategy_type: initialData?.strategy_type || 'option_spread_15m',
     underlying: initialData?.underlying || 'NIFTY',
-    parameters: initialData?.parameters || {
-      risk_mode: 'CONSERVATIVE',
-      lots: 1,
-      capital: 100000,
-      min_confidence: 75,
+    parameters: {
+      ...defaultParameters,
+      ...(initialData?.parameters || {}),
     },
   });
 
@@ -81,7 +90,12 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
         <h2 className="text-2xl font-bold text-white">
           {initialData ? 'Edit Strategy' : 'Create New Strategy'}
         </h2>
-        <button onClick={onClose} className="p-1 hover:bg-slate-800 rounded text-slate-300">
+        <button
+          onClick={onClose}
+          className="p-1 hover:bg-slate-800 rounded text-slate-300"
+          title="Close"
+          aria-label="Close"
+        >
           <X size={24} />
         </button>
       </div>
@@ -90,8 +104,11 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
       <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-96 overflow-y-auto">
           {/* Name */}
           <div>
-            <label className="block text-sm font-medium mb-1 text-slate-200">Strategy Name</label>
+            <label htmlFor="strategy-name" className="block text-sm font-medium mb-1 text-slate-200">
+              Strategy Name
+            </label>
             <input
+              id="strategy-name"
               type="text"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -103,8 +120,11 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
 
           {/* Description */}
           <div>
-            <label className="block text-sm font-medium mb-1 text-slate-200">Description</label>
+            <label htmlFor="strategy-description" className="block text-sm font-medium mb-1 text-slate-200">
+              Description
+            </label>
             <textarea
+              id="strategy-description"
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               rows={3}
@@ -120,8 +140,12 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
           <div className="grid grid-cols-2 gap-4">
             {/* Underlying */}
             <div>
-              <label className="block text-sm font-medium mb-1 text-slate-200">Underlying</label>
+              <label htmlFor="strategy-underlying" className="block text-sm font-medium mb-1 text-slate-200">
+                Underlying
+              </label>
               <select
+                id="strategy-underlying"
+                aria-label="Underlying"
                 value={formData.underlying}
                 onChange={(e) => setFormData({ ...formData, underlying: e.target.value })}
                 className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -139,8 +163,12 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
 
             {/* Strategy Type */}
             <div>
-              <label className="block text-sm font-medium mb-1 text-slate-200">Strategy Type</label>
+              <label htmlFor="strategy-type" className="block text-sm font-medium mb-1 text-slate-200">
+                Strategy Type
+              </label>
               <select
+                id="strategy-type"
+                aria-label="Strategy type"
                 value={formData.strategy_type}
                 onChange={(e) =>
                   setFormData({ ...formData, strategy_type: e.target.value })
@@ -159,8 +187,12 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
             <div className="grid grid-cols-2 gap-4">
               {/* Risk Mode */}
               <div>
-                <label className="block text-sm font-medium mb-1 text-slate-200">Risk Mode</label>
+                <label htmlFor="strategy-risk-mode" className="block text-sm font-medium mb-1 text-slate-200">
+                  Risk Mode
+                </label>
                 <select
+                  id="strategy-risk-mode"
+                  aria-label="Risk mode"
                   value={formData.parameters.risk_mode}
                   onChange={(e) =>
                     setFormData({
@@ -183,8 +215,12 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
 
               {/* Lots */}
               <div>
-                <label className="block text-sm font-medium mb-1 text-slate-200">Lots</label>
+                <label htmlFor="strategy-lots" className="block text-sm font-medium mb-1 text-slate-200">
+                  Lots
+                </label>
                 <input
+                  id="strategy-lots"
+                  aria-label="Lots"
                   type="number"
                   min="1"
                   max="10"
@@ -204,8 +240,12 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
 
               {/* Capital */}
               <div>
-                <label className="block text-sm font-medium mb-1 text-slate-200">Capital</label>
+                <label htmlFor="strategy-capital" className="block text-sm font-medium mb-1 text-slate-200">
+                  Capital
+                </label>
                 <input
+                  id="strategy-capital"
+                  aria-label="Capital"
                   type="number"
                   min="50000"
                   step="10000"
@@ -225,10 +265,12 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
 
               {/* Min Confidence */}
               <div>
-                <label className="block text-sm font-medium mb-1 text-slate-200">
+                <label htmlFor="strategy-min-confidence" className="block text-sm font-medium mb-1 text-slate-200">
                   Min Confidence (%)
                 </label>
                 <input
+                  id="strategy-min-confidence"
+                  aria-label="Min confidence"
                   type="number"
                   min="50"
                   max="95"
@@ -239,6 +281,130 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
                       parameters: {
                         ...formData.parameters,
                         min_confidence: parseInt(e.target.value) || 75,
+                      },
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              {/* Take Profit */}
+              <div>
+                <label htmlFor="strategy-tp" className="block text-sm font-medium mb-1 text-slate-200">
+                  Profit Target (%)
+                </label>
+                <input
+                  id="strategy-tp"
+                  aria-label="Profit target percent"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={formData.parameters.tp_pct}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      parameters: {
+                        ...formData.parameters,
+                        tp_pct: Number(e.target.value) || 0,
+                      },
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              {/* Stop Loss */}
+              <div>
+                <label htmlFor="strategy-sl" className="block text-sm font-medium mb-1 text-slate-200">
+                  Stop Loss (%)
+                </label>
+                <input
+                  id="strategy-sl"
+                  aria-label="Stop loss percent"
+                  type="number"
+                  min="0"
+                  max="300"
+                  step="1"
+                  value={formData.parameters.sl_pct}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      parameters: {
+                        ...formData.parameters,
+                        sl_pct: Number(e.target.value) || 0,
+                      },
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              {/* Trailing Stop Loss */}
+              <div>
+                <label htmlFor="strategy-tsl" className="block text-sm font-medium mb-1 text-slate-200">
+                  Trailing SL (%)
+                </label>
+                <input
+                  id="strategy-tsl"
+                  aria-label="Trailing stop loss percent"
+                  type="number"
+                  min="0"
+                  max="300"
+                  step="1"
+                  value={formData.parameters.trailing_sl_pct}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      parameters: {
+                        ...formData.parameters,
+                        trailing_sl_pct: Number(e.target.value) || 0,
+                      },
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              {/* Entry Time */}
+              <div>
+                <label htmlFor="strategy-entry-time" className="block text-sm font-medium mb-1 text-slate-200">
+                  Entry Time (HH:MM)
+                </label>
+                <input
+                  id="strategy-entry-time"
+                  aria-label="Entry time"
+                  type="time"
+                  value={formData.parameters.entry_time}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      parameters: {
+                        ...formData.parameters,
+                        entry_time: e.target.value,
+                      },
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              {/* Exit Time */}
+              <div>
+                <label htmlFor="strategy-exit-time" className="block text-sm font-medium mb-1 text-slate-200">
+                  Exit Time (HH:MM)
+                </label>
+                <input
+                  id="strategy-exit-time"
+                  aria-label="Exit time"
+                  type="time"
+                  value={formData.parameters.exit_time}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      parameters: {
+                        ...formData.parameters,
+                        exit_time: e.target.value,
                       },
                     })
                   }

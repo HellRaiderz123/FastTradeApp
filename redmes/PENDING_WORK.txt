@@ -1,0 +1,267 @@
+"""
+FASTTRADEAPP - PENDING WORK & ROADMAP
+=====================================
+
+Updated: 2026-01-07
+
+COMPLETED ✅
+============
+Phase 1: Strategy Execution ✅
+  - Options pricing, execution, live trading
+  
+Phase 2: Daily Capital ✅
+  - Capital tracking, daily updates
+  
+Phase 3: Risk Management ✅
+  - Position limits, portfolio margins
+  
+Phase 4A: Backtest Engine ✅
+  - Mock prices, metrics, charting
+  
+Phase 4B: Advanced Indicators ✅
+  - Greeks (Delta, Gamma, Theta, Vega, Rho)
+  - IV Percentile (IV%, regime classification)
+  - Put/Call Ratio (sentiment scoring)
+  - Realistic prices (Zerodha → Yahoo → Mock)
+  
+Backend Improvements ✅
+  - Database auto-initialization
+  - Candle scheduler (live data)
+  - VIX scheduler
+  - Real strategy signal generation
+  - Candle persistence to Candle15m table
+
+
+PENDING (High Priority) 🔴
+===========================
+
+1. PHASE 5: STRATEGY BUILDER UI (5-7 days)
+   ---
+   Location: web/src/pages/StrategyBuilder.tsx (new)
+   
+   Features:
+   □ Drag & drop option legs
+   □ Strike selection interface
+   □ Payoff diagram (visual)
+   □ Greeks preview (Delta, Theta, Vega)
+   □ P&L scenarios
+   □ Entry/exit price calculator
+   □ Real-time strategy metrics
+   
+   Backend APIs Ready:
+   ✅ GET /strategy/list
+   ✅ POST /strategy/execute
+   ✅ Greeks calculation endpoints
+   ✅ IV percentile endpoints
+   
+   Dependencies:
+   - Plotly/Chart.js for payoff diagrams
+   - React drag-and-drop library
+   - Greeks API integration
+   
+   Estimated Effort: 5-7 days
+
+
+2. PHASE 5B: STRATEGY SAVE & TEMPLATE (2-3 days)
+   ---
+   □ Save custom strategies to database
+   □ Load saved strategies
+   □ Strategy templates (Iron Condor, Call Spread, etc.)
+   □ Clone/modify strategies
+   □ Strategy versioning
+   
+   Backend Work:
+   □ API for saving strategies
+   □ Strategy template library
+   □ Load/save API endpoints
+
+
+3. PHASE 6: PORTFOLIO ANALYTICS (4-5 days)
+   ---
+   □ Aggregated portfolio Greeks
+   □ Position-by-position breakdown
+   □ Greeks heatmap (all open positions)
+   □ Risk dashboard (max DD, VaR, etc.)
+   □ Hedging recommendations
+   □ Greeks P&L waterfall
+   □ Correlation matrix
+   
+   Backend Work:
+   □ Portfolio Greeks aggregation
+   □ Correlation calculations
+   □ Hedging logic
+   
+   Estimated Effort: 4-5 days
+
+
+PENDING (Medium Priority) 🟡
+=============================
+
+4. LIVE TRADING INTEGRATION (3-4 days)
+   ---
+   Currently: Dry-run only
+   Needed:
+   □ Live order execution to Zerodha
+   □ Position tracking (real vs expected)
+   □ MTM calculation (real P&L)
+   □ Order status monitoring
+   □ Partial fill handling
+   □ Emergency stop-loss execution
+   
+   Requires:
+   - Live Zerodha credentials testing
+   - Order validation logic
+   - Execution risk checks
+
+
+5. MOBILE APP IMPROVEMENTS (2-3 days)
+   ---
+   Current: Basic React Native setup
+   Needed:
+   □ Strategy execution on mobile
+   □ Real-time P&L ticker
+   □ Position alerts/notifications
+   □ Quick exit buttons
+   □ Charts for mobile view
+
+
+6. SIGNAL ENRICHER ENHANCEMENT (2 days)
+   ---
+   Currently: Basic signal generation
+   Needed:
+   □ Add Greeks to signal output
+   □ Filter signals by IV regime
+   □ Score signals by IV percentile
+   □ Add portfolio Greeks context
+   
+   File: app/core/signals/signal_enricher.py
+   Requires: Phase 4B integration
+
+
+7. STRATEGY DECISION LOGIC UPDATE (2 days)
+   ---
+   Currently: Basic confidence filtering
+   Needed:
+   □ Use IV regime for approval
+   □ Use Greeks for hedging decisions
+   □ Portfolio delta limits
+   □ Gamma exposure tracking
+   □ Vega bias considerations
+
+
+PENDING (Lower Priority) 🟢
+===========================
+
+8. ADVANCED BACKTESTING (3-4 days)
+   ---
+   □ Walk-forward optimization
+   □ Monte Carlo simulation
+   □ Stress testing
+   □ Scenario analysis
+   □ Parameter optimization
+   
+   Current: Basic backtest working
+   Missing: Advanced analysis features
+
+
+9. ML INTEGRATION (5+ days)
+   ---
+   □ Price prediction model
+   □ Sentiment analysis
+   □ Option flow analysis
+   □ Anomaly detection
+   
+   Current: Framework exists
+   Missing: Real models
+
+
+10. REPORTING & ANALYTICS (2-3 days)
+    ---
+    □ Daily P&L report
+    □ Monthly performance summary
+    □ Greeks exposure report
+    □ Risk metrics report
+    □ Trade journal export (CSV, PDF)
+
+
+11. DEPLOYMENT & DEVOPS (2-3 days)
+    ---
+    □ Docker containerization
+    □ CI/CD pipeline
+    □ AWS/GCP deployment
+    □ Monitoring & logging
+    □ Database backups
+
+
+KNOWN ISSUES / FIXES NEEDED 🐛
+=============================
+
+1. Option chain data dependency
+   - Strategy needs live option chain for strikes
+   - Currently: Cached/mock data
+   - Fix: Real-time option chain API
+
+2. Zerodha credentials management
+   - Currently: Env variables
+   - Improve: Secure credential storage
+   - Add: Multiple account support
+
+3. Candle scheduler frequency
+   - Currently: Hard-coded intervals
+   - Needed: Configurable refresh rate
+
+4. Error handling in schedulers
+   - Currently: Basic try/catch
+   - Improve: Retry logic, alerting
+
+
+PRIORITY ROADMAP
+================
+
+IMMEDIATE (This Week):
+  1. Phase 5: Strategy Builder UI ← START HERE
+  2. Signal enricher integration
+  3. Live option chain data
+
+NEXT (2 Weeks):
+  1. Phase 5B: Save/template strategies
+  2. Phase 6: Portfolio Analytics
+  3. Mobile app improvements
+
+LATER (3+ Weeks):
+  1. Live trading (requires testing)
+  2. Advanced backtesting
+  3. ML models
+  4. Deployment
+
+
+PROGRESS TRACKER
+================
+
+Phase Completion:
+  Phase 1: ████████████████████ 100%
+  Phase 2: ████████████████████ 100%
+  Phase 3: ████████████████████ 100%
+  Phase 4A: ████████████████████ 100%
+  Phase 4B: ████████████████████ 100%
+  Phase 5: ░░░░░░░░░░░░░░░░░░░░ 0%
+  Phase 6: ░░░░░░░░░░░░░░░░░░░░ 0%
+  
+Overall: ████████████░░░░░░░░ ~65%
+
+
+RECOMMENDATION
+==============
+
+✅ Start Phase 5 NOW
+   - UI is blocking everything else
+   - APIs are ready
+   - High user impact
+
+Then:
+- Phase 5B (save/templates)
+- Phase 6 (portfolio analytics)
+- Live trading (requires careful testing)
+"""
+
+print(__doc__)

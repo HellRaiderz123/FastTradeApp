@@ -109,9 +109,48 @@ export const StrategyManager: React.FC = () => {
   const handleExecuteSingle = async (strategyId: number) => {
     setExecuting(strategyId);
     try {
+      const selected = strategies.find((s) => s.id === strategyId);
+      if (selected && !selected.enabled) {
+        await strategyAPI.enableStrategy(strategyId);
+        await loadStrategies();
+      }
+      // 1) Run strategy (build ticket + create StrategyRun)
       const response = await executionAPI.executeSingle(strategyId);
-      setResults([response.data, ...results]);
-      alert(`Executed: ${response.data.strategy_name}`);
+      const runResult = response.data;
+
+      // 2) Create execution intent from run_id
+      const runId = runResult?.run_id;
+      if (!runId) {
+        setResults([runResult, ...results]);
+        alert('Strategy ran but no run_id returned');
+        return;
+      }
+
+      const intentResp = await executionAPI.createIntent(runId);
+      const intentData = intentResp.data;
+      const intentId = intentData?.intent_id;
+      if (!intentId) {
+        setResults([
+          { ...runResult, intent: intentData },
+          ...results,
+        ]);
+        alert('Intent creation failed (no intent_id)');
+        return;
+      }
+
+      // 3) Execute paper
+      const idempotencyKey = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
+        ? (globalThis.crypto as any).randomUUID()
+        : `${Date.now()}-${Math.random()}`;
+
+      const execResp = await executionAPI.executeIntent(intentId, idempotencyKey);
+      const execData = execResp.data;
+
+      setResults([
+        { ...runResult, intent_id: intentId, execution: execData },
+        ...results,
+      ]);
+      alert(`Executed (paper): ${runResult?.strategy_name || 'strategy'}`);
     } catch (error) {
       console.error('Execution failed:', error);
       alert('Failed to execute strategy');

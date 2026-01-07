@@ -12,6 +12,7 @@ from typing import Optional
 from app.db.session import SessionLocal
 from app.db.models import StrategyConfig, BacktestResult, BacktestTrade
 from app.core.backtest.engine import BacktestEngine
+from app.core.backtest.options_engine import OptionsBacktestEngine
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class BacktestRequest(BaseModel):
     start_date: date
     end_date: date
     initial_capital: float = 100000
+    mode: str = "auto"  # auto | proxy | options
 
 
 class BacktestResultResponse(BaseModel):
@@ -89,13 +91,88 @@ def run_backtest(
                 detail=f"Strategy {request.strategy_config_id} not found"
             )
         
-        # Run backtest
-        engine = BacktestEngine(config, db)
-        result = engine.run(
-            start_date=request.start_date,
-            end_date=request.end_date,
-            initial_capital=request.initial_capital,
-        )
+        mode = (request.mode or "auto").lower().strip()
+        if mode not in {"auto", "proxy", "options"}:
+            raise HTTPException(status_code=400, detail="Invalid mode. Use auto|proxy|options")
+
+        use_options = mode == "options" or (mode == "auto" and config.strategy_type == "option_spread_15m")
+
+        if use_options:
+            try:
+                engine = OptionsBacktestEngine(config, db)
+                result = engine.run(
+                    start_date=request.start_date,
+                    end_date=request.end_date,
+                    initial_capital=request.initial_capital,
+                )
+
+                # If we couldn't price anything, don't pretend it succeeded.
+                pricing_missing_count = int(result.get("pricing_missing_count", 0) or 0)
+                total_trades = int(result.get("total_trades", 0) or 0)
+                if result.get("success") and pricing_missing_count > 0 and total_trades == 0:
+                    msg = (
+                        "Options backtest unavailable for this date range because option contracts "
+                        "weren't found in the current Zerodha instruments dump (expired expiry). "
+                        "Use Mode=Proxy for older periods, or backtest recent/current expiry periods in Mode=Options."
+                    )
+                    if mode == "options":
+                        return {
+                            "success": False,
+                            "error": msg,
+                            "strategy_config_id": request.strategy_config_id,
+                            "pricing_missing_count": pricing_missing_count,
+                            "pricing_missing_symbols": result.get("pricing_missing_symbols", []),
+                        }
+
+                    logger.warning(f"⚠️ {msg} Falling back to proxy.")
+                    engine = BacktestEngine(config, db)
+                    result = engine.run(
+                        start_date=request.start_date,
+                        end_date=request.end_date,
+                        initial_capital=request.initial_capital,
+                    )
+                    result["warning"] = msg
+                    result["mode_used"] = "proxy_fallback"
+                elif result.get("success") and pricing_missing_count > 0:
+                    result["warning"] = (
+                        "Some option legs could not be priced (missing instruments). "
+                        "Results may be incomplete."
+                    )
+                    result["mode_used"] = "options"
+            except KeyError as e:
+                # Old expiries often aren't present in the current instruments dump.
+                msg = str(e)
+                logger.warning(f"⚠️ Options backtest pricing unavailable: {msg}")
+                if mode == "options":
+                    return {
+                        "success": False,
+                        "error": (
+                            "Options backtest failed: option contract not found in current instruments. "
+                            "This usually happens when backtesting older expiries (e.g., 2024) without an instruments snapshot. "
+                            f"Details: {msg}"
+                        ),
+                        "strategy_config_id": request.strategy_config_id,
+                    }
+
+                # mode == auto -> fallback to proxy backtest
+                engine = BacktestEngine(config, db)
+                result = engine.run(
+                    start_date=request.start_date,
+                    end_date=request.end_date,
+                    initial_capital=request.initial_capital,
+                )
+                result["warning"] = (
+                    "Fell back to proxy backtest because options pricing was unavailable for this date range. "
+                    f"Details: {msg}"
+                )
+                result["mode_used"] = "proxy_fallback"
+        else:
+            engine = BacktestEngine(config, db)
+            result = engine.run(
+                start_date=request.start_date,
+                end_date=request.end_date,
+                initial_capital=request.initial_capital,
+            )
         
         if not result.get("success"):
             logger.error(f"❌ Backtest failed: {result.get('error')}")

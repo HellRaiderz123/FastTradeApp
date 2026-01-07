@@ -40,13 +40,15 @@ interface BacktestResult {
   peak_equity: number;
   trades: Array<{
     entry_date: string;
-    exit_date: string;
+    exit_date: string | null;
     entry_price: number;
-    exit_price: number;
+    exit_price: number | null;
     quantity: number;
     pnl: number;
     pnl_pct: number;
     strategy: string;
+    exit_reason?: string;
+    legs?: Array<{ side: string; symbol: string }>;
   }>;
   equity_curve: number[];
   drawdown_periods: Array<{
@@ -62,10 +64,12 @@ export const Backtest: React.FC = () => {
   const [startDate, setStartDate] = useState('2024-01-01');
   const [endDate, setEndDate] = useState('2024-12-31');
   const [initialCapital, setInitialCapital] = useState(100000);
+  const [mode, setMode] = useState<'auto' | 'options' | 'proxy'>('auto');
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   // Load strategies on mount
   useEffect(() => {
@@ -89,6 +93,7 @@ export const Backtest: React.FC = () => {
 
     setLoading(true);
     setError(null);
+    setWarning(null);
     setResult(null);
 
     try {
@@ -97,12 +102,14 @@ export const Backtest: React.FC = () => {
         start_date: startDate,
         end_date: endDate,
         initial_capital: initialCapital,
+        mode,
       });
 
       const data = response?.data;
 
       if (data?.success) {
         setResult(data);
+        if (data?.warning) setWarning(String(data.warning));
       } else {
         setError(data?.error || 'Backtest failed');
       }
@@ -136,7 +143,7 @@ export const Backtest: React.FC = () => {
 
       {/* Input Section */}
       <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
           {/* Strategy Selector */}
           <div>
             <label htmlFor="backtest-strategy" className="block text-sm font-medium text-slate-300 mb-2">Strategy</label>
@@ -153,6 +160,22 @@ export const Backtest: React.FC = () => {
                   {s.name}
                 </option>
               ))}
+            </select>
+          </div>
+
+          {/* Mode */}
+          <div>
+            <label htmlFor="backtest-mode" className="block text-sm font-medium text-slate-300 mb-2">Mode</label>
+            <select
+              id="backtest-mode"
+              aria-label="Backtest mode"
+              value={mode}
+              onChange={(e) => setMode(e.target.value as any)}
+              className="w-full px-4 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="auto">Auto</option>
+              <option value="options">Options</option>
+              <option value="proxy">Proxy</option>
             </select>
           </div>
 
@@ -216,6 +239,13 @@ export const Backtest: React.FC = () => {
         </div>
       )}
 
+      {/* Warning Message */}
+      {warning && (
+        <div className="bg-amber-900 border border-amber-600 rounded p-4 text-amber-100">
+          {warning}
+        </div>
+      )}
+
       {/* Results Section */}
       {result && (
         <div className="space-y-6">
@@ -256,27 +286,27 @@ export const Backtest: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
               <div className="text-slate-400 text-xs mb-2">Sortino Ratio</div>
-              <div className="text-2xl font-bold text-blue-400">{result.sortino_ratio.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-blue-400">{Number(result.sortino_ratio || 0).toFixed(2)}</div>
             </div>
 
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
               <div className="text-slate-400 text-xs mb-2">Profit Factor</div>
-              <div className="text-2xl font-bold text-green-400">{result.profit_factor.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-green-400">{Number(result.profit_factor || 0).toFixed(2)}</div>
             </div>
 
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
               <div className="text-slate-400 text-xs mb-2">Avg Win</div>
-              <div className="text-2xl font-bold text-green-400">₹{result.avg_win.toLocaleString()}</div>
+              <div className="text-2xl font-bold text-green-400">₹{Number(result.avg_win || 0).toLocaleString()}</div>
             </div>
 
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
               <div className="text-slate-400 text-xs mb-2">Avg Loss</div>
-              <div className="text-2xl font-bold text-red-400">₹{result.avg_loss.toLocaleString()}</div>
+              <div className="text-2xl font-bold text-red-400">₹{Number(result.avg_loss || 0).toLocaleString()}</div>
             </div>
 
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
               <div className="text-slate-400 text-xs mb-2">Calmar Ratio</div>
-              <div className="text-2xl font-bold text-blue-400">{result.calmar_ratio.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-blue-400">{Number(result.calmar_ratio || 0).toFixed(2)}</div>
             </div>
           </div>
 
@@ -341,6 +371,9 @@ export const Backtest: React.FC = () => {
                     <tr>
                       <th className="px-6 py-3 text-left">Entry Date</th>
                       <th className="px-6 py-3 text-left">Exit Date</th>
+                      <th className="px-6 py-3 text-left">Strategy</th>
+                      <th className="px-6 py-3 text-left">Exit Reason</th>
+                      <th className="px-6 py-3 text-left">Legs</th>
                       <th className="px-6 py-3 text-right">Entry Price</th>
                       <th className="px-6 py-3 text-right">Exit Price</th>
                       <th className="px-6 py-3 text-right">Qty</th>
@@ -352,9 +385,18 @@ export const Backtest: React.FC = () => {
                     {result.trades.slice(0, 15).map((trade, idx) => (
                       <tr key={idx} className="hover:bg-slate-700">
                         <td className="px-6 py-3">{trade.entry_date}</td>
-                        <td className="px-6 py-3">{trade.exit_date}</td>
-                        <td className="px-6 py-3 text-right">₹{trade.entry_price.toFixed(2)}</td>
-                        <td className="px-6 py-3 text-right">₹{trade.exit_price.toFixed(2)}</td>
+                        <td className="px-6 py-3">{trade.exit_date || '-'}</td>
+                        <td className="px-6 py-3">{trade.strategy}</td>
+                        <td className="px-6 py-3">{trade.exit_reason || '-'}</td>
+                        <td className="px-6 py-3">
+                          {trade.legs?.length
+                            ? trade.legs.map((l) => `${l.side} ${l.symbol}`).join(' | ')
+                            : '-'}
+                        </td>
+                        <td className="px-6 py-3 text-right">₹{Number(trade.entry_price || 0).toFixed(2)}</td>
+                        <td className="px-6 py-3 text-right">
+                          {trade.exit_price == null ? '-' : `₹${Number(trade.exit_price).toFixed(2)}`}
+                        </td>
                         <td className="px-6 py-3 text-right">{trade.quantity}</td>
                         <td className={`px-6 py-3 text-right font-semibold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                           ₹{trade.pnl.toLocaleString()}

@@ -13,6 +13,7 @@ from app.api.routes import backtest
 from app.api.routes import greeks
 from app.api.routes import market
 from app.api.routes import suggestions
+from app.api.routes import ws_positions
 from app.api.routes.paper_mtm import router as paper_mtm_router
 from app.api.routes.exit import router as exit_router
 from app.api.routes.auto_exit import router as auto_exit_router
@@ -116,6 +117,7 @@ app.include_router(backtest.router)
 app.include_router(greeks.router)
 app.include_router(market.router)
 app.include_router(suggestions.router)
+app.include_router(ws_positions.router)
 app.include_router(paper_mtm_router)
 app.include_router(exit_router)
 app.include_router(auto_exit_router)

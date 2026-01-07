@@ -5,6 +5,7 @@ from app.db.models_intent import ExecutionIntent
 from app.core.utils.time import now_ist
 from app.core.execution.paper import PaperExecutionAdapter
 from app.core.execution.zerodha import ZerodhaExecutionAdapter
+from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_mode
 from app.core.broker.zerodha.client import get_kite_client
 
 
@@ -27,15 +28,15 @@ def run_auto_exit(db: Session):
 
     exited = []
 
-    execution_mode = os.getenv("EXECUTION_MODE", "PAPER")
+    execution_mode = get_execution_mode()
 
-    if execution_mode == "PAPER":
+    if is_paper_mode(execution_mode):
         executor = PaperExecutionAdapter()
     else:
         kite = get_kite_client()
         executor = ZerodhaExecutionAdapter(
             kite_client=kite,
-            dry_run=True,   # 🔒 FORCE DRY RUN
+            dry_run=not is_live_mode(execution_mode),
         )
 
     for intent in intents:

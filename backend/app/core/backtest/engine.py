@@ -18,12 +18,13 @@ logger = logging.getLogger(__name__)
 
 class Trade:
     """Represents a single trade in the backtest"""
-    def __init__(self, entry_date: date, entry_price: float, quantity: int, strategy: str, ticket: Dict):
+    def __init__(self, entry_date: date, entry_price: float, quantity: int, side: str, strategy: str, ticket: Dict):
         self.entry_date = entry_date
         self.entry_price = entry_price
         self.exit_date: Optional[date] = None
         self.exit_price: Optional[float] = None
         self.quantity = quantity
+        self.side = side  # long | short
         self.strategy = strategy
         self.ticket = ticket
         self.status = "open"
@@ -37,7 +38,10 @@ class Trade:
         self.status = "closed"
         
         # Calculate P&L
-        gross_pnl = (exit_price - self.entry_price) * self.quantity
+        if self.side == "short":
+            gross_pnl = (self.entry_price - exit_price) * self.quantity
+        else:
+            gross_pnl = (exit_price - self.entry_price) * self.quantity
         # Apply commission (0.1% round trip)
         commission = abs(self.entry_price * self.quantity * 0.001)
         commission += abs(exit_price * self.quantity * 0.001)
@@ -53,6 +57,7 @@ class Trade:
             "entry_price": self.entry_price,
             "exit_price": self.exit_price,
             "quantity": self.quantity,
+            "side": self.side,
             "strategy": self.strategy,
             "pnl": self.pnl,
             "pnl_pct": self.pnl_pct,
@@ -66,6 +71,9 @@ class BacktestEngine:
     def __init__(self, strategy_config: StrategyConfig, db: Session):
         self.config = strategy_config
         self.db = db
+
+        base_symbol = (strategy_config.underlying or "").upper().strip()
+        self.backtest_symbol = f"{base_symbol}__BT__{strategy_config.id}"
         
         # Load the ACTUAL strategy from StrategyRegistry (not a mock)
         from app.core.strategies.registry import StrategyRegistry
@@ -81,8 +89,16 @@ class BacktestEngine:
         self.trades: List[Trade] = []
         self.equity_curve: List[float] = []
         self.daily_equity: Dict[date, float] = {}
+
+        self.candles_loaded: int = 0
+        self.signal_counts: Dict[str, int] = {"BUY": 0, "SELL": 0, "HOLD": 0}
+        self.raw_action_counts: Dict[str, int] = {}
         
-        logger.info(f"✅ Initialized BacktestEngine for {strategy_config.name} (using mock strategy)")
+        logger.info(
+            "✅ Initialized BacktestEngine for %s (strategy: %s)",
+            strategy_config.name,
+            strategy_config.strategy_type,
+        )
     
     def run(
         self,
@@ -123,18 +139,30 @@ class BacktestEngine:
                 }
             
             logger.info(f"✅ Loaded {len(candles)} candles")
+            self.candles_loaded = len(candles)
             
             # Replay candles
             for idx, candle in enumerate(candles):
                 try:
                     current_date = candle.get("date", start_date)
                     candle_close = candle.get("close", 0)
+
+                    # Feed candles incrementally into DB (prevents lookahead bias)
+                    try:
+                        from app.core.data.candles import _save_candles_to_db
+
+                        _save_candles_to_db(symbol=self.backtest_symbol, candles=[candle], interval="15minute")
+                    except Exception:
+                        pass
                     
                     # Check stop loss / take profit on open trades
                     open_trade = self._get_open_trade()
                     if open_trade:
                         # Calculate unrealized P&L in percentage
-                        pnl_pct = ((candle_close - open_trade.entry_price) / open_trade.entry_price) * 100
+                        if open_trade.side == "short":
+                            pnl_pct = ((open_trade.entry_price - candle_close) / open_trade.entry_price) * 100
+                        else:
+                            pnl_pct = ((candle_close - open_trade.entry_price) / open_trade.entry_price) * 100
                         
                         # Stop loss at -2% or Take profit at +1%
                         if pnl_pct <= -2.0:  # Stop loss
@@ -151,30 +179,38 @@ class BacktestEngine:
                     # Generate signal using strategy
                     context = {
                         "underlying": self.config.underlying,
+                        "backtest_symbol": self.backtest_symbol,
                         "parameters": self.config.parameters,
                         "candle": candle,
                         "current_equity": current_equity,
                     }
                     
                     signal = self._generate_signal(context)
+
+                    raw_action = signal.get("action") or "HOLD"
+                    self.raw_action_counts[raw_action] = self.raw_action_counts.get(raw_action, 0) + 1
                     
                     # Only trade if confidence >= min_confidence (default 60%)
                     min_confidence = self.config.parameters.get("min_confidence", 60)
                     is_confident = signal.get("confidence", 0) >= min_confidence
+
+                    if raw_action in self.signal_counts:
+                        self.signal_counts[raw_action] += 1
                     
-                    # Process signal - entry/exit logic
-                    if signal.get("action") == "BUY" and is_confident and not self._has_open_trade():
-                        trade = self._create_trade(candle, signal)
-                        self.trades.append(trade)
-                        logger.debug(f"📈 Entry at {candle['date']} @ {candle['close']} (confidence: {signal.get('confidence')}%)")
-                    
-                    elif signal.get("action") == "SELL" and self._has_open_trade():
+                    # Process signal - bidirectional entry/exit logic
+                    action = raw_action
+                    if action in ("BUY", "SELL") and is_confident:
                         open_trade = self._get_open_trade()
-                        if open_trade:
-                            open_trade.close(candle["date"], candle["close"])
-                            # Update equity
-                            current_equity += open_trade.pnl
-                            logger.debug(f"📉 Exit at {candle['date']} @ {candle['close']}, P&L: {open_trade.pnl}")
+                        if not open_trade:
+                            trade = self._create_trade(candle, signal)
+                            self.trades.append(trade)
+                        else:
+                            # Close on opposite signal
+                            if (open_trade.side == "long" and action == "SELL") or (
+                                open_trade.side == "short" and action == "BUY"
+                            ):
+                                open_trade.close(candle["date"], candle["close"])
+                                current_equity += open_trade.pnl
                     
                     # Track daily equity
                     self.daily_equity[current_date] = current_equity
@@ -228,7 +264,20 @@ class BacktestEngine:
                 return {"action": "HOLD"}
             
             strategy_instance = self.strategy_class()
-            result = strategy_instance.run(context)
+
+            # Many strategies expect config parameters at the top-level payload.
+            # Keep original context keys, but also flatten parameters for compatibility.
+            payload = dict(context)
+            params = context.get("parameters")
+            if isinstance(params, dict):
+                payload.update(params)
+
+            candle = context.get("candle")
+            if isinstance(candle, dict):
+                payload.setdefault("spot", candle.get("close"))
+                payload.setdefault("backtest", True)
+
+            result = strategy_instance.run(payload)
             
             # Strategy can return either "strategy" or "signal" key
             action = result.get("strategy") or result.get("signal")
@@ -236,9 +285,9 @@ class BacktestEngine:
                 action = "HOLD"
             
             # For backtest, convert to BUY/SELL
-            if action in ["BULLISH", "BUY_CE"]:
+            if action in ["BULLISH", "BUY_CE", "BULL_PUT", "BULL_CALL", "BULL_PUT_SPREAD", "BULL_CALL_SPREAD"]:
                 action = "BUY"
-            elif action in ["BEARISH", "BUY_PE"]:
+            elif action in ["BEARISH", "BUY_PE", "BEAR_CALL", "BEAR_PUT", "BEAR_CALL_SPREAD", "BEAR_PUT_SPREAD"]:
                 action = "SELL"
             else:
                 action = "HOLD"
@@ -256,12 +305,23 @@ class BacktestEngine:
     
     def _create_trade(self, candle: Dict[str, Any], signal: Dict[str, Any]) -> Trade:
         """Create new trade from signal"""
-        quantity = int(self.config.parameters.get("lots", 1) * 50)  # 50 = lot size
+        lots = float(self.config.parameters.get("lots", 1) or 1)
+        lot_size_map = {
+            "NIFTY": 65,
+            "BANKNIFTY": 15,
+            "FINNIFTY": 40,
+        }
+        lot_size = int(lot_size_map.get(str(self.config.underlying or "").upper(), 1))
+        quantity = int(lots * lot_size)
         
+        action = signal.get("action")
+        side = "short" if action == "SELL" else "long"
+
         trade = Trade(
             entry_date=candle["date"],
             entry_price=candle["close"],
             quantity=quantity,
+            side=side,
             strategy=signal.get("action", "UNKNOWN"),
             ticket=signal.get("ticket", {}),
         )
@@ -321,6 +381,9 @@ class BacktestEngine:
                 "trades": [t.to_dict() for t in self.trades],
                 "equity_curve": self.equity_curve,
                 "drawdown_periods": calculator.calculate_drawdown_periods(),
+                "candles_loaded": self.candles_loaded,
+                "signal_counts": self.signal_counts,
+                "raw_action_counts": self.raw_action_counts,
             }
         
         except Exception as e:

@@ -2,9 +2,15 @@
 Quick test of backtest with mock strategy
 """
 import os
-os.environ["ZERODHA_API_KEY"] = "test"
-os.environ["ZERODHA_ACCESS_TOKEN"] = "test"
-os.environ["EXECUTION_MODE"] = "ZERODHA_DRY_RUN"
+
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load backend/.env if present (do not overwrite current env)
+load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
+
+# Keep prior behavior if user hasn't configured execution mode
+os.environ.setdefault("EXECUTION_MODE", "ZERODHA_DRY_RUN")
 
 from datetime import date, timedelta
 from app.db.session import SessionLocal

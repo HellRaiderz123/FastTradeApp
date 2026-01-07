@@ -2,6 +2,7 @@
 # Python
 # ================================
 __pycache__/
+*.pickle
 *.py[cod]
 *.pyo
 *.pyd

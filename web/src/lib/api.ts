@@ -61,15 +61,25 @@ export const strategyAPI = {
 export const executionAPI = {
   // Legacy
   createIntent: (runId: number, capital?: number) =>
-    api.post(`/intent/create`, { 
-      run_id: runId,
-      ...(capital && { capital })
-    }),
-  
+    api.post(
+      '/intent/create',
+      null,
+      {
+        params: {
+          run_id: runId,
+          ...(capital !== undefined ? { capital } : {}),
+        },
+      }
+    ),
+
   executeIntent: (intentId: string, idempotencyKey: string) =>
-    api.post(`/execute/paper/${intentId}`, {
-      headers: { 'idempotency-key': idempotencyKey }
-    }),
+    api.post(
+      `/execute/paper/${intentId}`,
+      null,
+      {
+        headers: { 'idempotency-key': idempotencyKey },
+      }
+    ),
   
   confirmIntent: (intentId: string) =>
     api.post(`/intent/confirm/${intentId}`, {}),

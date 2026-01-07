@@ -7,27 +7,9 @@ from app.db.models_candles import Candle15m
 
 logger = logging.getLogger(__name__)
 
-def ta_signal_15m(db: Session, symbol: str) -> Dict:
-    """
-    COMPREHENSIVE 15-minute technical analysis signal.
-    Returns: Full market context + indicators + quality checks.
-    """
-    symbol = symbol.upper().strip()
-    candles = (
-        db.query(Candle15m)
-        .filter(Candle15m.symbol == symbol)
-        .order_by(Candle15m.timestamp.desc())
-        .limit(300)
-        .all()
-    )
 
-    logger.info(
-        "TA DEBUG | symbol=%s | candles_found=%d",
-        symbol,
-        len(candles),
-    )
-
-    if len(candles) < 100:
+def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
+    if len(df) < 100:
         return {
             "signal": "NO_TRADE",
             "confidence": 0,
@@ -43,15 +25,7 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
     # ================================================================
     # BUILD DATAFRAME WITH ALL INDICATORS
     # ================================================================
-    df = pd.DataFrame(
-        [{
-            "close": c.close,
-            "high": c.high,
-            "low": c.low,
-            "open": c.open,
-            "volume": c.volume,
-        } for c in reversed(candles)]
-    )
+    df = df.copy()
 
     # ================================================================
     # TREND INDICATORS
@@ -70,7 +44,7 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
     # ================================================================
     df["rsi"] = compute_rsi(df["close"])
     df["macd"], df["macd_signal"], df["macd_hist"] = compute_macd(df["close"])
-    
+
     # Stochastic
     df["stoch_k"], df["stoch_d"] = compute_stochastic(df["high"], df["low"], df["close"])
 
@@ -81,6 +55,11 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
     df["volatility_pct"] = df["close"].pct_change().rolling(20).std() * 100
     df["volume_ma"] = df["volume"].rolling(20).mean()
     df["volume_ratio"] = df["volume"] / df["volume_ma"]
+
+    # Some instruments (e.g., index candles) can have volume=0.
+    # Avoid penalizing the quality gate due to missing volume data.
+    if float(df["volume"].fillna(0).sum()) == 0.0:
+        df["volume_ratio"] = 1.0
 
     last = df.iloc[-1]
 
@@ -94,10 +73,10 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
         "vix_ok": True,  # Will be fetched separately if needed
         "bb_confirm": is_bb_confirming(last),
         "iv_trade_ok": False,  # Will be set from external IV data
-        "vol_strong": float(last["volume_ratio"]) > 1.5,
+        "vol_strong": True if float(df["volume"].fillna(0).sum()) == 0.0 else float(last["volume_ratio"]) > 1.5,
         "sr_confirm": True,  # Will be set from support/resistance
     }
-    
+
     quality_score = sum([1 for v in quality_checks.values() if v])
 
     # ================================================================
@@ -152,16 +131,16 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
         "signal": signal,
         "confidence": min(100, float(confidence)),
         "reason": reason,
-        
+
         # Market Context
         "bias": bias,
         "iv_regime": iv_regime,
-        
+
         # Quality Assessment
         "quality_checks": quality_checks,
         "quality_score": quality_score,
         "trade_readiness_score": readiness_score,
-        
+
         # All Indicators
         "indicators": {
             "adx": round(float(last["adx"]), 2),
@@ -181,10 +160,91 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
             # India VIX & IV Rank are now fetched from APIs in signals.py
             # and added via enrich_signal_with_iv()
         },
-        
+
         # Trend Analysis
         "trend_score": int(trend_score),
     }
+
+
+def ta_signal_15m_from_candles(candles: list[dict]) -> Dict:
+    """Same TA as ta_signal_15m(), but computed from in-memory candles.
+
+    Expects candles in chronological order (oldest → newest) where each candle
+    has keys: open, high, low, close, volume.
+    """
+    if len(candles) < 100:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": "Not enough candles",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+        }
+
+    df = pd.DataFrame(
+        [
+            {
+                "close": float(c.get("close")),
+                "high": float(c.get("high")),
+                "low": float(c.get("low")),
+                "open": float(c.get("open")),
+                "volume": float(c.get("volume", 0) or 0),
+            }
+            for c in candles
+        ]
+    )
+    return _ta_signal_15m_from_df(df)
+
+def ta_signal_15m(db: Session, symbol: str) -> Dict:
+    """
+    COMPREHENSIVE 15-minute technical analysis signal.
+    Returns: Full market context + indicators + quality checks.
+    """
+    symbol = symbol.upper().strip()
+    candles = (
+        db.query(Candle15m)
+        .filter(Candle15m.symbol == symbol)
+        .order_by(Candle15m.timestamp.desc())
+        .limit(300)
+        .all()
+    )
+
+    logger.info(
+        "TA DEBUG | symbol=%s | candles_found=%d",
+        symbol,
+        len(candles),
+    )
+
+    if len(candles) < 100:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": "Not enough candles",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+        }
+
+    df = pd.DataFrame(
+        [
+            {
+                "close": c.close,
+                "high": c.high,
+                "low": c.low,
+                "open": c.open,
+                "volume": c.volume,
+            }
+            for c in reversed(candles)
+        ]
+    )
+    return _ta_signal_15m_from_df(df)
 
 
 def compute_rsi(series: pd.Series, period: int = 14):
