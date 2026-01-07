@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Frontend API Test</title>
+    <style>
+        body { font-family: monospace; margin: 20px; background: #1e1e1e; color: #fff; }
+        .test { background: #2d2d2d; padding: 10px; margin: 10px 0; border-left: 3px solid #007acc; }
+        .success { border-left-color: #4ec9b0; }
+        .error { border-left-color: #f44747; color: #f44747; }
+        h2 { color: #4ec9b0; }
+    </style>
+</head>
+<body>
+    <h1>Frontend API Client Test</h1>
+    <p>Testing the same APIs from the frontend to see if there are any issues</p>
+    
+    <div id="results"></div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        
+        function log(title, data, isSuccess = true) {
+            const resultsDiv = document.getElementById('results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = 'test' + (isSuccess ? ' success' : ' error');
+            resultDiv.innerHTML = '<strong>' + title + '</strong><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+            resultsDiv.appendChild(resultDiv);
+        }
+        
+        async function testAPIs() {
+            // Test 1: LTP
+            try {
+                const response = await fetch(`${API_BASE}/market/ltp/NIFTY`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                log('✅ LTP API', { status: response.status, data }, true);
+            } catch (err) {
+                log('❌ LTP API Error', err.message, false);
+            }
+            
+            // Test 2: Expiries
+            try {
+                const response = await fetch(`${API_BASE}/market/expiries/NIFTY`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                log('✅ Expiries API', { status: response.status, count: data.expiries.length, sample: data.expiries }, true);
+            } catch (err) {
+                log('❌ Expiries API Error', err.message, false);
+            }
+            
+            // Test 3: Option Premium
+            try {
+                const response = await fetch(`${API_BASE}/market/option-premium?symbol=NIFTY&strike=26000&option_type=CE&expiry=2026-01-08`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                log('✅ Option Premium API', { status: response.status, premium: data.premium }, true);
+            } catch (err) {
+                log('❌ Option Premium API Error', err.message, false);
+            }
+            
+            // Test 4: Frontend to Backend CORS
+            try {
+                log('ℹ️  CORS Test', { origin: window.location.origin, apiBase: API_BASE }, true);
+            } catch (err) {
+                log('❌ CORS Error', err.message, false);
+            }
+        }
+        
+        // Run tests when page loads
+        window.onload = () => {
+            log('Page Loaded', { location: window.location.href, time: new Date().toISOString() }, true);
+            testAPIs();
+        };
+    </script>
+</body>
+</html>

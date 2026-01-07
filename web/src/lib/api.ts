@@ -120,6 +120,24 @@ export const journalAPI = {
 export const marketAPI = {
   getCandles: (symbol: string, limit = 50) =>
     api.get(`/candles/15m/${symbol}?limit=${limit}`),
+  
+  // Get live LTP (Last Traded Price) for spot price
+  getLTP: (symbol: string = 'NIFTY') =>
+    api.get(`/market/ltp/${symbol}`),
+  
+  // Get option chain for a symbol and expiry
+  getOptionChain: (symbol: string = 'NIFTY', expiry: string) =>
+    api.get(`/market/option-chain/${symbol}`, { params: { expiry } }),
+  
+  // Get available expiry dates for options
+  getAvailableExpiries: (symbol: string = 'NIFTY') =>
+    api.get(`/market/expiries/${symbol}`),
+  
+  // Get premium for a specific strike
+  getOptionPremium: (symbol: string, strike: number, option_type: 'CE' | 'PE', expiry: string) =>
+    api.get(`/market/option-premium`, { 
+      params: { symbol, strike, option_type, expiry } 
+    }),
 };
 
 // System Control APIs
@@ -127,6 +145,15 @@ export const systemAPI = {
   enable: () => api.post('/system/enable', {}),
   disable: () => api.post('/system/disable', {}),
   status: () => api.get('/system/status'),
+};
+
+// Greeks Calculation APIs
+export const greeksAPI = {
+  calculate: (payload: any) =>
+    api.post('/greeks/calculate', payload),
+  
+  calculateSingle: (leg: any) =>
+    api.post('/greeks/single', leg),
 };
 
 // Settings APIs

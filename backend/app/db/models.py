@@ -105,3 +105,92 @@ class StrategyConfig(Base):
     created_at = Column(DateTime(timezone=True), default=now_ist)
     updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
     created_by = Column(String, default="system")
+
+
+class BacktestResult(Base):
+    """Store backtest results and performance metrics"""
+    __tablename__ = "backtest_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # References
+    strategy_config_id = Column(Integer, nullable=False, index=True)
+    
+    # Date range
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    
+    # Setup
+    initial_capital = Column(Float, default=100000)
+    
+    # Performance Metrics
+    total_return_pct = Column(Float)  # (final_equity - initial) / initial * 100
+    annual_return_pct = Column(Float)
+    sharpe_ratio = Column(Float)
+    sortino_ratio = Column(Float)
+    max_drawdown_pct = Column(Float)
+    calmar_ratio = Column(Float)
+    
+    # Trade Statistics
+    total_trades = Column(Integer, default=0)
+    winning_trades = Column(Integer, default=0)
+    losing_trades = Column(Integer, default=0)
+    win_rate_pct = Column(Float)  # (winning / total) * 100
+    profit_factor = Column(Float)  # (gross_profit / gross_loss)
+    
+    # P&L Stats
+    total_profit = Column(Float, default=0)
+    total_loss = Column(Float, default=0)
+    avg_win = Column(Float)
+    avg_loss = Column(Float)
+    largest_win = Column(Float)
+    largest_loss = Column(Float)
+    
+    # Equity Curve
+    final_equity = Column(Float)
+    peak_equity = Column(Float)
+    
+    # Detailed Data
+    trades = Column(JSON)  # List of trade details [{entry_price, exit_price, pnl, ...}]
+    equity_curve = Column(JSON)  # Daily equity values [100000, 101000, ...]
+    drawdown_periods = Column(JSON)  # List of drawdown periods
+    
+    # Status
+    status = Column(String, default="completed")  # completed, running, failed
+    error = Column(String, nullable=True)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+
+
+class BacktestTrade(Base):
+    """Store individual trades from backtests for detailed analysis"""
+    __tablename__ = "backtest_trades"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Reference
+    backtest_result_id = Column(Integer, nullable=False, index=True)
+    
+    # Trade Details
+    entry_date = Column(Date, nullable=False)
+    exit_date = Column(Date, nullable=True)
+    
+    entry_price = Column(Float)
+    exit_price = Column(Float, nullable=True)
+    
+    quantity = Column(Integer)
+    
+    # Metrics
+    pnl = Column(Float, nullable=True)
+    pnl_pct = Column(Float, nullable=True)
+    
+    # Trade Info
+    strategy = Column(String)  # Call Spread, Put Spread, etc.
+    ticket = Column(JSON)  # Full ticket details
+    
+    # Status
+    status = Column(String)  # open, closed
+    
+    created_at = Column(DateTime(timezone=True), default=now_ist)

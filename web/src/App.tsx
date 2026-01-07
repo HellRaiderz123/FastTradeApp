@@ -4,6 +4,8 @@ import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
 import Strategies from './pages/Strategies';
+import StrategyBuilder from './pages/StrategyBuilder';
+import Backtest from './pages/Backtest';
 import Positions from './pages/Positions';
 import Journal from './pages/Journal';
 import Settings from './pages/Settings';
@@ -43,6 +45,8 @@ function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/strategies" element={<Strategies />} />
+              <Route path="/strategies/builder" element={<StrategyBuilder />} />
+              <Route path="/backtest" element={<Backtest />} />
               <Route path="/positions" element={<Positions />} />
               <Route path="/journal" element={<Journal />} />
               <Route path="/settings" element={<Settings />} />
