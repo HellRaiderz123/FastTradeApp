@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, Bell, Lock, Eye, EyeOff, CheckCircle, XCircle } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Bell, Lock, Eye, EyeOff, CheckCircle, XCircle, Send } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
 import { settingsAPI } from '../lib/api';
 
@@ -36,12 +36,30 @@ const Settings: React.FC = () => {
     accessToken: false,
   });
 
+  // Gmail notification settings
+  const [notificationStatus, setNotificationStatus] = useState({
+    gmail_configured: false,
+    gmail_enabled: true,
+    gmail_user: '',
+    alert_email: '',
+  });
+  const [gmailForm, setGmailForm] = useState({
+    gmail_user: '',
+    gmail_app_password: '',
+    alert_email: '',
+  });
+  const [gmailLoading, setGmailLoading] = useState(false);
+  const [gmailMessage, setGmailMessage] = useState('');
+  const [showGmailPassword, setShowGmailPassword] = useState(false);
+
   useEffect(() => {
     console.log('Settings component mounted - loading Zerodha settings');
     loadZerodhaSettings();
+    loadNotificationSettings();
     // Refresh every second to sync with backend
     const interval = setInterval(() => {
       loadZerodhaSettings();
+      loadNotificationSettings();
     }, 1000);
     return () => clearInterval(interval);
   }, []);
@@ -63,6 +81,21 @@ const Settings: React.FC = () => {
       }));
     } catch (error) {
       console.error('Error loading settings:', error);
+    }
+  };
+
+  const loadNotificationSettings = async () => {
+    try {
+      const response = await settingsAPI.getNotificationSettings();
+      const data = response.data || response;
+      setNotificationStatus({
+        gmail_configured: !!data.gmail_configured,
+        gmail_enabled: !!data.gmail_enabled,
+        gmail_user: data.gmail_user || '',
+        alert_email: data.alert_email || '',
+      });
+    } catch (error) {
+      console.error('Error loading notification settings:', error);
     }
   };
 
@@ -195,6 +228,140 @@ const Settings: React.FC = () => {
       <SettingsCard title="Notifications">
         <ToggleSetting label="Trade Notifications" value={settings.notifications} onChange={(val) => handleChange('notifications', val)} />
         <ToggleSetting label="Email Alerts" value={true} onChange={() => {}} disabled />
+      </SettingsCard>
+
+      {/* Gmail Notification Settings */}
+      <SettingsCard title="Email Notifications (Gmail)">
+        {/* Status */}
+        <div className="mb-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400">Gmail Configured:</span>
+              {notificationStatus.gmail_configured ? (
+                <span className="flex items-center gap-1 text-green-400"><CheckCircle className="w-4 h-4" /> Yes</span>
+              ) : (
+                <span className="flex items-center gap-1 text-red-400"><XCircle className="w-4 h-4" /> No</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400">Enabled:</span>
+              <ToggleSetting label="" value={notificationStatus.gmail_enabled} onChange={async (val) => {
+                try {
+                  setGmailLoading(true);
+                  await settingsAPI.setGmailEnabled(val);
+                  setNotificationStatus(prev => ({ ...prev, gmail_enabled: val }));
+                } catch (e) {
+                  console.error('Toggle error', e);
+                } finally {
+                  setGmailLoading(false);
+                }
+              }} />
+            </div>
+          </div>
+          <p className="text-xs text-slate-400 mt-2">User: <span className="text-slate-300">{notificationStatus.gmail_user || 'not set'}</span> • Alerts to: <span className="text-slate-300">{notificationStatus.alert_email || 'not set'}</span></p>
+        </div>
+
+        {/* Gmail Credentials */}
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Gmail User</label>
+            <input
+              type="email"
+              placeholder="your.email@gmail.com"
+              value={gmailForm.gmail_user}
+              onChange={(e) => setGmailForm({ ...gmailForm, gmail_user: e.target.value })}
+              disabled={gmailLoading}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">App Password</label>
+            <div className="relative">
+              <input
+                type={showGmailPassword ? 'text' : 'password'}
+                placeholder="16-character app password"
+                value={gmailForm.gmail_app_password}
+                onChange={(e) => setGmailForm({ ...gmailForm, gmail_app_password: e.target.value })}
+                disabled={gmailLoading}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+              />
+              <button
+                onClick={() => setShowGmailPassword(!showGmailPassword)}
+                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+              >
+                {showGmailPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Use a Google App Password (2FA required). Do not use your regular password.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Alert Email</label>
+            <input
+              type="email"
+              placeholder="recipient email for alerts (defaults to Gmail user)"
+              value={gmailForm.alert_email}
+              onChange={(e) => setGmailForm({ ...gmailForm, alert_email: e.target.value })}
+              disabled={gmailLoading}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={async () => {
+                try {
+                  setGmailLoading(true);
+                  await settingsAPI.saveGmailSettings(gmailForm);
+                  setGmailMessage('✓ Gmail settings saved');
+                  setGmailForm({ gmail_user: '', gmail_app_password: '', alert_email: '' });
+                  await loadNotificationSettings();
+                  setTimeout(() => setGmailMessage(''), 3000);
+                } catch (error: any) {
+                  console.error('Error:', error);
+                  setGmailMessage(error.response?.data?.detail || 'Error saving Gmail settings');
+                } finally {
+                  setGmailLoading(false);
+                }
+              }}
+              disabled={gmailLoading}
+              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            >
+              <Save className="w-4 h-4" />
+              {gmailLoading ? 'Saving...' : 'Save Gmail Settings'}
+            </button>
+
+            <button
+              onClick={async () => {
+                try {
+                  setGmailLoading(true);
+                  await settingsAPI.sendTestEmail('Test Email', 'This is a test alert from FastTrade');
+                  setGmailMessage('✓ Test email sent');
+                  setTimeout(() => setGmailMessage(''), 3000);
+                } catch (error: any) {
+                  console.error('Error:', error);
+                  setGmailMessage(error.response?.data?.detail || 'Error sending test email');
+                } finally {
+                  setGmailLoading(false);
+                }
+              }}
+              disabled={gmailLoading}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            >
+              <Send className="w-4 h-4" />
+              {gmailLoading ? 'Sending...' : 'Send Test Email'}
+            </button>
+          </div>
+
+          {gmailMessage && (
+            <div className={`mt-4 p-3 rounded-lg text-sm font-semibold ${
+              gmailMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+            }`}>
+              {gmailMessage}
+            </div>
+          )}
+        </div>
       </SettingsCard>
 
       {/* Appearance */}
@@ -495,6 +662,7 @@ const SettingItem: React.FC<SettingItemProps> = ({ label, type = 'text', value, 
       min={min}
       max={max}
       step={step}
+      title={typeof label === 'string' ? label : 'input'}
       className="w-32 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
     />
   </div>
@@ -513,6 +681,8 @@ const ToggleSetting: React.FC<ToggleSettingProps> = ({ label, value, onChange, d
     <button
       onClick={() => !disabled && onChange(!value)}
       disabled={disabled}
+      aria-label={label || 'toggle'}
+      title={label || 'toggle'}
       className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
         value ? 'bg-green-500' : 'bg-slate-700'
       } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}

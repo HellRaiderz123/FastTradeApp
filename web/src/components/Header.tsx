@@ -1,7 +1,8 @@
 import React from 'react';
-import { Menu, Bell, Settings, Power } from 'lucide-react';
+import { Menu, Settings, Power, Bell } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
 import { systemAPI } from '../lib/api';
+import { NotificationBell } from './NotificationBell';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -10,6 +11,24 @@ interface HeaderProps {
 }
 
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSystemToggle }) => {
+  class BellBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }>{
+    constructor(props: { children: React.ReactNode }) {
+      super(props);
+      this.state = { hasError: false };
+    }
+    static getDerivedStateFromError() { return { hasError: true }; }
+    componentDidCatch(error: any, info: any) { console.error('NotificationBell error:', error, info); }
+    render() {
+      if (this.state.hasError) {
+        return (
+          <button className="relative text-slate-400" title="Notifications unavailable">
+            <Bell className="w-6 h-6" />
+          </button>
+        );
+      }
+      return this.props.children as React.ReactElement;
+    }
+  }
   const handleSystemToggle = async () => {
     try {
       if (systemEnabled) {
@@ -47,10 +66,9 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
         </button>
 
         {/* Notifications */}
-        <button className="relative text-slate-400 hover:text-white transition">
-          <Bell className="w-6 h-6" />
-          <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full"></span>
-        </button>
+        <BellBoundary>
+          <NotificationBell />
+        </BellBoundary>
 
         {/* User Menu */}
         <div className="flex items-center gap-3 pl-6 border-l border-slate-800">

@@ -7,6 +7,7 @@ from app.core.execution.paper import PaperExecutionAdapter
 from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_mode
 from app.core.broker.zerodha.client import get_kite_client
+from app.services.notifications import NotificationService
 
 
 def run_auto_exit(db: Session):
@@ -39,6 +40,8 @@ def run_auto_exit(db: Session):
             dry_run=not is_live_mode(execution_mode),
         )
 
+    notifications = NotificationService(db)
+
     for intent in intents:
         reason = None
 
@@ -63,6 +66,23 @@ def run_auto_exit(db: Session):
         intent.pnl = final_pnl
 
         intent.execution_result = exit_result # type: ignore
+
+        # Notify based on exit reason (best-effort)
+        try:
+            if reason == "TP_HIT":
+                notifications.notify_tp_hit(
+                    strategy_name=intent.strategy or intent.underlying or "Strategy",
+                    pnl=final_pnl,
+                    pnl_pct=(final_pnl / (intent.entry_credit or 1)) * 100 if intent.entry_credit else 0.0,
+                )
+            elif reason == "SL_HIT":
+                notifications.notify_sl_hit(
+                    strategy_name=intent.strategy or intent.underlying or "Strategy",
+                    pnl=final_pnl,
+                    pnl_pct=(final_pnl / (intent.entry_credit or 1)) * 100 if intent.entry_credit else 0.0,
+                )
+        except Exception:
+            pass
 
         exited.append(intent.intent_id)
 

@@ -195,6 +195,19 @@ export const settingsAPI = {
   
   setExecutionMode: (mode: string) =>
     api.post(`/settings/execution-mode`, {}, { params: { mode } }),
+
+  // Notification settings (Gmail)
+  getNotificationSettings: () =>
+    api.get('/settings/notifications'),
+
+  saveGmailSettings: (data: { gmail_user: string; gmail_app_password: string; alert_email: string }) =>
+    api.post('/settings/notifications/gmail', data),
+
+  setGmailEnabled: (enabled: boolean) =>
+    api.post('/settings/notifications/gmail/enabled', { enabled }),
+
+  sendTestEmail: (subject?: string, body?: string) =>
+    api.post('/settings/notifications/gmail/test', null, { params: { subject, body } }),
 };
 
 export default api;

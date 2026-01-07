@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import Dict, Any, cast
 
 from app.db.session import SessionLocal
@@ -9,8 +10,10 @@ from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.utils.time import now_ist
 from app.core.execution.credit import compute_entry_credit_total
 from app.core.broker.zerodha.client import get_kite_client
-from app.core.risk.kill_switch import check_portfolio_kill_switch
+from app.core.risk.risk_limits_config import get_risk_limits
 from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode, is_zerodha_dry_run
+from app.db.models_intent import ExecutionIntent
+from app.services.notifications import NotificationService
 
 router = APIRouter(prefix="/execute", tags=["Execution"])
 
@@ -29,6 +32,7 @@ def execute_paper(
     idempotency_key: str = Header(...),
     db: Session = Depends(get_db),
 ):
+    notifications = NotificationService(db)
     intent = get_intent_by_id(db, intent_id)
 
     # 🔹 Fetch real capital from Zerodha
@@ -40,7 +44,31 @@ def execute_paper(
         # Fallback to hardcoded value if API fails
         capital = 100000
 
-    if check_portfolio_kill_switch(db, capital):
+    # Kill switch check with alert on breach
+    total_pnl = (
+        db.query(func.sum(ExecutionIntent.pnl))
+        .filter(
+            ExecutionIntent.status == "EXECUTED",
+            ExecutionIntent.pnl.isnot(None),
+        )
+        .scalar()
+        or 0.0
+    )
+    risk_config = get_risk_limits()
+    loss_pct = abs(total_pnl) / capital * 100 if total_pnl < 0 else 0.0
+
+    if loss_pct >= risk_config.max_portfolio_loss_pct:
+        try:
+            notifications.notify_pnl_threshold(
+                daily_pnl=total_pnl,
+                daily_pnl_pct=(total_pnl / capital) * 100 if capital else 0.0,
+                capital=capital,
+                threshold_type="loss",
+            )
+        except Exception:
+            # Avoid blocking execution on notification failure
+            pass
+
         raise HTTPException(
             status_code=403,
             detail="KILL SWITCH ACTIVE: Max portfolio loss exceeded",
@@ -81,9 +109,17 @@ def execute_paper(
 
     try:
         result = executor.execute(intent)
-    except Exception:
+    except Exception as exec_err:
         intent.status = "CONFIRMED" # type: ignore
         db.commit()
+        try:
+            notifications.notify_trade_failed(
+                strategy_name=intent.strategy or intent.underlying or "Unknown",
+                reason=str(exec_err),
+                error_details={"intent_id": intent_id}
+            )
+        except Exception:
+            pass
         raise
 
     # ---- EXECUTION COMPLETE ----
@@ -98,6 +134,21 @@ def execute_paper(
     
 
     db.commit()
+
+    # Fire success notification (best-effort)
+    try:
+        notifications.notify_trade_executed(
+            strategy_name=intent.strategy or intent.underlying or "Strategy",
+            underlying=intent.underlying or "N/A",
+            trade_details={
+                "entry_credit": entry_credit,
+                "legs": intent.ticket.get("legs", []),
+                "mode": get_execution_mode(),
+                "intent_id": intent.intent_id,
+            },
+        )
+    except Exception:
+        pass
 
     return {
         "intent_id": intent.intent_id,

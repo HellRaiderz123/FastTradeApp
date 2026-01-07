@@ -12,6 +12,32 @@ import Settings from './pages/Settings';
 import { systemAPI } from './lib/api';
 import { useTradeStore } from './lib/store';
 
+// Simple Error Boundary to avoid white screen and show errors
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }>{
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, info: any) {
+    console.error('UI Error:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 text-white">
+          <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
+          <p className="text-slate-300 mb-4">{this.state.error?.message}</p>
+          <button onClick={() => this.setState({ hasError: false, error: undefined })} className="btn-secondary">Try again</button>
+        </div>
+      );
+    }
+    return this.props.children as React.ReactElement;
+  }
+}
+
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { systemEnabled, setSystemEnabled } = useTradeStore();
@@ -30,31 +56,33 @@ function App() {
   };
 
   return (
-    <Router>
-      <div className="flex h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-        <Sidebar open={sidebarOpen} />
-        
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <Header 
-            onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-            systemEnabled={systemEnabled}
-            onSystemToggle={setSystemEnabled}
-          />
+    <ErrorBoundary>
+      <Router>
+        <div className="flex h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+          <Sidebar open={sidebarOpen} />
           
-          <main className="flex-1 overflow-auto p-6">
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/strategies" element={<Strategies />} />
-              <Route path="/strategies/builder" element={<StrategyBuilder />} />
-              <Route path="/backtest" element={<Backtest />} />
-              <Route path="/positions" element={<Positions />} />
-              <Route path="/journal" element={<Journal />} />
-              <Route path="/settings" element={<Settings />} />
-            </Routes>
-          </main>
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <Header 
+              onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+              systemEnabled={systemEnabled}
+              onSystemToggle={setSystemEnabled}
+            />
+            
+            <main className="flex-1 overflow-auto p-6">
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/strategies" element={<Strategies />} />
+                <Route path="/strategies/builder" element={<StrategyBuilder />} />
+                <Route path="/backtest" element={<Backtest />} />
+                <Route path="/positions" element={<Positions />} />
+                <Route path="/journal" element={<Journal />} />
+                <Route path="/settings" element={<Settings />} />
+              </Routes>
+            </main>
+          </div>
         </div>
-      </div>
-    </Router>
+      </Router>
+    </ErrorBoundary>
   );
 }
 
