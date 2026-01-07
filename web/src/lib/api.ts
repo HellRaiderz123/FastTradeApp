@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000';
+// Default to Vite dev proxy (/api). Override via VITE_API_BASE if needed.
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -154,6 +155,18 @@ export const greeksAPI = {
   
   calculateSingle: (leg: any) =>
     api.post('/greeks/single', leg),
+};
+
+// Backtest APIs
+export const backtestAPI = {
+  run: (payload: any) => api.post('/backtest/run', payload),
+  getResult: (id: number) => api.get(`/backtest/results/${id}`),
+  listForStrategy: (strategyId: number) => api.get(`/backtest/strategy/${strategyId}`),
+};
+
+// Suggestions APIs (AlgoRoom-like)
+export const suggestionsAPI = {
+  get: (payload: any) => api.post('/suggestions', payload),
 };
 
 // Settings APIs

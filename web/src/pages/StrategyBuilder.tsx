@@ -29,6 +29,10 @@ interface GreeksData {
   max_loss?: number;
 }
 
+type StrategyTemplate = 'CUSTOM' | 'BULL_PUT' | 'BEAR_CALL' | 'IRON_CONDOR';
+
+const NIFTY_LOT_SIZE = 65;
+
 const StrategyBuilder: React.FC = () => {
   const [legs, setLegs] = useState<OptionLeg[]>([]);
   const [spot, setSpot] = useState<number>(26150);
@@ -47,6 +51,8 @@ const StrategyBuilder: React.FC = () => {
   const [strategyName, setStrategyName] = useState('');
   const [savedStrategies, setSavedStrategies] = useState<any[]>([]);
   const [loadingStrategies, setLoadingStrategies] = useState(false);
+
+  const [template, setTemplate] = useState<StrategyTemplate>('CUSTOM');
 
   // Fetch spot price and expiry dates on component mount
   useEffect(() => {
@@ -140,10 +146,99 @@ const StrategyBuilder: React.FC = () => {
     }
   };
 
+  const getStep = () => 50; // NIFTY default
+
+  const roundToStep = (value: number, step: number) => Math.round(value / step) * step;
+
+  const buildTemplateLegs = async (tpl: StrategyTemplate) => {
+    if (!selectedExpiry) {
+      setError('Please select an expiry date');
+      return;
+    }
+
+    setTemplate(tpl);
+
+    const step = getStep();
+    const atmStrike = roundToStep(atm, step);
+
+    // Simple defaults (can be made configurable later)
+    const offset = step * 2; // 100 for NIFTY
+    const width = step * 2;  // 100 for NIFTY
+
+    let newLegs: OptionLeg[] = [];
+
+    if (tpl === 'BULL_PUT') {
+      const shortPut = atmStrike - offset;
+      const longPut = shortPut - width;
+      newLegs = [
+        { id: `${Date.now()}-sp`, type: 'SELL', option_type: 'PE', strike: shortPut, quantity: 1 },
+        { id: `${Date.now()}-lp`, type: 'BUY', option_type: 'PE', strike: longPut, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'BEAR_CALL') {
+      const shortCall = atmStrike + offset;
+      const longCall = shortCall + width;
+      newLegs = [
+        { id: `${Date.now()}-sc`, type: 'SELL', option_type: 'CE', strike: shortCall, quantity: 1 },
+        { id: `${Date.now()}-lc`, type: 'BUY', option_type: 'CE', strike: longCall, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'IRON_CONDOR') {
+      const shortPut = atmStrike - offset;
+      const longPut = shortPut - width;
+      const shortCall = atmStrike + offset;
+      const longCall = shortCall + width;
+      newLegs = [
+        { id: `${Date.now()}-sp`, type: 'SELL', option_type: 'PE', strike: shortPut, quantity: 1 },
+        { id: `${Date.now()}-lp`, type: 'BUY', option_type: 'PE', strike: longPut, quantity: 1 },
+        { id: `${Date.now()}-sc`, type: 'SELL', option_type: 'CE', strike: shortCall, quantity: 1 },
+        { id: `${Date.now()}-lc`, type: 'BUY', option_type: 'CE', strike: longCall, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'CUSTOM') {
+      setTemplate('CUSTOM');
+      return;
+    }
+
+    // Fetch premiums in parallel
+    const premiums = await Promise.all(
+      newLegs.map((leg) => fetchPremium(leg.strike, leg.option_type))
+    );
+    newLegs = newLegs.map((leg, idx) => ({ ...leg, premium: premiums[idx] }));
+
+    setLegs(newLegs);
+    setError(null);
+    setGreeks(null);
+    setPayoffData([]);
+  };
+
+  const refreshAllPremiums = async (currentLegs: OptionLeg[]) => {
+    if (!selectedExpiry || currentLegs.length === 0) return;
+    try {
+      const premiums = await Promise.all(
+        currentLegs.map((leg) => fetchPremium(leg.strike, leg.option_type))
+      );
+      setLegs(currentLegs.map((leg, idx) => ({ ...leg, premium: premiums[idx] })));
+    } catch {
+      // keep previous premiums
+    }
+  };
+
+  // Refresh premiums when expiry changes (or when we get a new spot/ATM on load)
+  useEffect(() => {
+    if (legs.length > 0) {
+      refreshAllPremiums(legs);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedExpiry]);
+
   // Add new leg
   const addLeg = async () => {
     // Round ATM to nearest 100 for NIFTY strikes
-    const atmStrike = Math.round(atm / 100) * 100;
+    const atmStrike = Math.round(atm / 50) * 50;
     
     const newLeg: OptionLeg = {
       id: Date.now().toString(),
@@ -170,9 +265,18 @@ const StrategyBuilder: React.FC = () => {
 
   // Update leg
   const updateLeg = (id: string, field: string, value: any) => {
+    const normalizeLots = (lots: unknown) => {
+      const num = Number(lots);
+      if (!Number.isFinite(num)) return 1;
+      return Math.max(1, Math.floor(num));
+    };
+
     const updatedLegs = legs.map(leg => {
       if (leg.id === id) {
-        const updated = { ...leg, [field]: value };
+        const updated = {
+          ...leg,
+          [field]: field === 'quantity' ? normalizeLots(value) : value,
+        };
         
         // If strike or option_type changed, fetch new premium
         if ((field === 'strike' || field === 'option_type') && selectedExpiry) {
@@ -224,7 +328,8 @@ const StrategyBuilder: React.FC = () => {
         spot,
         expiry_days: Math.max(daysToExpiry, 1),
         volatility: 20,
-        quantity: leg.quantity,
+        // UI quantity is in lots; API expects actual contract quantity
+        quantity: Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE,
       }));
 
       const response = await greeksAPI.calculate({
@@ -301,11 +406,12 @@ const StrategyBuilder: React.FC = () => {
             : Math.max(leg.strike - s, 0);
 
           // Fix: SELL should be premium - intrinsic, BUY should be intrinsic - premium
-          const legPnL = leg.type === 'BUY'
-            ? (intrinsic - (leg.premium || 0)) * leg.quantity
-            : ((leg.premium || 0) - intrinsic) * leg.quantity;
+          const qty = Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE;
+          const legPnl = leg.type === 'BUY'
+            ? (intrinsic - (leg.premium || 0)) * qty
+            : ((leg.premium || 0) - intrinsic) * qty;
 
-          totalPnL += legPnL;
+          totalPnL += legPnl;
         });
 
         payoffs.push({ spot: s, pnl: totalPnL });
@@ -403,7 +509,8 @@ const StrategyBuilder: React.FC = () => {
     try {
       // Calculate total premium (net debit/credit)
       const totalPremium = legs.reduce((sum, leg) => {
-        const legPremium = (leg.premium || 0) * leg.quantity;
+        const qty = Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE;
+        const legPremium = (leg.premium || 0) * qty;
         return sum + (leg.type === 'BUY' ? -legPremium : legPremium);
       }, 0);
 
@@ -423,7 +530,8 @@ const StrategyBuilder: React.FC = () => {
             type: leg.type,
             option_type: leg.option_type,
             strike: leg.strike,
-            quantity: leg.quantity,
+            // Persist actual quantity to match execution/backtest expectations
+            quantity: Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE,
             premium: leg.premium,
           })),
           total_premium: totalPremium,
@@ -481,7 +589,13 @@ const StrategyBuilder: React.FC = () => {
         type: leg.type,
         option_type: leg.option_type,
         strike: leg.strike,
-        quantity: leg.quantity,
+        // Backend stores actual quantity; UI uses lots.
+        quantity: (() => {
+          const q = Number(leg.quantity);
+          if (!Number.isFinite(q) || q <= 0) return 1;
+          if (q >= NIFTY_LOT_SIZE && q % NIFTY_LOT_SIZE === 0) return q / NIFTY_LOT_SIZE;
+          return q; // backward compat if older saved strategies used lots
+        })(),
         premium: leg.premium,
       })));
       
@@ -578,6 +692,40 @@ const StrategyBuilder: React.FC = () => {
             >
               <Plus size={18} />
             </button>
+          </div>
+
+          {/* Templates */}
+          <div className="space-y-2">
+            <label className="text-xs text-slate-300">Template</label>
+            <div className="flex gap-2">
+              <select
+                value={template}
+                onChange={(e) => setTemplate(e.target.value as StrategyTemplate)}
+                className="flex-1 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                aria-label="Strategy template"
+              >
+                <option value="CUSTOM">Custom</option>
+                <option value="BULL_PUT">Bull Put Spread</option>
+                <option value="BEAR_CALL">Bear Call Spread</option>
+                <option value="IRON_CONDOR">Iron Condor</option>
+              </select>
+              <button
+                onClick={() => buildTemplateLegs(template)}
+                disabled={template === 'CUSTOM'}
+                className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded disabled:opacity-50 transition"
+                title="Auto-create legs from template"
+              >
+                Apply
+              </button>
+              <button
+                onClick={() => refreshAllPremiums(legs)}
+                disabled={legs.length === 0}
+                className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-xs text-slate-200 rounded disabled:opacity-50 transition"
+                title="Refresh premiums from market"
+              >
+                Refresh
+              </button>
+            </div>
           </div>
 
           {/* Error Display */}
@@ -695,11 +843,13 @@ const StrategyBuilder: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-slate-400">Qty</label>
+                      <label className="text-xs text-slate-400">Lots (1 lot = {NIFTY_LOT_SIZE})</label>
                       <input
                         type="number"
                         value={leg.quantity}
                         onChange={(e) => updateLeg(leg.id, 'quantity', Number(e.target.value))}
+                        min={1}
+                        step={1}
                         className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
                       />
                     </div>

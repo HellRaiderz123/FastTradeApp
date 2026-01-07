@@ -99,3 +99,80 @@ def check_spread_risk(
     # PASSED ALL CHECKS
     # ============================
     return True, "Risk within limits", metrics
+
+
+def check_condor_risk(
+    *,
+    short_put: int,
+    long_put: int,
+    short_call: int,
+    long_call: int,
+    spot: float,
+    capital: float,
+    lot_size: int,
+    lots: int,
+    iv_regime: str,
+    risk_config: Optional[RiskLimits] = None,
+) -> Tuple[bool, str, Dict[str, float]]:
+    """Hard risk gates for iron condor.
+
+    Notes:
+    - Computes worst-case max loss using the wider wing.
+    - Requires both short legs to be at least min distance from ATM.
+    """
+
+    metrics: Dict[str, float] = {}
+    limits = get_risk_limits(iv_regime, risk_config)
+
+    put_width = abs(short_put - long_put)
+    call_width = abs(long_call - short_call)
+    wing_width = max(put_width, call_width)
+
+    metrics["put_width"] = float(put_width)
+    metrics["call_width"] = float(call_width)
+    metrics["wing_width"] = float(wing_width)
+
+    max_loss = wing_width * lot_size * lots
+    metrics["max_loss"] = float(max_loss)
+
+    if capital > 0:
+        risk_pct = (max_loss / capital) * 100.0
+    else:
+        risk_pct = float("inf")
+
+    metrics["risk_pct_capital"] = float(risk_pct)
+
+    short_put_dist = pct_from_atm(short_put, spot)
+    short_call_dist = pct_from_atm(short_call, spot)
+    metrics["short_put_dist_pct"] = float(short_put_dist)
+    metrics["short_call_dist_pct"] = float(short_call_dist)
+
+    if short_put_dist < limits["min_atm_dist_pct"]:
+        return (
+            False,
+            f"Put strike too close to ATM ({short_put_dist:.2f}% < {limits['min_atm_dist_pct']}%)",
+            metrics,
+        )
+
+    if short_call_dist < limits["min_atm_dist_pct"]:
+        return (
+            False,
+            f"Call strike too close to ATM ({short_call_dist:.2f}% < {limits['min_atm_dist_pct']}%)",
+            metrics,
+        )
+
+    if capital <= 0:
+        return (
+            False,
+            "Capital not available",
+            metrics,
+        )
+
+    if risk_pct > limits["max_risk_pct_capital"]:
+        return (
+            False,
+            f"Risk {risk_pct:.2f}% exceeds limit {limits['max_risk_pct_capital']}%",
+            metrics,
+        )
+
+    return True, "Risk within limits", metrics

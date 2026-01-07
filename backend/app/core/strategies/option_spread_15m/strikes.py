@@ -11,6 +11,8 @@ from typing import Tuple, Dict, TypedDict
 class SpreadStrikes(TypedDict):
     bull: Tuple[int, int]
     bear: Tuple[int, int]
+    # (short_put, long_put, short_call, long_call)
+    condor: Tuple[int, int, int, int]
     meta: Dict[str, int]
 
 
@@ -94,9 +96,18 @@ def compute_spread_strikes(
     if bear_long <= bear_short:
         bear_long = bear_short + width
 
+    # ============================
+    # IRON CONDOR (same offsets/width)
+    # ============================
+    condor_short_put = bull_short
+    condor_long_put = bull_long
+    condor_short_call = bear_short
+    condor_long_call = bear_long
+
     return {
         "bull": (bull_short, bull_long),
         "bear": (bear_short, bear_long),
+        "condor": (condor_short_put, condor_long_put, condor_short_call, condor_long_call),
         "meta": {
             "step": step,
             "width": width,

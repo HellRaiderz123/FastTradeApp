@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Pause, Trash2, Plus, RefreshCw, Zap } from 'lucide-react';
-import { strategyAPI, executionAPI } from '../lib/api';
+import { strategyAPI, executionAPI, suggestionsAPI } from '../lib/api';
 
 interface Strategy {
   id: number;
@@ -32,6 +32,20 @@ interface ExecutionResult {
   [key: string]: any;  // Allow any other fields from strategy result
 }
 
+interface Suggestion {
+  underlying: string;
+  strategy: string;
+  approved: boolean;
+  reason: string;
+  score: number;
+  spot?: number;
+  atm?: number;
+  ticket?: Record<string, any>;
+  risk_metrics?: Record<string, any>;
+  signal?: Record<string, any>;
+  context?: Record<string, any>;
+}
+
 export const StrategyManager: React.FC = () => {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(false);
@@ -40,10 +54,45 @@ export const StrategyManager: React.FC = () => {
   const [selectedStrategies, setSelectedStrategies] = useState<Set<number>>(new Set());
   const [showNewForm, setShowNewForm] = useState(false);
 
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+
   // Load strategies on mount
   useEffect(() => {
     loadStrategies();
   }, []);
+
+  useEffect(() => {
+    // Auto-load suggestions after strategies are available
+    if (strategies.length > 0) {
+      refreshSuggestions();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategies.length]);
+
+  const refreshSuggestions = async () => {
+    setSuggestionsLoading(true);
+    try {
+      const underlyings = Array.from(new Set(strategies.map(s => s.underlying))).filter(Boolean);
+      const payload = {
+        underlyings: underlyings.length > 0 ? underlyings : ['NIFTY'],
+        capital: 100000,
+        lots: 1,
+        risk_mode: 'Conservative',
+        use_ml: false,
+        min_confidence: 75,
+      };
+
+      const response = await suggestionsAPI.get(payload);
+      const data = response?.data;
+      setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []);
+    } catch (error) {
+      console.error('Failed to load suggestions:', error);
+      setSuggestions([]);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  };
 
   const loadStrategies = async () => {
     setLoading(true);
@@ -155,12 +204,84 @@ export const StrategyManager: React.FC = () => {
 
   return (
     <div className="space-y-6 p-6">
+      {/* Suggestions */}
+      <div className="bg-slate-800 border border-slate-700 rounded-lg p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Trade Suggestions</h2>
+            <p className="text-xs text-slate-400">Ranked ideas (bull put / bear call / iron condor)</p>
+          </div>
+          <button
+            onClick={refreshSuggestions}
+            disabled={suggestionsLoading}
+            className="p-2 hover:bg-slate-700 rounded text-slate-300 hover:text-white transition disabled:opacity-50"
+            title="Refresh suggestions"
+          >
+            <RefreshCw size={18} className={suggestionsLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+
+        {suggestionsLoading ? (
+          <div className="text-slate-400 text-sm mt-3">Loading suggestions...</div>
+        ) : suggestions.length === 0 ? (
+          <div className="text-slate-400 text-sm mt-3">No suggestions available right now.</div>
+        ) : (
+          <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 mt-3">
+            {suggestions.slice(0, 6).map((s, idx) => (
+              <div key={idx} className="bg-slate-900 border border-slate-700 rounded p-3">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-white font-semibold">{s.underlying}</div>
+                    <div className="text-xs text-slate-400">Score: <span className="font-mono text-slate-200">{s.score}</span></div>
+                  </div>
+                  <span className={`px-2 py-1 rounded text-xs font-semibold ${
+                    s.approved ? 'bg-green-900 text-green-200' : 'bg-slate-700 text-slate-200'
+                  }`}>
+                    {s.approved ? 'Approved' : 'No Trade'}
+                  </span>
+                </div>
+
+                <div className="mt-2 text-xs text-slate-200">
+                  <div><span className="text-slate-400">Strategy:</span> <span className="font-mono">{s.strategy}</span></div>
+                  <div className="mt-1"><span className="text-slate-400">Reason:</span> <span className="font-mono">{s.reason}</span></div>
+                  {typeof s.spot === 'number' && (
+                    <div className="mt-1"><span className="text-slate-400">Spot:</span> <span className="font-mono">₹{s.spot.toFixed(2)}</span></div>
+                  )}
+                  {typeof s.atm === 'number' && (
+                    <div className="mt-1"><span className="text-slate-400">ATM:</span> <span className="font-mono">{s.atm}</span></div>
+                  )}
+                </div>
+
+                {s.ticket?.legs?.length > 0 && (
+                  <div className="mt-2 p-2 bg-slate-800 rounded">
+                    <div className="text-slate-300 font-semibold text-xs mb-1">Ticket</div>
+                    {s.ticket?.legs?.map((leg: any, legIdx: number) => (
+                      <div key={legIdx} className="text-xs text-slate-200">
+                        {leg.side} {leg.strike} {leg.type}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {typeof s.risk_metrics?.risk_pct_capital === 'number' && (
+                  <div className="mt-2 text-xs text-slate-300">
+                    Risk: <span className="font-mono">{s.risk_metrics.risk_pct_capital.toFixed(2)}%</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Header */}
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-white">Strategy Manager</h1>
         <button
           onClick={loadStrategies}
           disabled={loading}
+          title="Refresh strategies"
+          aria-label="Refresh strategies"
           className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition"
         >
           <RefreshCw size={20} className={loading ? 'animate-spin' : ''} />
@@ -173,6 +294,7 @@ export const StrategyManager: React.FC = () => {
           <div className="flex items-center space-x-2">
             <input
               type="checkbox"
+              aria-label="Select all strategies"
               checked={selectedStrategies.size === strategies.length}
               onChange={(e) => {
                 if (e.target.checked) {
@@ -232,6 +354,7 @@ export const StrategyManager: React.FC = () => {
               <div className="flex items-start space-x-3">
                 <input
                   type="checkbox"
+                  aria-label={`Select strategy ${strategy.name}`}
                   checked={selectedStrategies.has(strategy.id)}
                   onChange={() => toggleStrategySelection(strategy.id)}
                   className="w-4 h-4 mt-1"
@@ -292,6 +415,8 @@ export const StrategyManager: React.FC = () => {
 
                 <button
                   onClick={() => handleToggleEnable(strategy.id, strategy.enabled)}
+                  title={strategy.enabled ? 'Disable strategy' : 'Enable strategy'}
+                  aria-label={strategy.enabled ? 'Disable strategy' : 'Enable strategy'}
                   className={`flex items-center justify-center px-3 py-2 rounded text-sm ${
                     strategy.enabled
                       ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
@@ -303,6 +428,8 @@ export const StrategyManager: React.FC = () => {
 
                 <button
                   onClick={() => handleDelete(strategy.id)}
+                  title="Delete strategy"
+                  aria-label="Delete strategy"
                   className="flex items-center justify-center px-3 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200"
                 >
                   <Trash2 size={14} />
@@ -377,8 +504,8 @@ export const StrategyManager: React.FC = () => {
                     {result.signal && (
                       <div className="mt-2 p-2 bg-slate-600 rounded">
                         <div className="text-slate-300 font-semibold mb-1">Signal:</div>
-                        <div><span className="text-slate-400">Direction:</span> <span className="font-mono">{result.signal.direction}</span></div>
-                        <div><span className="text-slate-400">Confidence:</span> <span className="font-mono">{(result.signal.confidence * 100).toFixed(1)}%</span></div>
+                        <div><span className="text-slate-400">Bias:</span> <span className="font-mono">{result.signal.bias || result.signal.signal || result.signal.direction || 'N/A'}</span></div>
+                        <div><span className="text-slate-400">Confidence:</span> <span className="font-mono">{typeof result.signal.confidence === 'number' ? `${result.signal.confidence.toFixed(1)}%` : 'N/A'}</span></div>
                         {result.signal.reason && (
                           <div><span className="text-slate-400">Signal Reason:</span> <span className="text-xs">{result.signal.reason}</span></div>
                         )}

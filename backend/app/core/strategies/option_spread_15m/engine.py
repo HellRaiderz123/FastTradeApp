@@ -27,7 +27,7 @@ from app.services.market_data import (
 from app.core.strategies.option_spread_15m.context import build_market_context
 from app.core.strategies.option_spread_15m.decision import decide_strategy
 from app.core.strategies.option_spread_15m.strikes import compute_spread_strikes
-from app.core.strategies.option_spread_15m.risk import check_spread_risk
+from app.core.strategies.option_spread_15m.risk import check_spread_risk, check_condor_risk
 
 def _log_strategy_run(result: dict, underlying: str) -> Optional[StrategyRun]:
     """
@@ -170,11 +170,13 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     elif strategy_mode == "BEAR_CALL":
         short_strike, long_strike = strikes["bear"]
         opt_type = "CE"
+    elif strategy_mode == "IRON_CONDOR":
+        short_put, long_put, short_call, long_call = strikes["condor"]
     else:
         return {
             "strategy": strategy_mode,
             "approved": False,
-            "reason": "Strategy not supported yet",
+            "reason": "Strategy not supported",
             "signal": sig,
             "context": ctx,
         }
@@ -182,15 +184,28 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # =====================================================
     # 6️⃣ RISK CHECK (FINAL GATE)
     # =====================================================
-    ok, risk_reason, risk_metrics = check_spread_risk(
-        short_strike=short_strike,
-        long_strike=long_strike,
-        spot=spot,
-        capital=float(payload.get("capital", 0)),
-        lot_size=lot_size,
-        lots=int(payload.get("lots", 1)),
-        iv_regime=str(ctx.get("iv_regime") or "LOW"),
-    )
+    if strategy_mode in ["BULL_PUT", "BEAR_CALL"]:
+        ok, risk_reason, risk_metrics = check_spread_risk(
+            short_strike=short_strike,
+            long_strike=long_strike,
+            spot=spot,
+            capital=float(payload.get("capital", 0)),
+            lot_size=lot_size,
+            lots=int(payload.get("lots", 1)),
+            iv_regime=str(ctx.get("iv_regime") or "LOW"),
+        )
+    else:
+        ok, risk_reason, risk_metrics = check_condor_risk(
+            short_put=short_put,
+            long_put=long_put,
+            short_call=short_call,
+            long_call=long_call,
+            spot=spot,
+            capital=float(payload.get("capital", 0)),
+            lot_size=lot_size,
+            lots=int(payload.get("lots", 1)),
+            iv_regime=str(ctx.get("iv_regime") or "LOW"),
+        )
 
 
     if not ok:
@@ -212,38 +227,94 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
     # =====================================================
-    # 7️⃣ BUILD SPREAD TICKET (PAPER)
+    # 7️⃣ BUILD TICKET (PAPER)
     # =====================================================
-    ticket = {
-        "strategy": strategy_mode,
-        "underlying": underlying,
-        "lot_size": lot_size,
-        "lots": int(payload.get("lots", 1)),
-        "legs": [
-            {
-                "side": "SELL",
-                "strike": short_strike,
-                "type": opt_type,
-                "symbol": build_zerodha_option_symbol(
-                    underlying=underlying,
-                    expiry=get_current_weekly_expiry(underlying),
-                    strike=short_strike,
-                    option_type=opt_type,
-                ),
-            },
-            {
-                "side": "BUY",
-                "strike": long_strike,
-                "type": opt_type,
-                "symbol": build_zerodha_option_symbol(
-                    underlying=underlying,
-                    expiry=get_current_weekly_expiry(underlying),
-                    strike=long_strike,
-                    option_type=opt_type,
-                ),
-            },
-        ],
-    }
+    expiry = get_current_weekly_expiry(underlying)
+
+    if strategy_mode in ["BULL_PUT", "BEAR_CALL"]:
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": int(payload.get("lots", 1)),
+            "legs": [
+                {
+                    "side": "SELL",
+                    "strike": short_strike,
+                    "type": opt_type,
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=short_strike,
+                        option_type=opt_type,
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": long_strike,
+                    "type": opt_type,
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=long_strike,
+                        option_type=opt_type,
+                    ),
+                },
+            ],
+        }
+    else:
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": int(payload.get("lots", 1)),
+            "legs": [
+                {
+                    "side": "SELL",
+                    "strike": short_put,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=short_put,
+                        option_type="PE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": long_put,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=long_put,
+                        option_type="PE",
+                    ),
+                },
+                {
+                    "side": "SELL",
+                    "strike": short_call,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=short_call,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": long_call,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=long_call,
+                        option_type="CE",
+                    ),
+                },
+            ],
+        }
 
     # =====================================================
     # 8️⃣ FINAL RESPONSE

@@ -4,7 +4,7 @@ import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ComposedChart
 } from 'recharts';
-import { strategyAPI } from '../lib/api';
+import { strategyAPI, backtestAPI } from '../lib/api';
 
 interface Strategy {
   id: number;
@@ -92,27 +92,22 @@ export const Backtest: React.FC = () => {
     setResult(null);
 
     try {
-      const response = await fetch('http://localhost:8000/backtest/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          strategy_config_id: selectedStrategy,
-          start_date: startDate,
-          end_date: endDate,
-          initial_capital: initialCapital,
-        }),
+      const response = await backtestAPI.run({
+        strategy_config_id: selectedStrategy,
+        start_date: startDate,
+        end_date: endDate,
+        initial_capital: initialCapital,
       });
 
-      if (!response.ok) throw new Error('Backtest failed');
-      const data = await response.json();
+      const data = response?.data;
 
-      if (data.success) {
+      if (data?.success) {
         setResult(data);
       } else {
-        setError(data.error || 'Backtest failed');
+        setError(data?.error || 'Backtest failed');
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to run backtest');
+      setError(err?.message || 'Failed to run backtest');
     } finally {
       setLoading(false);
     }
@@ -144,8 +139,10 @@ export const Backtest: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Strategy Selector */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Strategy</label>
+            <label htmlFor="backtest-strategy" className="block text-sm font-medium text-slate-300 mb-2">Strategy</label>
             <select
+              id="backtest-strategy"
+              aria-label="Select strategy"
               value={selectedStrategy || ''}
               onChange={(e) => setSelectedStrategy(parseInt(e.target.value))}
               className="w-full px-4 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -161,8 +158,10 @@ export const Backtest: React.FC = () => {
 
           {/* Start Date */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">From</label>
+            <label htmlFor="backtest-start" className="block text-sm font-medium text-slate-300 mb-2">From</label>
             <input
+              id="backtest-start"
+              aria-label="Backtest start date"
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
@@ -172,8 +171,10 @@ export const Backtest: React.FC = () => {
 
           {/* End Date */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">To</label>
+            <label htmlFor="backtest-end" className="block text-sm font-medium text-slate-300 mb-2">To</label>
             <input
+              id="backtest-end"
+              aria-label="Backtest end date"
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
@@ -183,8 +184,10 @@ export const Backtest: React.FC = () => {
 
           {/* Initial Capital */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Capital</label>
+            <label htmlFor="backtest-capital" className="block text-sm font-medium text-slate-300 mb-2">Capital</label>
             <input
+              id="backtest-capital"
+              aria-label="Initial capital"
               type="number"
               value={initialCapital}
               onChange={(e) => setInitialCapital(parseInt(e.target.value))}

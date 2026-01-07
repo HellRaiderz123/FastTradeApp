@@ -1,15 +1,55 @@
-"""Market data endpoints for live prices and option chain data"""
+"""Market data endpoints for live prices and option chain data."""
 
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
 import logging
 
 from app.services.zerodha import KiteConnectService
+from app.core.broker.zerodha.instruments import load_instruments
+from app.services.market_data import get_option_ltp
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/market", tags=["market"])
 
 kite_service = KiteConnectService()
+
+
+def _find_option_tradingsymbol(*, underlying: str, expiry: str, strike: int, option_type: str) -> str | None:
+    """Find NFO tradingsymbol for an option contract via instruments list."""
+    try:
+        df = load_instruments()
+        if df.empty:
+            return None
+
+        # Normalize
+        underlying = underlying.upper().strip()
+        option_type = option_type.upper().strip()
+        if option_type not in {"CE", "PE"}:
+            return None
+
+        expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
+
+        # Zerodha instruments expiry is typically datetime-like; normalize to date
+        expiry_series = df["expiry"]
+        expiry_dates = expiry_series
+        try:
+            expiry_dates = expiry_series.apply(lambda x: x.date() if hasattr(x, "date") else x)
+        except Exception:
+            pass
+
+        subset = df[
+            (df["name"].astype(str).str.upper() == underlying)
+            & (expiry_dates == expiry_date)
+            & (df["strike"].astype(float) == float(strike))
+            & (df["instrument_type"].astype(str).str.upper() == option_type)
+        ]
+
+        if subset.empty:
+            return None
+
+        return str(subset.iloc[0]["tradingsymbol"])
+    except Exception:
+        return None
 
 
 @router.get("/ltp/{symbol}")
@@ -166,30 +206,59 @@ async def get_option_premium(
     try:
         if not expiry:
             expiry = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        # Try to get live spot for intrinsic value
+
+        underlying = symbol.upper().strip()
+        opt_type = option_type.upper().strip()
+
+        tradingsymbol = _find_option_tradingsymbol(
+            underlying=underlying,
+            expiry=expiry,
+            strike=strike,
+            option_type=opt_type,
+        )
+
+        premium = 0.0
+        if tradingsymbol:
+            ltp_map = get_option_ltp([tradingsymbol])
+            premium = float(ltp_map.get(tradingsymbol, 0.0) or 0.0)
+
+        # Include spot (best-effort)
+        spot = None
         try:
-            spot_data = kite_service.get_quote(symbol)
-            spot = spot_data.get("last_price", 26150) if spot_data else 26150
-        except:
-            spot = 26150
-        
-        # Calculate estimated premium using simple approximation
-        intrinsic = max(spot - strike, 0) if option_type == "CE" else max(strike - spot, 0)
-        time_value = 50 if symbol == "NIFTY" else 25  # Simplified estimate
-        estimated_premium = intrinsic + time_value
-        
+            spot_data = kite_service.get_quote(underlying)
+            if spot_data and spot_data.get("last_price"):
+                spot = float(spot_data.get("last_price"))
+        except Exception:
+            spot = None
+
+        if premium <= 0:
+            # Fallback estimation so UI still works when Zerodha token missing
+            if spot is None:
+                spot = 26150.0
+            intrinsic = max(spot - strike, 0) if opt_type == "CE" else max(strike - spot, 0)
+            time_value = 50 if underlying == "NIFTY" else 25
+            premium = float(intrinsic + time_value)
+
+            return {
+                "symbol": underlying,
+                "strike": strike,
+                "option_type": opt_type,
+                "expiry": expiry,
+                "premium": premium,
+                "estimated": True,
+                "spot": spot,
+                "tradingsymbol": tradingsymbol,
+            }
+
         return {
-            "symbol": symbol,
+            "symbol": underlying,
             "strike": strike,
-            "option_type": option_type,
+            "option_type": opt_type,
             "expiry": expiry,
-            "premium": estimated_premium,
-            "iv": 18.0,
-            "bid": estimated_premium - 1,
-            "ask": estimated_premium + 1,
-            "estimated": True,
-            "spot": spot
+            "premium": premium,
+            "estimated": False,
+            "spot": spot,
+            "tradingsymbol": tradingsymbol,
         }
     
     except Exception as e:
@@ -243,36 +312,48 @@ async def get_option_chain(symbol: str = "NIFTY", expiry: str = None):
         spot_data = kite_service.get_quote(symbol)
         spot = spot_data.get("last_price", 26150) if spot_data else 26150
         
-        # Generate strikes around ATM (typically 100-point intervals for NIFTY)
-        interval = 100
-        atm = int(spot / interval) * interval
-        
+        underlying = symbol.upper().strip()
+
+        interval = 50 if underlying == "NIFTY" else 100
+        atm = int(round(spot / interval) * interval)
+
+        strikes = list(range(atm - 1000, atm + 1000 + interval, interval))
+
+        # Resolve tradingsymbols for this expiry and strikes
+        ce_symbols: dict[int, str] = {}
+        pe_symbols: dict[int, str] = {}
+        all_symbols: list[str] = []
+
+        for st in strikes:
+            ce = _find_option_tradingsymbol(underlying=underlying, expiry=expiry, strike=st, option_type="CE")
+            pe = _find_option_tradingsymbol(underlying=underlying, expiry=expiry, strike=st, option_type="PE")
+            if ce:
+                ce_symbols[st] = ce
+                all_symbols.append(ce)
+            if pe:
+                pe_symbols[st] = pe
+                all_symbols.append(pe)
+
+        ltp_map = get_option_ltp(all_symbols) if all_symbols else {}
+
         options = []
-        for strike in range(atm - 1000, atm + 1000, interval):
-            ce_symbol = f"{symbol}{expiry.replace('-', '')}{strike}CE"
-            pe_symbol = f"{symbol}{expiry.replace('-', '')}{strike}PE"
-            
-            try:
-                ce_data = kite_service.get_quote(ce_symbol)
-                pe_data = kite_service.get_quote(pe_symbol)
-                
-                ce_premium = ce_data.get("last_price", 0) if ce_data else 0
-                pe_premium = pe_data.get("last_price", 0) if pe_data else 0
-                
-                if ce_premium > 0 or pe_premium > 0:
-                    options.append({
-                        "strike": strike,
-                        "ce_premium": ce_premium,
-                        "pe_premium": pe_premium,
-                        "ce_iv": ce_data.get("iv", 0) if ce_data else 0,
-                        "pe_iv": pe_data.get("iv", 0) if pe_data else 0,
-                    })
-            except:
-                # Skip if symbol not found
-                pass
+        for st in strikes:
+            ce_ts = ce_symbols.get(st)
+            pe_ts = pe_symbols.get(st)
+            ce_premium = float(ltp_map.get(ce_ts, 0.0) or 0.0) if ce_ts else 0.0
+            pe_premium = float(ltp_map.get(pe_ts, 0.0) or 0.0) if pe_ts else 0.0
+
+            if ce_premium > 0 or pe_premium > 0:
+                options.append({
+                    "strike": st,
+                    "ce_premium": ce_premium,
+                    "pe_premium": pe_premium,
+                    "ce_tradingsymbol": ce_ts,
+                    "pe_tradingsymbol": pe_ts,
+                })
         
         return {
-            "symbol": symbol,
+            "symbol": underlying,
             "spot": spot,
             "expiry": expiry,
             "options": options,

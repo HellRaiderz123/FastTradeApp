@@ -139,7 +139,7 @@ const Settings: React.FC = () => {
         request_token: zerodhaForm.requestToken,
       });
       setZerodhaMessage('✓ Access token generated successfully!');
-      setZerodhaForm(prev => ({ ...prev, requestToken: '', accessToken: response.access_token }));
+      setZerodhaForm(prev => ({ ...prev, requestToken: '', accessToken: response.data?.access_token }));
       // Refresh immediately and again after delay
       await loadZerodhaSettings();
       setTimeout(() => loadZerodhaSettings(), 500);
