@@ -6,14 +6,13 @@ interface JournalEntry {
   id: number;
   strategy: string;
   underlying: string;
-  entry_time: string;
-  exit_time?: string;
+  created_at: string;
+  closed_at?: string | null;
   entry_price: number;
-  exit_price?: number;
+  exit_price?: number | null;
   pnl: number;
   pnl_percent: number;
   status: string;
-  created_at: string;
 }
 
 const Journal: React.FC = () => {
@@ -28,8 +27,27 @@ const Journal: React.FC = () => {
 
   const fetchJournal = async () => {
     try {
-      const response = await journalAPI.getStrategyRuns(100);
-      setEntries(response.data || []);
+      const response = await journalAPI.getExecutionIntents(100);
+      const data = Array.isArray(response.data) ? response.data : [];
+      const mapped: JournalEntry[] = data.map((item: any) => {
+        const entryPrice = Number(item?.entry_credit ?? 0) || 0;
+        const pnl = Number(item?.pnl ?? 0) || 0;
+        const exitPrice = entryPrice ? entryPrice - pnl : null;
+        const pnlPercent = entryPrice !== 0 ? (pnl / entryPrice) * 100 : 0;
+        return {
+          id: item?.id ?? item?.intent_id ?? Math.random(),
+          strategy: item?.strategy || 'Unknown',
+          underlying: item?.underlying || '-',
+          created_at: item?.created_at,
+          closed_at: item?.closed_at,
+          entry_price: entryPrice,
+          exit_price: exitPrice,
+          pnl,
+          pnl_percent: pnlPercent,
+          status: item?.status || 'UNKNOWN',
+        };
+      });
+      setEntries(mapped);
     } catch (error) {
       console.error('Failed to fetch journal:', error);
     } finally {
@@ -170,6 +188,12 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
             <p className="text-xs text-slate-400">Created Time</p>
             <p className="text-sm font-medium text-white">{new Date(entry.created_at).toLocaleString()}</p>
           </div>
+          {entry.closed_at && (
+            <div>
+              <p className="text-xs text-slate-400">Closed Time</p>
+              <p className="text-sm font-medium text-white">{new Date(entry.closed_at).toLocaleString()}</p>
+            </div>
+          )}
           <div>
             <p className="text-xs text-slate-400">P&L</p>
             <p className={`text-lg font-bold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
@@ -184,8 +208,8 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
 
       {expanded && (
         <div className="bg-slate-950/50 p-4 border-t border-slate-700 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <DetailItem label="Entry Price" value={`₹${entry.entry_price.toLocaleString()}`} />
-          <DetailItem label="Exit Price" value={entry.exit_price ? `₹${entry.exit_price.toLocaleString()}` : 'N/A'} />
+          <DetailItem label="Entry Price" value={entry.entry_price ? `₹${entry.entry_price.toLocaleString()}` : 'N/A'} />
+          <DetailItem label="Exit Price" value={entry.exit_price !== null && entry.exit_price !== undefined ? `₹${entry.exit_price.toLocaleString()}` : 'N/A'} />
           <DetailItem label="Return %" value={`${entry.pnl_percent.toFixed(2)}%`} color={isProfitable ? 'green' : 'red'} />
           <DetailItem label="Status" value={entry.status} />
         </div>

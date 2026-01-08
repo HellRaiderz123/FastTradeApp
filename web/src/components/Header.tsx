@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Menu, Settings, Power, Bell } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
-import { systemAPI } from '../lib/api';
+import { systemAPI, settingsAPI } from '../lib/api';
 import { NotificationBell } from './NotificationBell';
 
 interface HeaderProps {
@@ -11,6 +11,29 @@ interface HeaderProps {
 }
 
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSystemToggle }) => {
+  const [executionMode, setExecutionMode] = useState('PAPER_TRADING');
+
+  useEffect(() => {
+    loadExecutionMode();
+    const interval = setInterval(loadExecutionMode, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadExecutionMode = async () => {
+    try {
+      const response = await settingsAPI.getZerodhaSettings();
+      const data = response.data || response;
+      setExecutionMode(data.execution_mode || 'PAPER_TRADING');
+    } catch (error) {
+      console.error('Error loading execution mode:', error);
+    }
+  };
+
+  const getModeDisplay = () => {
+    if (executionMode === 'ZERODHA_LIVE') return 'Live Trading';
+    if (executionMode === 'ZERODHA_DRY_RUN') return 'Dry Run';
+    return 'Paper Trading';
+  };
   class BellBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }>{
     constructor(props: { children: React.ReactNode }) {
       super(props);
@@ -74,7 +97,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
         <div className="flex items-center gap-3 pl-6 border-l border-slate-800">
           <div className="text-right">
             <p className="text-sm font-medium text-white">Tarun</p>
-            <p className="text-xs text-slate-400">Paper Trading</p>
+            <p className="text-xs text-slate-400">{getModeDisplay()}</p>
           </div>
           <img
             src="https://api.dicebear.com/7.x/avataaars/svg?seed=tarun"

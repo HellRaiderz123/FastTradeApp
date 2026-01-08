@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Pause, Trash2, Plus, RefreshCw, Zap } from 'lucide-react';
+import { Play, Pause, Trash2, Plus, RefreshCw, Zap, Edit2 } from 'lucide-react';
 import { strategyAPI, executionAPI, suggestionsAPI } from '../lib/api';
+import { StrategyForm } from './StrategyForm';
 
 interface Strategy {
   id: number;
@@ -53,6 +54,7 @@ export const StrategyManager: React.FC = () => {
   const [results, setResults] = useState<ExecutionResult[]>([]);
   const [selectedStrategies, setSelectedStrategies] = useState<Set<number>>(new Set());
   const [showNewForm, setShowNewForm] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
@@ -218,6 +220,10 @@ export const StrategyManager: React.FC = () => {
     } catch (error) {
       console.error('Failed to toggle strategy:', error);
     }
+  };
+
+  const handleEdit = (strategyId: number) => {
+    setEditingId(strategyId);
   };
 
   const handleDelete = async (strategyId: number) => {
@@ -466,6 +472,20 @@ export const StrategyManager: React.FC = () => {
                 </button>
 
                 <button
+                  onClick={() => handleEdit(strategy.id)}
+                  disabled={strategy.enabled}
+                  title={strategy.enabled ? 'Cannot edit deployed strategy' : 'Edit strategy'}
+                  aria-label="Edit strategy"
+                  className={`flex items-center justify-center px-3 py-2 rounded text-sm ${
+                    strategy.enabled
+                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                      : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                  }`}
+                >
+                  <Edit2 size={14} />
+                </button>
+
+                <button
                   onClick={() => handleDelete(strategy.id)}
                   title="Delete strategy"
                   aria-label="Delete strategy"
@@ -594,6 +614,22 @@ export const StrategyManager: React.FC = () => {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Form Modal */}
+      {editingId !== null && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-lg max-w-2xl w-full max-h-96 overflow-y-auto">
+            <StrategyForm
+              initialData={strategies.find((s) => s.id === editingId)}
+              onClose={() => setEditingId(null)}
+              onSuccess={() => {
+                setEditingId(null);
+                loadStrategies();
+              }}
+            />
           </div>
         </div>
       )}

@@ -13,8 +13,10 @@ def create_execution_intent(
     strategy: str,
     underlying: str,
     ticket: dict,
+    expiry: str | None = None,
     tp: float | None = None,
     sl: float | None = None,
+    trailing_sl_pct: float | None = None,
     ttl_seconds: int = 120,
 ):
 
@@ -23,9 +25,11 @@ def create_execution_intent(
         intent_id=str(uuid.uuid4()),
         strategy=strategy,
         underlying=underlying,
+        expiry=expiry,
         ticket=ticket,
         tp=tp,
         sl=sl,
+        trailing_sl_pct=trailing_sl_pct,
         expires_at=now_ist() + timedelta(seconds=ttl_seconds),
     )
 

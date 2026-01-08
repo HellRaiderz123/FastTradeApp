@@ -9,6 +9,8 @@ interface OptionLeg {
   strike: number;
   quantity: number;
   premium?: number;
+  strike_type?: 'ABSOLUTE' | 'RELATIVE';  // Strike mode
+  strike_offset?: number;  // Offset from ATM (used when strike_type is RELATIVE)
 }
 
 interface StrategyPayoff {
@@ -29,12 +31,21 @@ interface GreeksData {
   max_loss?: number;
 }
 
-type StrategyTemplate = 'CUSTOM' | 'BULL_PUT' | 'BEAR_CALL' | 'IRON_CONDOR';
+type StrategyTemplate =
+  | 'CUSTOM'
+  | 'BULL_PUT'
+  | 'BEAR_CALL'
+  | 'IRON_CONDOR'
+  | 'BULL_CALL'
+  | 'BEAR_PUT'
+  | 'SHORT_STRANGLE'
+  | 'LONG_STRADDLE';
 
 const NIFTY_LOT_SIZE = 65;
 
 const StrategyBuilder: React.FC = () => {
   const [legs, setLegs] = useState<OptionLeg[]>([]);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [spot, setSpot] = useState<number>(26150);
   const [atm, setAtm] = useState<number>(26150);
   const [greeks, setGreeks] = useState<GreeksData | null>(null);
@@ -47,6 +58,7 @@ const StrategyBuilder: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [expiryDates, setExpiryDates] = useState<string[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<string>('');
+  const [daysToExpiry, setDaysToExpiry] = useState<number>(0);
   const [fetchingSpot, setFetchingSpot] = useState(true);
   const [strategyName, setStrategyName] = useState('');
   const [tpPct, setTpPct] = useState<number>(0);
@@ -58,6 +70,28 @@ const StrategyBuilder: React.FC = () => {
   const [loadingStrategies, setLoadingStrategies] = useState(false);
 
   const [template, setTemplate] = useState<StrategyTemplate>('CUSTOM');
+  const [assumedVolPct, setAssumedVolPct] = useState<number>(18); // for POP estimation
+  const [popPct, setPopPct] = useState<number | null>(null);
+  const [popVerdict, setPopVerdict] = useState<'GOOD' | 'NEUTRAL' | 'RISKY' | null>(null);
+
+  // Drag & drop handlers for reordering legs
+  const handleDragStart = (index: number) => {
+    setDragIndex(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    // Allow dropping by preventing default
+    e.preventDefault();
+  };
+
+  const handleDrop = (dropIndex: number) => {
+    if (dragIndex === null || dragIndex === dropIndex) return;
+    const updated = [...legs];
+    const [moved] = updated.splice(dragIndex, 1);
+    updated.splice(dropIndex, 0, moved);
+    setLegs(updated);
+    setDragIndex(null);
+  };
 
   // Fetch spot price and expiry dates on component mount
   useEffect(() => {
@@ -97,6 +131,9 @@ const StrategyBuilder: React.FC = () => {
           console.log('   Setting expiry dates to:', expiryData.expiries);
           setExpiryDates(expiryData.expiries);
           setSelectedExpiry(expiryData.expiries[0]);
+          const today = new Date();
+          const dte = Math.max(1, Math.ceil((new Date(expiryData.expiries[0]).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+          setDaysToExpiry(dte);
           console.log('   Set selected expiry to:', expiryData.expiries[0]);
         } else {
           console.warn('   Empty or invalid expiries, using fallback');
@@ -111,6 +148,8 @@ const StrategyBuilder: React.FC = () => {
           console.log('   Fallback expiries:', fallbackExpiries);
           setExpiryDates(fallbackExpiries);
           setSelectedExpiry(fallbackExpiries[0]);
+          const dte = Math.max(1, Math.ceil((new Date(fallbackExpiries[0]).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+          setDaysToExpiry(dte);
         }
         
         console.log('=== Market data fetch complete ===');
@@ -126,6 +165,40 @@ const StrategyBuilder: React.FC = () => {
     console.log('StrategyBuilder mounted, fetching market data');
     fetchMarketData();
   }, []);
+
+  // Update DTE when expiry changes
+  useEffect(() => {
+    if (selectedExpiry) {
+      const today = new Date();
+      const dte = Math.max(1, Math.ceil((new Date(selectedExpiry).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+      setDaysToExpiry(dte);
+    }
+  }, [selectedExpiry]);
+
+  // Update relative strikes when ATM changes
+  useEffect(() => {
+    const updatedLegs = legs.map(leg => {
+      if (leg.strike_type === 'RELATIVE') {
+        const newStrike = calculateAbsoluteStrike(leg.strike_offset || 0);
+        if (newStrike !== leg.strike) {
+          // Fetch new premium for updated strike
+          fetchPremium(newStrike, leg.option_type).then(premium => {
+            setLegs(prevLegs =>
+              prevLegs.map(l =>
+                l.id === leg.id ? { ...l, strike: newStrike, premium } : l
+              )
+            );
+          });
+          return { ...leg, strike: newStrike };
+        }
+      }
+      return leg;
+    });
+    
+    if (JSON.stringify(updatedLegs) !== JSON.stringify(legs)) {
+      setLegs(updatedLegs);
+    }
+  }, [atm]);
 
   // Fetch premium when strike is selected
   const fetchPremium = async (strike: number, optionType: 'CE' | 'PE') => {
@@ -154,6 +227,12 @@ const StrategyBuilder: React.FC = () => {
   const getStep = () => 50; // NIFTY default
 
   const roundToStep = (value: number, step: number) => Math.round(value / step) * step;
+
+  // Calculate absolute strike from relative offset
+  const calculateAbsoluteStrike = (offset: number) => {
+    const atmStrike = Math.round(atm / 50) * 50;
+    return atmStrike + offset;
+  };
 
   const buildTemplateLegs = async (tpl: StrategyTemplate) => {
     if (!selectedExpiry) {
@@ -208,6 +287,43 @@ const StrategyBuilder: React.FC = () => {
       return;
     }
 
+    if (tpl === 'BULL_CALL') {
+      // Debit call spread: BUY lower strike call, SELL higher strike call
+      const longCall = atmStrike - width;
+      const shortCall = longCall + width;
+      newLegs = [
+        { id: `${Date.now()}-lc`, type: 'BUY', option_type: 'CE', strike: longCall, quantity: 1 },
+        { id: `${Date.now()}-sc`, type: 'SELL', option_type: 'CE', strike: shortCall, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'BEAR_PUT') {
+      // Debit put spread: BUY higher strike put, SELL lower strike put
+      const longPut = atmStrike + width;
+      const shortPut = longPut - width;
+      newLegs = [
+        { id: `${Date.now()}-lp`, type: 'BUY', option_type: 'PE', strike: longPut, quantity: 1 },
+        { id: `${Date.now()}-sp`, type: 'SELL', option_type: 'PE', strike: shortPut, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'SHORT_STRANGLE') {
+      const shortPut = atmStrike - offset;
+      const shortCall = atmStrike + offset;
+      newLegs = [
+        { id: `${Date.now()}-sp`, type: 'SELL', option_type: 'PE', strike: shortPut, quantity: 1 },
+        { id: `${Date.now()}-sc`, type: 'SELL', option_type: 'CE', strike: shortCall, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'LONG_STRADDLE') {
+      const k = atmStrike;
+      newLegs = [
+        { id: `${Date.now()}-bc`, type: 'BUY', option_type: 'CE', strike: k, quantity: 1 },
+        { id: `${Date.now()}-bp`, type: 'BUY', option_type: 'PE', strike: k, quantity: 1 },
+      ];
+    }
+
     // Fetch premiums in parallel
     const premiums = await Promise.all(
       newLegs.map((leg) => fetchPremium(leg.strike, leg.option_type))
@@ -251,6 +367,8 @@ const StrategyBuilder: React.FC = () => {
       option_type: 'CE',
       strike: atmStrike,
       quantity: 1,
+      strike_type: 'ABSOLUTE',  // Default to absolute
+      strike_offset: 0,
     };
     
     // Fetch premium for this leg
@@ -278,13 +396,31 @@ const StrategyBuilder: React.FC = () => {
 
     const updatedLegs = legs.map(leg => {
       if (leg.id === id) {
-        const updated = {
+        let updated = {
           ...leg,
           [field]: field === 'quantity' ? normalizeLots(value) : value,
         };
         
+        // When switching to RELATIVE mode, calculate offset from current strike
+        if (field === 'strike_type' && value === 'RELATIVE') {
+          const atmStrike = Math.round(atm / 50) * 50;
+          const offset = leg.strike - atmStrike;
+          updated = { ...updated, strike_offset: offset };
+        }
+        
+        // When switching to ABSOLUTE mode, use current strike
+        if (field === 'strike_type' && value === 'ABSOLUTE') {
+          updated = { ...updated, strike_offset: 0 };
+        }
+        
+        // When offset changes in RELATIVE mode, update strike
+        if (field === 'strike_offset' && leg.strike_type === 'RELATIVE') {
+          const newStrike = calculateAbsoluteStrike(Number(value));
+          updated = { ...updated, strike: newStrike };
+        }
+        
         // If strike or option_type changed, fetch new premium
-        if ((field === 'strike' || field === 'option_type') && selectedExpiry) {
+        if ((field === 'strike' || field === 'option_type' || field === 'strike_offset') && selectedExpiry) {
           console.log(`Leg ${id} changed ${field} to ${value}, fetching premium...`);
           fetchPremium(updated.strike, updated.option_type).then(premium => {
             console.log(`Setting premium for leg ${id} to ${premium}`);
@@ -464,6 +600,90 @@ const StrategyBuilder: React.FC = () => {
     };
   };
 
+  // --- POP calculation helpers ---
+  const erf = (x: number) => {
+    // Abramowitz and Stegun formula 7.1.26
+    const sign = x >= 0 ? 1 : -1;
+    const a1 = 0.254829592;
+    const a2 = 0.284496736;
+    const a3 = 1.421413741;
+    const a4 = 1.453152027;
+    const a5 = 1.061405429;
+    const p = 0.3275911;
+    const t = 1 / (1 + p * Math.abs(x));
+    const y = 1 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+    return sign * y;
+  };
+
+  const normalCdf = (x: number, mean: number, std: number) => {
+    if (std <= 0) return x >= mean ? 1 : 0;
+    return 0.5 * (1 + erf((x - mean) / (std * Math.SQRT2)));
+  };
+
+  const computePopFromPayoff = (data: StrategyPayoff[], meanSpot: number, volPct: number, dteDays: number): number | null => {
+    if (!data || data.length < 2) return null;
+    const t = Math.max(1, dteDays) / 365;
+    const std = Math.max(1e-6, meanSpot * (volPct / 100) * Math.sqrt(t));
+
+    // Sort by spot ascending
+    const points = [...data].sort((a, b) => a.spot - b.spot);
+    let prob = 0;
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      const cdfA = normalCdf(a.spot, meanSpot, std);
+      const cdfB = normalCdf(b.spot, meanSpot, std);
+      const intervalMass = Math.max(0, cdfB - cdfA);
+
+      // If both endpoints are profitable, count entire interval
+      if (a.pnl >= 0 && b.pnl >= 0) {
+        prob += intervalMass;
+        continue;
+      }
+
+      // If both endpoints are loss, skip
+      if (a.pnl <= 0 && b.pnl <= 0) {
+        continue;
+      }
+
+      // Endpoint signs differ -> find zero crossing by linear interpolation
+      const denom = (b.pnl - a.pnl);
+      if (Math.abs(denom) < 1e-9) continue;
+      const ratio = Math.abs(a.pnl) / (Math.abs(a.pnl) + Math.abs(b.pnl));
+      const beSpot = a.spot + ratio * (b.spot - a.spot);
+      const cdfBE = normalCdf(beSpot, meanSpot, std);
+
+      // Determine which side is profitable
+      if (a.pnl >= 0 && b.pnl <= 0) {
+        prob += Math.max(0, cdfBE - cdfA);
+      } else if (a.pnl <= 0 && b.pnl >= 0) {
+        prob += Math.max(0, cdfB - cdfBE);
+      }
+    }
+
+    return Math.min(1, Math.max(0, prob));
+  };
+
+  const recomputePop = () => {
+    const pop = computePopFromPayoff(payoffData, spot, assumedVolPct, daysToExpiry);
+    if (pop == null) {
+      setPopPct(null);
+      setPopVerdict(null);
+      return;
+    }
+    const pct = pop * 100;
+    setPopPct(pct);
+    if (pct >= 65) setPopVerdict('GOOD');
+    else if (pct >= 45) setPopVerdict('NEUTRAL');
+    else setPopVerdict('RISKY');
+  };
+
+  useEffect(() => {
+    recomputePop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payoffData, assumedVolPct, daysToExpiry, spot]);
+
   // Get P&L at different spot prices
   const getPnLAtSpots = () => {
     if (!payoffData.length) return [];
@@ -540,6 +760,8 @@ const StrategyBuilder: React.FC = () => {
             type: leg.type,
             option_type: leg.option_type,
             strike: leg.strike,
+            strike_type: leg.strike_type || 'ABSOLUTE',
+            strike_offset: leg.strike_offset || 0,
             // Persist actual quantity to match execution/backtest expectations
             quantity: Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE,
             premium: leg.premium,
@@ -605,6 +827,8 @@ const StrategyBuilder: React.FC = () => {
         type: leg.type,
         option_type: leg.option_type,
         strike: leg.strike,
+        strike_type: leg.strike_type || 'ABSOLUTE',
+        strike_offset: leg.strike_offset || 0,
         // Backend stores actual quantity; UI uses lots.
         quantity: (() => {
           const q = Number(leg.quantity);
@@ -735,6 +959,10 @@ const StrategyBuilder: React.FC = () => {
                 <option value="BULL_PUT">Bull Put Spread</option>
                 <option value="BEAR_CALL">Bear Call Spread</option>
                 <option value="IRON_CONDOR">Iron Condor</option>
+                <option value="BULL_CALL">Bull Call Spread</option>
+                <option value="BEAR_PUT">Bear Put Spread</option>
+                <option value="SHORT_STRANGLE">Short Strangle</option>
+                <option value="LONG_STRADDLE">Long Straddle</option>
               </select>
               <button
                 onClick={() => buildTemplateLegs(template)}
@@ -827,13 +1055,21 @@ const StrategyBuilder: React.FC = () => {
             {loading ? 'Calculating...' : 'Calculate Greeks'}
           </button>
 
-          {/* Legs List */}
+          {/* Legs List (Drag & Drop to reorder) */}
           <div className="space-y-3 flex-1 overflow-y-auto">
             {legs.length === 0 ? (
               <p className="text-slate-400 text-sm text-center py-8">No legs added yet</p>
             ) : (
-              legs.map(leg => (
-                <div key={leg.id} className="bg-slate-800 border border-slate-700 rounded p-3 space-y-2">
+              legs.map((leg, idx) => (
+                <div
+                  key={leg.id}
+                  className="bg-slate-800 border border-slate-700 rounded p-3 space-y-2"
+                  draggable
+                  onDragStart={() => handleDragStart(idx)}
+                  onDragOver={handleDragOver}
+                  onDrop={() => handleDrop(idx)}
+                  title="Drag to reorder"
+                >
                   <div className="flex justify-between items-center">
                     <div className="flex gap-2">
                       <select
@@ -865,17 +1101,80 @@ const StrategyBuilder: React.FC = () => {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs text-slate-400">Strike</label>
-                      <input
-                        type="number"
-                        value={leg.strike}
-                        onChange={(e) => updateLeg(leg.id, 'strike', Number(e.target.value))}
-                        className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
-                        aria-label="Strike"
-                      />
+                  {/* Strike Mode Toggle */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-slate-400">Strike Mode</label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => updateLeg(leg.id, 'strike_type', 'ABSOLUTE')}
+                        className={`flex-1 px-2 py-1 text-xs rounded transition ${
+                          (leg.strike_type || 'ABSOLUTE') === 'ABSOLUTE'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        }`}
+                        title="Use fixed strike price"
+                      >
+                        Absolute
+                      </button>
+                      <button
+                        onClick={() => updateLeg(leg.id, 'strike_type', 'RELATIVE')}
+                        className={`flex-1 px-2 py-1 text-xs rounded transition ${
+                          leg.strike_type === 'RELATIVE'
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                        }`}
+                        title="Use offset from ATM (dynamic)"
+                      >
+                        Relative
+                      </button>
                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {leg.strike_type === 'RELATIVE' ? (
+                      <>
+                        <div>
+                          <label className="text-xs text-slate-400">
+                            Offset from ATM
+                            <span className="ml-1 text-slate-500">(ATM: {Math.round(atm / 50) * 50})</span>
+                          </label>
+                          <input
+                            type="number"
+                            value={leg.strike_offset || 0}
+                            onChange={(e) => updateLeg(leg.id, 'strike_offset', Number(e.target.value))}
+                            step={50}
+                            className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                            aria-label="Strike offset"
+                            placeholder="e.g., 0, +100, -200"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-400">
+                            Calculated Strike
+                          </label>
+                          <input
+                            type="number"
+                            value={leg.strike}
+                            disabled
+                            className="w-full px-2 py-1 bg-slate-900 border border-slate-600 rounded text-slate-400 text-xs cursor-not-allowed"
+                            aria-label="Calculated strike"
+                            title="Auto-calculated from ATM + Offset"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <label className="text-xs text-slate-400">Strike</label>
+                        <input
+                          type="number"
+                          value={leg.strike}
+                          onChange={(e) => updateLeg(leg.id, 'strike', Number(e.target.value))}
+                          step={50}
+                          className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
+                          aria-label="Strike"
+                        />
+                      </div>
+                    )}
                     <div>
                       <label className="text-xs text-slate-400">Lots (1 lot = {NIFTY_LOT_SIZE})</label>
                       <input
@@ -1063,6 +1362,8 @@ const StrategyBuilder: React.FC = () => {
                   </div>
                 ) : null;
               })()}
+
+              {/* POP disabled: hidden to avoid misleading results */}
 
               {/* P&L Table */}
               {(() => {

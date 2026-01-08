@@ -6,7 +6,6 @@ import { settingsAPI } from '../lib/api';
 const Settings: React.FC = () => {
   const { capital, setCapital } = useTradeStore();
   const [settings, setSettings] = useState({
-    capital,
     riskPerTrade: 2,
     maxDailyLoss: 2,
     maxTrades: 3,
@@ -56,13 +55,28 @@ const Settings: React.FC = () => {
     console.log('Settings component mounted - loading Zerodha settings');
     loadZerodhaSettings();
     loadNotificationSettings();
-    // Refresh every second to sync with backend
+    loadTradingSettings();
+    // Refresh every 5 seconds to sync with backend
     const interval = setInterval(() => {
       loadZerodhaSettings();
       loadNotificationSettings();
-    }, 1000);
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  const loadTradingSettings = async () => {
+    try {
+      const response = await settingsAPI.getTradingSettings();
+      const data = response.data || response;
+      setSettings(prev => ({
+        ...prev,
+        riskPerTrade: data.risk_per_trade || 2,
+        maxTrades: data.max_trades_per_day || 3,
+      }));
+    } catch (error) {
+      console.error('Error loading trading settings:', error);
+    }
+  };
 
   const loadZerodhaSettings = async () => {
     try {
@@ -103,10 +117,18 @@ const Settings: React.FC = () => {
     setSettings({ ...settings, [key]: value });
   };
 
-  const handleSave = () => {
-    setCapital(settings.capital);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSave = async () => {
+    try {
+      await settingsAPI.saveTradingSettings({
+        risk_per_trade: settings.riskPerTrade,
+        max_trades_per_day: settings.maxTrades,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error: any) {
+      console.error('Error saving settings:', error);
+      alert(error.response?.data?.detail || 'Error saving settings');
+    }
   };
 
   const handleSaveZerodhaCredentials = async () => {
@@ -213,14 +235,37 @@ const Settings: React.FC = () => {
 
       {/* Trading Settings */}
       <SettingsCard title="Trading Configuration">
-        <SettingItem label="Capital (₹)" type="number" value={settings.capital} onChange={(val) => handleChange('capital', val)} />
-        <SettingItem label="Risk Per Trade (%)" type="number" value={settings.riskPerTrade} onChange={(val) => handleChange('riskPerTrade', val)} min="0.5" max="5" step="0.5" />
+        <SettingItem label="Risk Per Trade (%)" type="number" value={settings.riskPerTrade} onChange={(val) => handleChange('riskPerTrade', val)} min="0.5" max="10" step="0.5" />
         <SettingItem label="Max Daily Loss (%)" type="number" value={settings.maxDailyLoss} onChange={(val) => handleChange('maxDailyLoss', val)} min="1" max="10" step="0.5" />
-        <SettingItem label="Max Daily Trades" type="number" value={settings.maxTrades} onChange={(val) => handleChange('maxTrades', val)} min="1" max="10" />
+        <div className="space-y-2">
+          <SettingItem label="Max Daily Trades" type="number" value={settings.maxTrades} onChange={(val) => handleChange('maxTrades', val)} min="1" max="20" />
+          <div className="mt-2 p-3 bg-blue-900 bg-opacity-30 border border-blue-700 rounded text-sm text-blue-200">
+            <strong>💡 Tip:</strong> In {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? <span className="text-blue-100">Dry Run mode</span> : <span className="text-orange-100">Live mode</span>}, set this higher to test more strategies.
+            {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' && ' Recommended: 10-20 trades for testing.'}
+            {zerodhaStatus.execution_mode === 'ZERODHA_LIVE' && ' Recommended: 2-5 trades for live trading.'}
+          </div>
+        </div>
       </SettingsCard>
 
       {/* Execution Settings */}
-      <SettingsCard title="Execution">
+      <SettingsCard title="Execution Mode">
+        <div className="p-4 bg-slate-800 rounded-lg border border-slate-700 mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-slate-300 font-medium">Current Mode:</span>
+            <div className={`px-4 py-2 rounded-full font-semibold text-sm ${
+              zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN'
+                ? 'bg-green-600 text-white'
+                : 'bg-red-600 text-white'
+            }`}>
+              {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? '🟢 Dry Run (Paper)' : '🔴 Live'}
+            </div>
+          </div>
+          <p className="text-sm text-slate-400">
+            {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN'
+              ? 'Testing mode - No real money at risk. Perfect for increasing Max Daily Trades.'
+              : 'Live mode - Real trades with actual funds. Use conservative trade limits.'}
+          </p>
+        </div>
         <ToggleSetting label="Auto Exit on TP/SL" value={settings.autoExit} onChange={(val) => handleChange('autoExit', val)} />
       </SettingsCard>
 
@@ -229,6 +274,23 @@ const Settings: React.FC = () => {
         <ToggleSetting label="Trade Notifications" value={settings.notifications} onChange={(val) => handleChange('notifications', val)} />
         <ToggleSetting label="Email Alerts" value={true} onChange={() => {}} disabled />
       </SettingsCard>
+
+      {/* Save Button for Trading Settings */}
+      <div className="flex gap-3">
+        <button
+          onClick={handleSave}
+          className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+        >
+          <Save className="w-5 h-5" />
+          Save Trading Settings
+        </button>
+        {saved && (
+          <div className="flex items-center gap-2 px-4 py-3 bg-green-900 text-green-200 rounded-lg">
+            <CheckCircle className="w-5 h-5" />
+            Settings saved!
+          </div>
+        )}
+      </div>
 
       {/* Gmail Notification Settings */}
       <SettingsCard title="Email Notifications (Gmail)">
@@ -593,11 +655,23 @@ const Settings: React.FC = () => {
         <div className="space-y-3">
           <div className="flex justify-between items-center">
             <span className="text-slate-300">Account Type</span>
-            <span className="font-medium text-white">Paper Trading</span>
+            <span className="font-medium text-white">
+              {zerodhaStatus.execution_mode === 'ZERODHA_LIVE' && 'Zerodha Live'}
+              {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' && 'Zerodha Dry Run'}
+              {zerodhaStatus.execution_mode === 'PAPER_TRADING' && 'Paper Trading'}
+            </span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-slate-300">Status</span>
-            <span className="font-medium text-green-400">Active</span>
+            <span className={`font-medium ${
+              zerodhaStatus.execution_mode === 'ZERODHA_LIVE' ? 'text-red-400' :
+              zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? 'text-yellow-400' :
+              'text-green-400'
+            }`}>
+              {zerodhaStatus.execution_mode === 'ZERODHA_LIVE' && '⚠️ Live Trading'}
+              {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' && 'Simulated'}
+              {zerodhaStatus.execution_mode === 'PAPER_TRADING' && 'Active'}
+            </span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-slate-300">Joined</span>

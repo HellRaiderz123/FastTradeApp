@@ -48,6 +48,11 @@ class GmailSettings(BaseModel):
 class GmailToggle(BaseModel):
     enabled: bool
 
+class TradingSettings(BaseModel):
+
+    risk_per_trade: float
+    max_trades_per_day: int
+
 
 def get_env_value(key: str) -> str:
     """Get environment variable value"""
@@ -155,6 +160,7 @@ def generate_zerodha_token(request_body: ZerodhaRequestToken):
         
         access_token = session_data.get("access_token")
         
+        
         if not access_token:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -253,6 +259,53 @@ def set_execution_mode(mode: str):
             detail=f"Error setting execution mode: {str(e)}"
         )
 
+@router.get("/trading")
+def get_trading_settings():
+    """Get current trading settings (risk per trade, max trades per day)"""
+    risk_per_trade = float(get_env_value("RISK_PER_TRADE") or "2.0")
+    max_trades_per_day = int(get_env_value("MAX_TRADES_PER_DAY") or "3")
+    
+    return {
+        "risk_per_trade": risk_per_trade,
+        "max_trades_per_day": max_trades_per_day
+    }
+
+
+@router.post("/trading")
+def save_trading_settings(settings: TradingSettings):
+    """Save trading settings to .env"""
+    try:
+        if settings.risk_per_trade < 0.5 or settings.risk_per_trade > 10:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Risk per trade must be between 0.5% and 10%"
+            )
+        
+        if settings.max_trades_per_day < 1 or settings.max_trades_per_day > 20:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Max trades per day must be between 1 and 20"
+            )
+        
+        set_key(str(ENV_FILE), "RISK_PER_TRADE", str(settings.risk_per_trade))
+        set_key(str(ENV_FILE), "MAX_TRADES_PER_DAY", str(settings.max_trades_per_day))
+        
+        os.environ["RISK_PER_TRADE"] = str(settings.risk_per_trade)
+        os.environ["MAX_TRADES_PER_DAY"] = str(settings.max_trades_per_day)
+        
+        logger.info(f"Trading settings updated: risk={settings.risk_per_trade}%, max_trades={settings.max_trades_per_day}")
+        return {
+            "status": "success",
+            "message": "Trading settings saved successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving trading settings: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error saving trading settings: {str(e)}"
+        )
 
 @router.get("/notifications")
 def get_notification_settings():

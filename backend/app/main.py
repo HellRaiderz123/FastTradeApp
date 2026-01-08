@@ -24,6 +24,7 @@ from app.api.routes import health
 from app.core.market.scheduler import (
     start_candle_scheduler,
     start_vix_scheduler,
+    start_auto_exit_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -61,7 +62,8 @@ async def lifespan(app: FastAPI):
         initialize_vix_data()
         start_candle_scheduler()
         start_vix_scheduler()
-        logger.info("✅ Schedulers started for live data updates")
+        start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
+        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
     

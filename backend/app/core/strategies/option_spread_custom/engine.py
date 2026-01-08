@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional
@@ -8,13 +9,17 @@ from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 from app.db.session import SessionLocal
 from app.db.repository import save_strategy_run
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class _Leg:
     side: str  # BUY/SELL
     option_type: str  # CE/PE
-    strike: int
+    strike: int  # Absolute strike (used when strike_type="ABSOLUTE")
     quantity: int
+    strike_type: str = "ABSOLUTE"  # "ABSOLUTE" or "RELATIVE"
+    strike_offset: int = 0  # Offset from ATM (used when strike_type="RELATIVE")
 
 
 def _infer_strategy_name(legs: List[_Leg]) -> str:
@@ -49,8 +54,17 @@ def _extract_legs(parameters: Dict[str, Any]) -> List[_Leg]:
         try:
             side = str(item.get("type") or item.get("side") or "").upper()
             option_type = str(item.get("option_type") or item.get("type") or "").upper()
-            strike = int(item.get("strike"))
+            strike_type = str(item.get("strike_type", "ABSOLUTE")).upper()
             quantity = int(item.get("quantity") or 0)
+            
+            # Handle strike based on strike_type
+            if strike_type == "RELATIVE":
+                strike = 0  # Will be calculated later from ATM
+                strike_offset = int(item.get("strike_offset", 0))
+            else:
+                strike = int(item.get("strike", 0))
+                strike_offset = 0
+                
         except Exception:
             continue
 
@@ -60,10 +74,48 @@ def _extract_legs(parameters: Dict[str, Any]) -> List[_Leg]:
             continue
         if quantity <= 0:
             quantity = 1
+        if strike_type not in {"ABSOLUTE", "RELATIVE"}:
+            strike_type = "ABSOLUTE"
 
-        legs.append(_Leg(side=side, option_type=option_type, strike=strike, quantity=quantity))
+        legs.append(_Leg(
+            side=side, 
+            option_type=option_type, 
+            strike=strike, 
+            quantity=quantity,
+            strike_type=strike_type,
+            strike_offset=strike_offset
+        ))
 
     return legs
+
+
+def _resolve_strikes(legs: List[_Leg], underlying: str, spot: float) -> List[_Leg]:
+    """Convert relative strikes to absolute strikes based on ATM.
+    
+    Returns new list of legs with absolute strikes calculated.
+    """
+    from app.services.market_data import pick_atm_strike
+    
+    atm = pick_atm_strike(underlying, spot)
+    resolved_legs: List[_Leg] = []
+    
+    for leg in legs:
+        if leg.strike_type == "RELATIVE":
+            # Calculate absolute strike from ATM + offset
+            absolute_strike = atm + leg.strike_offset
+            resolved_legs.append(_Leg(
+                side=leg.side,
+                option_type=leg.option_type,
+                strike=absolute_strike,
+                quantity=leg.quantity,
+                strike_type="ABSOLUTE",
+                strike_offset=leg.strike_offset
+            ))
+        else:
+            # Already absolute
+            resolved_legs.append(leg)
+    
+    return resolved_legs
 
 
 def _derive_lots_and_lot_size(legs: List[_Leg]) -> tuple[int, int]:
@@ -142,6 +194,15 @@ class OptionSpreadCustom:
                 "signal": {},
                 "context": {"underlying": underlying, "expiry": expiry_str},
             }
+
+        # Resolve relative strikes to absolute strikes
+        from app.services.market_data import get_spot
+        has_relative = any(leg.strike_type == "RELATIVE" for leg in legs)
+        
+        if has_relative:
+            spot = get_spot(underlying)
+            legs = _resolve_strikes(legs, underlying, spot)
+            logger.info(f"✅ Resolved relative strikes for {underlying} @ spot={spot}")
 
         lots, lot_size = _derive_lots_and_lot_size(legs)
         strategy_name = _infer_strategy_name(legs)

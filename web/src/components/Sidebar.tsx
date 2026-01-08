@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart } from 'lucide-react';
+import { settingsAPI } from '../lib/api';
 
 interface SidebarProps {
   open: boolean;
@@ -8,6 +9,31 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ open }) => {
   const location = useLocation();
+  const [executionMode, setExecutionMode] = useState('PAPER_TRADING');
+
+  useEffect(() => {
+    loadExecutionMode();
+    const interval = setInterval(loadExecutionMode, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadExecutionMode = async () => {
+    try {
+      const response = await settingsAPI.getZerodhaSettings();
+      const data = response.data || response;
+      setExecutionMode(data.execution_mode || 'PAPER_TRADING');
+    } catch (error) {
+      console.error('Error loading execution mode:', error);
+    }
+  };
+
+  const getModeDisplay = () => {
+    if (executionMode === 'ZERODHA_LIVE') return { text: 'Live Trading', color: 'text-red-400', bg: 'bg-red-500' };
+    if (executionMode === 'ZERODHA_DRY_RUN') return { text: 'Dry Run', color: 'text-yellow-400', bg: 'bg-yellow-500' };
+    return { text: 'Paper Trading', color: 'text-green-400', bg: 'bg-green-500' };
+  };
+
+  const modeDisplay = getModeDisplay();
 
   const menuItems = [
     { path: '/', icon: TrendingUp, label: 'Dashboard' },
@@ -67,11 +93,11 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
         <div className="card-glass p-4 text-center">
           {open ? (
             <div>
-              <p className="text-xs text-slate-400 mb-2">Paper Trading</p>
-              <p className="text-sm font-bold text-green-400">Live & Ready</p>
+              <p className="text-xs text-slate-400 mb-2">{modeDisplay.text}</p>
+              <p className={`text-sm font-bold ${modeDisplay.color}`}>Live & Ready</p>
             </div>
           ) : (
-            <div className="w-8 h-8 bg-green-500 rounded-full mx-auto"></div>
+            <div className={`w-8 h-8 ${modeDisplay.bg} rounded-full mx-auto`}></div>
           )}
         </div>
       </div>

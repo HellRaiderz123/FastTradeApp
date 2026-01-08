@@ -196,6 +196,13 @@ export const settingsAPI = {
   setExecutionMode: (mode: string) =>
     api.post(`/settings/execution-mode`, {}, { params: { mode } }),
 
+  // Trading settings
+  getTradingSettings: () =>
+    api.get('/settings/trading'),
+
+  saveTradingSettings: (data: { risk_per_trade: number; max_trades_per_day: number }) =>
+    api.post('/settings/trading', data),
+
   // Notification settings (Gmail)
   getNotificationSettings: () =>
     api.get('/settings/notifications'),

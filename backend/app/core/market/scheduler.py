@@ -6,6 +6,7 @@ from app.core.market.zerodha_historic_fetcher import (
     fetch_and_store_daily_vix,
     initialize_vix_historic_data,
 )
+from app.core.exit.auto_exit import run_auto_exit
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,19 @@ def _update_daily_vix():
             logger.warning("⚠️ Daily VIX update partially failed")
     except Exception:
         logger.exception("❌ Daily VIX update failed")
+    finally:
+        db.close()
+
+
+def _auto_exit_check():
+    """Check TP/SL/Trailing stops and auto-exit positions."""
+    db = SessionLocal()
+    try:
+        exited = run_auto_exit(db)
+        if exited:
+            logger.info(f"🚪 Auto-exited {len(exited)} position(s): {exited}")
+    except Exception:
+        logger.exception("❌ Auto-exit check failed")
     finally:
         db.close()
 
@@ -106,6 +120,27 @@ def initialize_vix_data():
         return False
     finally:
         db.close()
+
+
+def start_auto_exit_scheduler():
+    """Start TP/SL/Trailing stop monitoring (runs every 10 seconds during market hours 9:15 AM - 3:30 PM)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start auto-exit scheduler: main scheduler not running")
+        return
+    
+    # Run every 10 seconds, but only during market hours (9:15 AM - 3:30 PM IST)
+    scheduler.add_job(
+        func=_auto_exit_check,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",  # 9 AM to 3 PM
+        second="*/10",  # Every 10 seconds
+        id="auto_exit_job",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
+    logger.info("🟢 Auto-exit scheduler started (every 10 seconds, market hours only)")
 
 
 def stop_scheduler():

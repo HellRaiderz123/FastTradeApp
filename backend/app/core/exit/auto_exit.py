@@ -44,12 +44,31 @@ def run_auto_exit(db: Session):
 
     for intent in intents:
         reason = None
+        current_pnl = intent.pnl
 
-        if intent.tp is not None and intent.pnl >= intent.tp: # type: ignore
+        # Update max unrealized PnL (track highest profit)
+        max_pnl = getattr(intent, 'max_unrealized_pnl', None) or 0.0
+        if current_pnl > max_pnl:
+            intent.max_unrealized_pnl = current_pnl  # type: ignore
+            max_pnl = current_pnl
+
+        # Check TP
+        if intent.tp is not None and current_pnl >= intent.tp: # type: ignore
             reason = "TP_HIT"
 
-        elif intent.sl is not None and intent.pnl <= intent.sl: # type: ignore
+        # Check SL
+        elif intent.sl is not None and current_pnl <= intent.sl: # type: ignore
             reason = "SL_HIT"
+
+        # Check trailing stop only if trailing_sl_pct is configured
+        # (50% retracement from peak profit when enabled)
+        elif (
+            intent.trailing_sl_pct is not None  # type: ignore
+            and intent.trailing_sl_pct > 0  # Only if explicitly enabled
+            and max_pnl > 0
+            and current_pnl < (max_pnl * (1 - intent.trailing_sl_pct / 100))  # type: ignore
+        ):
+            reason = "TRAILING_SL_HIT"
 
         if not reason:
             continue
@@ -77,6 +96,12 @@ def run_auto_exit(db: Session):
                 )
             elif reason == "SL_HIT":
                 notifications.notify_sl_hit(
+                    strategy_name=intent.strategy or intent.underlying or "Strategy",
+                    pnl=final_pnl,
+                    pnl_pct=(final_pnl / (intent.entry_credit or 1)) * 100 if intent.entry_credit else 0.0,
+                )
+            elif reason == "TRAILING_SL_HIT":
+                notifications.notify_trailing_sl_hit(
                     strategy_name=intent.strategy or intent.underlying or "Strategy",
                     pnl=final_pnl,
                     pnl_pct=(final_pnl / (intent.entry_credit or 1)) * 100 if intent.entry_credit else 0.0,

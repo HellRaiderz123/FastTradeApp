@@ -8,19 +8,63 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load credentials
-os.environ["ZERODHA_API_KEY"] = "el4pv3dwria188j9"
-os.environ["ZERODHA_ACCESS_TOKEN"] = "ZJpem2D1TftS74vXWFSI3cOuaa9uQOa8"
-os.environ["EXECUTION_MODE"] = "ZERODHA_DRY_RUN"
+# Load credentials from backend/.env if present (avoid hardcoding)
+from pathlib import Path
+from dotenv import load_dotenv
+
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path, override=False)
+
+# Ensure execution mode allows Zerodha calls if creds exist
+os.environ.setdefault("EXECUTION_MODE", "ZERODHA_DRY_RUN")
 
 print("\n" + "="*100)
 print("TESTING IMPACT OF VIX/IV ON STRATEGY DECISIONS")
 print("="*100)
 
+from datetime import datetime, timedelta
+
 from app.core.strategies.option_spread_15m.engine import run_option_spread
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, engine
+from app.db.models import Base
+from app.db.models_candles import Candle15m
+
+Base.metadata.create_all(bind=engine)
+
+
+def seed_candles(db):
+    """Seed minimal 15m candles so TA has data."""
+    existing = (
+        db.query(Candle15m)
+        .filter(Candle15m.symbol == "NIFTY")
+        .count()
+    )
+    if existing >= 120:
+        return
+
+    now = datetime.utcnow()
+    candles = []
+    for i in range(120):  # 120 × 15m = 30 hours of data
+        ts = now - timedelta(minutes=15 * (120 - i))
+        base = 20000 + i * 2
+        candles.append(
+            Candle15m(
+                symbol="NIFTY",
+                timestamp=ts,
+                open=base,
+                high=base + 5,
+                low=base - 5,
+                close=base + 1,
+                volume=100000 + i * 100,
+            )
+        )
+
+    db.bulk_save_objects(candles)
+    db.commit()
+
 
 db = SessionLocal()
+seed_candles(db)
 
 # Scenario 1: LOW IV (current market)
 print("\n[SCENARIO 1] LOW IV Environment (VIX=10.1, IV_Rank=7.26)")
@@ -64,7 +108,7 @@ try:
     signal_high_iv = generate_signal(
         db=db,
         symbol="NIFTY",
-        iv_rank=85.0,
+        vix_rank=85.0,
         india_vix=35.0,
         iv_regime="HIGH"
     )
@@ -93,7 +137,7 @@ try:
     signal_normal_iv = generate_signal(
         db=db,
         symbol="NIFTY",
-        iv_rank=50.0,
+        vix_rank=50.0,
         india_vix=20.0,
         iv_regime="NORMAL"
     )

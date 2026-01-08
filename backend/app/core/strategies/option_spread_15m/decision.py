@@ -44,17 +44,17 @@ def decide_strategy(
     take_bull = bias == "BULLISH"
     take_bear = bias == "BEARISH"
 
+    # Confidence thresholds tuned by IV regime (allow low-IV trades but keep guardrails)
+    spread_min_conf = min_confidence
+    if iv_regime == "LOW":
+        spread_min_conf = max(55, min_confidence - 10)
+    elif iv_regime == "NORMAL":
+        spread_min_conf = max(60, min_confidence - 5)
+
     # =================================================
     # TRENDING MARKET → DIRECTIONAL CREDIT SPREADS
     # =================================================
     if market_mode == "TRENDING":
-
-        # Lower confidence needed for LOW IV (spreads are appropriate)
-        # HIGH IV is actually better for spreads (higher premiums)
-        if iv_regime == "LOW":
-            spread_min_conf = 65
-        else:
-            spread_min_conf = min_confidence
 
         if confidence >= spread_min_conf:
             if take_bull:
@@ -74,10 +74,15 @@ def decide_strategy(
         return "NO_TRADE", "Range market + high IV but insufficient quality"
 
     # =================================================
-    # NEUTRAL/LOW IV + RANGE → NO TRADE (wait for trend)
+    # NEUTRAL/LOW IV + RANGE: allow directional only when bias+confidence are clear
     # =================================================
     if market_mode == "RANGE" and iv_regime in ["LOW", "NORMAL"]:
-        return "NO_TRADE", "Range market with low IV → Unfavorable for spreads"
+        if confidence >= spread_min_conf:
+            if take_bull:
+                return "BULL_PUT", f"Range but bullish bias; low/normal IV (conf={confidence:.0f}%, quality={quality_score}/8)"
+            if take_bear:
+                return "BEAR_CALL", f"Range but bearish bias; low/normal IV (conf={confidence:.0f}%, quality={quality_score}/8)"
+        return "NO_TRADE", "Range + low/normal IV without strong bias/confidence"
 
     # =================================================
     # FALLBACK

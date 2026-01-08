@@ -101,14 +101,25 @@ def create_intent(
         risk_percentage=risk_pct,
     )
 
+    # Extract expiry from context (if available)
+    expiry = None
+    if run.context and isinstance(run.context, dict):
+        expiry = run.context.get("expiry")
+
+    # Extract trailing_sl_pct from strategy configuration (if available)
+    # Note: StrategyRun doesn't have strategy_config relationship, so we safely default to None
+    trailing_sl_pct = None
+
     intent = create_execution_intent(
         db=db,
         run_id=cast(int, run.id),
         strategy=str(run.strategy),
         underlying=str(run.underlying),
         ticket=run.ticket,
+        expiry=expiry,
         tp=tp_sl["tp"],     # Dynamic TP
         sl=tp_sl["sl"],     # Dynamic SL
+        trailing_sl_pct=trailing_sl_pct,  # Will be None unless strategy explicitly sets it
     )
 
     return {

@@ -13,6 +13,9 @@ def check_daily_trade_limit(
     """
     Check if daily trade limit has been exceeded.
     
+    Only counts successfully executed trades (executed=True).
+    Failed or pending intents are not counted towards the limit.
+    
     Args:
         db: Database session
         risk_config: RiskLimits configuration (uses default if None)
@@ -29,6 +32,7 @@ def check_daily_trade_limit(
         db.query(ExecutionIntent)
         .filter(
             ExecutionIntent.created_at >= today,
+            ExecutionIntent.executed == True,  # Only count successful executions
         )
         .count()
     )

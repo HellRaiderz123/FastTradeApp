@@ -39,7 +39,7 @@ def execute_paper(
     try:
         kite = get_kite_client()
         margins = kite.margins()
-        capital = margins["equity"]["available"]
+        capital = margins["equity"]["available"]["live_balance"]
     except Exception:
         # Fallback to hardcoded value if API fails
         capital = 100000
@@ -130,6 +130,19 @@ def execute_paper(
     if entry_credit is None:
         entry_credit = compute_entry_credit_total(intent.ticket)
     intent.entry_credit = entry_credit # pyright: ignore[reportAttributeAccessIssue]
+    
+    # Store margin requirement from Zerodha response
+    margin_required = result.get("margin_required")
+    if margin_required is not None:
+        intent.margin_required = margin_required # pyright: ignore[reportAttributeAccessIssue]
+
+    # Persist leg prices captured during execution (JSON mutation may not auto-persist)
+    try:
+        ticket = intent.ticket or {}
+        intent.ticket = dict(ticket)  # reassign to mark JSON field dirty
+    except Exception:
+        pass
+    
     intent.last_mtm_at = now_ist() # type: ignore
     
 

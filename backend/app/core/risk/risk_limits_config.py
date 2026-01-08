@@ -4,7 +4,7 @@ risk_limits_config.py
 Configurable risk limits system.
 Allows different traders/strategies to have different risk parameters.
 """
-
+import os 
 from typing import Dict, Optional
 from dataclasses import dataclass, field, asdict
 
@@ -14,8 +14,8 @@ class RiskLimits:
     """Risk limits configuration for a trade session."""
     
     # Portfolio-level limits
-    max_portfolio_loss_pct: float = 3.0  # Max % of capital that can be lost
-    max_trades_per_day: int = 3          # Max number of trades per day
+    max_portfolio_loss_pct: float = field(default_factory=lambda: float(os.getenv("RISK_PER_TRADE", "2.0")))  # Max % of capital that can be lost per trade
+    max_trades_per_day: int = field(default_factory=lambda: int(os.getenv("MAX_TRADES_PER_DAY", "3")))  # Max number of trades per day
     
     # IV-regime specific limits
     iv_regime_limits: Dict[str, Dict[str, float]] = field(
@@ -88,6 +88,7 @@ def get_risk_limits(
 ) -> RiskLimits:
     """
     Get risk limits by profile name or custom configuration.
+    Reads MAX_TRADES_PER_DAY from environment dynamically.
     
     Args:
         profile: One of 'conservative', 'balanced', 'aggressive'
@@ -99,19 +100,32 @@ def get_risk_limits(
     if custom_limits:
         return custom_limits
     
+    # Read current env values dynamically (not at startup)
+    max_trades = int(os.getenv("MAX_TRADES_PER_DAY", "3"))
+    risk_per_trade = float(os.getenv("RISK_PER_TRADE", "2.0"))
+    
     if not profile:
-        return RiskProfile.BALANCED  # Default
+        # Default BALANCED with dynamic trade limit
+        limits = RiskProfile.BALANCED
+        limits.max_trades_per_day = max_trades
+        limits.max_portfolio_loss_pct = risk_per_trade
+        return limits
     
     profile_lower = profile.lower()
     
     if profile_lower == "conservative":
-        return RiskProfile.CONSERVATIVE
+        limits = RiskProfile.CONSERVATIVE
     elif profile_lower == "balanced":
-        return RiskProfile.BALANCED
+        limits = RiskProfile.BALANCED
     elif profile_lower == "aggressive":
-        return RiskProfile.AGGRESSIVE
+        limits = RiskProfile.AGGRESSIVE
     else:
-        return RiskProfile.BALANCED
+        limits = RiskProfile.BALANCED
+    
+    # Override with current env settings
+    limits.max_trades_per_day = max_trades
+    limits.max_portfolio_loss_pct = risk_per_trade
+    return limits
 
 
 # Default (backward compatible)

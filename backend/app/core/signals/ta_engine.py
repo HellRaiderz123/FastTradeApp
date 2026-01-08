@@ -8,6 +8,29 @@ from app.db.models_candles import Candle15m
 logger = logging.getLogger(__name__)
 
 
+def _drop_price_anomalies(df: pd.DataFrame, gap_threshold: float = 0.05):
+    """Remove obvious bad candles where close-to-close gap exceeds threshold.
+
+    Large gaps (e.g., bad feed spikes) inflate ATR and suppress ADX.
+    Returns the cleaned dataframe, number of rows dropped, and first bad index.
+    """
+    gap = df["close"].pct_change().abs()
+    bad_mask = gap > gap_threshold
+    dropped = int(bad_mask.sum())
+    if dropped == 0:
+        return df, 0, None
+
+    first_bad_idx = int(bad_mask.idxmax()) if bad_mask.any() else None
+    logger.warning(
+        "TA CLEANUP | dropping %d candles due to close gap > %.1f%% | first_bad_idx=%s",
+        dropped,
+        gap_threshold * 100,
+        first_bad_idx,
+    )
+    cleaned = df.loc[~bad_mask].reset_index(drop=True)
+    return cleaned, dropped, first_bad_idx
+
+
 def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     if len(df) < 100:
         return {
@@ -26,6 +49,21 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     # BUILD DATAFRAME WITH ALL INDICATORS
     # ================================================================
     df = df.copy()
+
+    # Remove obvious price anomalies (e.g., feed spikes >5% gap)
+    df, dropped, first_bad = _drop_price_anomalies(df, gap_threshold=0.05)
+    if len(df) < 100:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": f"Not enough candles after cleanup (dropped {dropped})",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+        }
 
     # ================================================================
     # TREND INDICATORS
@@ -115,7 +153,9 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     # ================================================================
     trend_score = min(100, max(0, (float(last["adx"]) - 10) * 4))  # 10-25 → 0-60
     momentum_score = abs(float(last["rsi"]) - 50) * 2  # 0-100
-    readiness_score = int((quality_score * 10) + (trend_score * 0.3) + (momentum_score * 0.1))
+    # Avoid NaN/inf propagating into readiness score
+    readiness_score = (quality_score * 10) + (trend_score * 0.3) + (momentum_score * 0.1)
+    readiness_score = int(np.nan_to_num(readiness_score, nan=0.0, posinf=0.0, neginf=0.0))
     readiness_score = min(100, readiness_score)
 
     # ================================================================
@@ -244,7 +284,21 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
             for c in reversed(candles)
         ]
     )
-    return _ta_signal_15m_from_df(df)
+
+    result = _ta_signal_15m_from_df(df)
+
+    # Attach diagnostics so UI/logs can validate freshness
+    try:
+        last_ts = candles[0].timestamp if candles else None
+        result["diagnostics"] = {
+            "candle_count": len(candles),
+            "last_candle_ts": last_ts.isoformat() if last_ts else None,
+            "last_close": candles[0].close if candles else None,
+        }
+    except Exception:
+        pass
+
+    return result
 
 
 def compute_rsi(series: pd.Series, period: int = 14):
@@ -275,12 +329,31 @@ def compute_rsi(series: pd.Series, period: int = 14):
 
 
 def compute_adx(df: pd.DataFrame, period: int = 14):
-    """ADX (Average Directional Index) - TA-Lib standard with Wilder's smoothing"""
+    """ADX (Average Directional Index).
+
+    Priority: use `ta` library (matches TradingView-style RMA smoothing).
+    Fallback: custom Wilder smoothing implementation.
+    """
+    try:
+        from ta.trend import ADXIndicator  # type: ignore
+
+        indicator = ADXIndicator(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            window=period,
+            fillna=False,
+        )
+        adx_series = indicator.adx()
+        return adx_series.bfill()
+    except Exception:
+        pass
+
+    # Fallback: Wilder smoothing
     high = df["high"].values
     low = df["low"].values
     close = df["close"].values
     
-    # True Range calculation
     tr = np.maximum(
         high[1:] - low[1:],
         np.maximum(
@@ -288,22 +361,16 @@ def compute_adx(df: pd.DataFrame, period: int = 14):
             np.abs(low[1:] - close[:-1])
         )
     )
-    
-    # Up and Down moves
     up_move = high[1:] - high[:-1]
     down_move = low[:-1] - low[1:]
-    
-    # +DM and -DM
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
     minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
     
-    # Wilder's smoothing for ATR
     atr = np.zeros(len(tr))
     atr[period-1] = tr[:period].mean()
     for i in range(period, len(tr)):
         atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
     
-    # Wilder's smoothing for DMs
     plus_dm_smooth = np.zeros(len(plus_dm))
     minus_dm_smooth = np.zeros(len(minus_dm))
     plus_dm_smooth[period-1] = plus_dm[:period].sum()
@@ -313,11 +380,8 @@ def compute_adx(df: pd.DataFrame, period: int = 14):
         plus_dm_smooth[i] = plus_dm_smooth[i-1] - plus_dm_smooth[i-1]/period + plus_dm[i]
         minus_dm_smooth[i] = minus_dm_smooth[i-1] - minus_dm_smooth[i-1]/period + minus_dm[i]
     
-    # +DI and -DI
     plus_di = np.divide(plus_dm_smooth, atr, where=atr!=0, out=np.zeros_like(atr)) * 100
     minus_di = np.divide(minus_dm_smooth, atr, where=atr!=0, out=np.zeros_like(atr)) * 100
-    
-    # DX
     di_sum = plus_di + minus_di
     dx = np.divide(
         np.abs(plus_di - minus_di),
@@ -326,13 +390,11 @@ def compute_adx(df: pd.DataFrame, period: int = 14):
         out=np.zeros_like(di_sum)
     ) * 100
     
-    # ADX with Wilder's smoothing
     adx = np.zeros(len(dx))
     adx[2*period-2] = dx[period-1:2*period-1].mean()
     for i in range(2*period-1, len(dx)):
         adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
     
-    # Prepend NaN for the removed first value and convert to Series
     adx_series = pd.Series([np.nan] + list(adx), index=df.index)
     return adx_series.bfill()
 

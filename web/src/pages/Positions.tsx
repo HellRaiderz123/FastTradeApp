@@ -221,10 +221,13 @@ interface PositionCardProps {
 }
 
 const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) => {
+  const [showLegs, setShowLegs] = React.useState(false);
+  
   const pnl = Number(trade?.pnl ?? trade?.unrealized_pnl ?? 0);
   const tp = trade?.tp !== null && trade?.tp !== undefined ? Number(trade.tp) : null;
   const sl = trade?.sl !== null && trade?.sl !== undefined ? Number(trade.sl) : null;
   const entryCredit = Number(trade?.entry_credit ?? trade?.entry_price ?? 0);
+  const marginRequired = Number(trade?.margin_required ?? 0);
 
   const isProfitable = pnl >= 0;
   const tpHit = tp !== null ? pnl >= tp : false;
@@ -235,7 +238,17 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
 
   // If pnl is computed as (entry_credit - cost_to_close), then cost_to_close = entry_credit - pnl.
   const currentValue = entryCredit - pnl;
-  const pnlPercent = entryCredit !== 0 ? (pnl / Math.abs(entryCredit)) * 100 : null;
+  // Percent metrics
+  const pnlPercentPremium = entryCredit !== 0 ? (pnl / Math.abs(entryCredit)) * 100 : null;
+  const pnlPercentMargin = marginRequired > 0 ? (pnl / marginRequired) * 100 : null;
+  
+  // Extract legs from ticket
+  const legs = trade?.ticket?.legs || [];
+  const legsMetrics = trade?.legs_metrics || [];
+  const mode = trade?.mode || 'UNKNOWN';
+  
+  // Show margin only for Zerodha modes
+  const isZerodhaMode = mode && String(mode).toUpperCase().includes('ZERODHA');
 
   return (
     <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition">
@@ -248,7 +261,9 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
           )}
           <div>
             <p className="font-semibold text-white">{trade.strategy}</p>
-            <p className="text-xs text-slate-400">{trade.underlying} • Opened: {openedAtLabel}</p>
+            <p className="text-xs text-slate-400">
+              {trade.underlying} • {mode} • Opened: {openedAtLabel}
+            </p>
           </div>
         </div>
         <button
@@ -262,11 +277,17 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 py-3 border-t border-b border-slate-700">
+      <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${isZerodhaMode && marginRequired > 0 ? 'grid-cols-2 md:grid-cols-6' : 'grid-cols-2 md:grid-cols-5'}`}>
         <div>
-          <p className="text-xs text-slate-400">Entry</p>
+          <p className="text-xs text-slate-400">Premium {isZerodhaMode ? 'Collected' : ''}</p>
           <p className="font-semibold text-white">₹{entryCredit.toLocaleString()}</p>
         </div>
+        {isZerodhaMode && marginRequired > 0 && (
+          <div>
+            <p className="text-xs text-slate-400">Margin Blocked</p>
+            <p className="font-semibold text-amber-400">₹{marginRequired.toLocaleString()}</p>
+          </div>
+        )}
         <div>
           <p className="text-xs text-slate-400">Current</p>
           <p className="font-semibold text-white">₹{Number.isFinite(currentValue) ? currentValue.toLocaleString() : '-'}</p>
@@ -291,10 +312,76 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
         </div>
       </div>
 
+      {/* Legs Section - Expandable */}
+      {legs.length > 0 && (
+        <div className="mt-3 border-t border-slate-700 pt-3">
+          <button
+            onClick={() => setShowLegs(!showLegs)}
+            className="text-xs text-slate-400 hover:text-slate-300 transition flex items-center gap-2"
+          >
+            <span>{showLegs ? '▼' : '▶'}</span>
+            <span>{legs.length} Leg{legs.length > 1 ? 's' : ''}</span>
+          </button>
+          
+          {showLegs && (
+            <div className="mt-2 space-y-1">
+              {legs.map((leg: any, idx: number) => {
+                const m = Array.isArray(legsMetrics) ? legsMetrics[idx] : undefined;
+                const legPnl = m?.pnl_total ?? null;
+                const legLtp = m?.ltp ?? null;
+                const legEntry = m?.entry ?? leg.price ?? null;
+                const isLegProfit = typeof legPnl === 'number' ? legPnl >= 0 : null;
+                return (
+                  <div key={idx} className="text-xs bg-slate-800/50 p-2 rounded flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <span className={`px-2 py-0.5 rounded ${
+                        leg.side === 'SELL' ? 'bg-red-500/20 text-red-300' : 'bg-green-500/20 text-green-300'
+                      }`}>
+                        {leg.side}
+                      </span>
+                      <span className="text-slate-300 font-mono">
+                        {leg.strike} {leg.type}
+                      </span>
+                      {leg.symbol && (
+                        <span className="text-slate-500 text-[10px]">{leg.symbol}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {typeof legEntry === 'number' ? (
+                        <span className="text-slate-400">Entry ₹{legEntry}</span>
+                      ) : (
+                        <span className="text-slate-600">Entry N/A</span>
+                      )}
+                      {typeof legLtp === 'number' && (
+                        <span className="text-slate-400">LTP ₹{legLtp}</span>
+                      )}
+                      {typeof legPnl === 'number' ? (
+                        <span className={`font-semibold ${isLegProfit ? 'text-green-400' : 'text-red-400'}`}>
+                          P&L ₹{Math.abs(legPnl).toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">P&L N/A</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex justify-between items-center mt-3">
-        <p className={`text-sm font-medium ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
-          {pnlPercent === null ? '-' : `${isProfitable ? '+' : ''}${pnlPercent.toFixed(2)}%`}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className={`text-sm font-medium ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
+            {pnlPercentPremium === null ? '-' : `${isProfitable ? '+' : ''}${pnlPercentPremium.toFixed(2)}%`}
+          </p>
+          {isZerodhaMode && pnlPercentMargin !== null && (
+            <p className="text-xs font-medium text-amber-400">
+              ROM: {`${pnlPercentMargin >= 0 ? '+' : ''}${pnlPercentMargin.toFixed(2)}%`}
+            </p>
+          )}
+        </div>
         <button
           onClick={onClose}
           className="btn-danger py-1 px-3 text-sm"
