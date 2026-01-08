@@ -3,7 +3,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.db.models_intent import ExecutionIntent
-from app.core.risk.risk_limits_config import RiskLimits, DEFAULT_RISK_LIMITS
+from app.core.risk.risk_limits_config import RiskLimits, DEFAULT_RISK_LIMITS, get_risk_limits
 
 
 def check_daily_trade_limit(
@@ -24,7 +24,7 @@ def check_daily_trade_limit(
         True if limit exceeded, False if allowed
     """
     if risk_config is None:
-        risk_config = DEFAULT_RISK_LIMITS
+        risk_config = get_risk_limits()
     
     today = date.today()
 

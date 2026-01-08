@@ -29,6 +29,7 @@ from app.core.strategies.option_spread_15m.context import build_market_context
 from app.core.strategies.option_spread_15m.decision import decide_strategy
 from app.core.strategies.option_spread_15m.strikes import compute_spread_strikes
 from app.core.strategies.option_spread_15m.risk import check_spread_risk, check_condor_risk
+from app.core.risk.risk_limits_config import get_risk_limits
 
 def _log_strategy_run(result: dict, underlying: str) -> Optional[StrategyRun]:
     """
@@ -204,6 +205,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # =====================================================
     # 6️⃣ RISK CHECK (FINAL GATE)
     # =====================================================
+    # Load DB-backed risk limits (env/profile fallback if DB unavailable)
+    risk_config = get_risk_limits()
+
     if strategy_mode in ["BULL_PUT", "BEAR_CALL"]:
         ok, risk_reason, risk_metrics = check_spread_risk(
             short_strike=short_strike,
@@ -213,6 +217,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             lot_size=lot_size,
             lots=int(payload.get("lots", 1)),
             iv_regime=str(ctx.get("iv_regime") or "LOW"),
+            risk_config=risk_config,
         )
     else:
         ok, risk_reason, risk_metrics = check_condor_risk(
@@ -225,6 +230,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             lot_size=lot_size,
             lots=int(payload.get("lots", 1)),
             iv_regime=str(ctx.get("iv_regime") or "LOW"),
+            risk_config=risk_config,
         )
 
 

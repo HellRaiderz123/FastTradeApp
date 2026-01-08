@@ -203,6 +203,15 @@ export const settingsAPI = {
   saveTradingSettings: (data: { risk_per_trade: number; max_trades_per_day: number }) =>
     api.post('/settings/trading', data),
 
+  // Risk limits (DB-backed)
+  getRiskLimits: () => api.get('/settings/risk'),
+
+  saveRiskLimits: (data: {
+    max_portfolio_loss_pct: number;
+    max_trades_per_day: number;
+    iv_regime_limits: Record<string, { min_atm_dist_pct: number; max_risk_pct_capital: number }>;
+  }) => api.post('/settings/risk', data),
+
   // Notification settings (Gmail)
   getNotificationSettings: () =>
     api.get('/settings/notifications'),

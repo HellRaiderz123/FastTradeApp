@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
         from app.db.session import engine
         from app.db.models import Base
         from app.db.models_notification import Notification
+        from app.db.models_risk import RiskLimitConfig  # noqa: F401 ensures table registration
         Base.metadata.create_all(bind=engine)
         logger.info("✅ Database tables initialized")
     except Exception as e:

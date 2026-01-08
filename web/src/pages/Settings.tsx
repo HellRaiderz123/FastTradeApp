@@ -3,6 +3,12 @@ import { Settings as SettingsIcon, Save, Bell, Lock, Eye, EyeOff, CheckCircle, X
 import { useTradeStore } from '../lib/store';
 import { settingsAPI } from '../lib/api';
 
+const DEFAULT_IV_LIMITS: Record<string, { min_atm_dist_pct: number; max_risk_pct_capital: number }> = {
+  LOW: { min_atm_dist_pct: 0.5, max_risk_pct_capital: 4.0 },
+  NORMAL: { min_atm_dist_pct: 0.6, max_risk_pct_capital: 2.0 },
+  HIGH: { min_atm_dist_pct: 0.8, max_risk_pct_capital: 5.0 },
+};
+
 const Settings: React.FC = () => {
   const { capital, setCapital } = useTradeStore();
   const [settings, setSettings] = useState({
@@ -13,7 +19,13 @@ const Settings: React.FC = () => {
     notifications: true,
     darkMode: true,
   });
+  const [riskLimits, setRiskLimits] = useState({
+    max_portfolio_loss_pct: 2,
+    max_trades_per_day: 3,
+    iv_regime_limits: { ...DEFAULT_IV_LIMITS },
+  });
   const [saved, setSaved] = useState(false);
+  const [riskSaving, setRiskSaving] = useState(false);
   
   // Zerodha settings
   const [zerodhaStatus, setZerodhaStatus] = useState({
@@ -66,12 +78,24 @@ const Settings: React.FC = () => {
 
   const loadTradingSettings = async () => {
     try {
-      const response = await settingsAPI.getTradingSettings();
+      const response = await settingsAPI.getRiskLimits();
       const data = response.data || response;
+      const ivLimits = { ...DEFAULT_IV_LIMITS, ...(data.iv_regime_limits || {}) };
+
+      const riskPerTrade = data.max_portfolio_loss_pct ?? data.risk_per_trade ?? 2;
+      const maxTrades = data.max_trades_per_day ?? data.max_trades ?? 3;
+
+      setRiskLimits({
+        max_portfolio_loss_pct: riskPerTrade,
+        max_trades_per_day: maxTrades,
+        iv_regime_limits: ivLimits,
+      });
+
       setSettings(prev => ({
         ...prev,
-        riskPerTrade: data.risk_per_trade || 2,
-        maxTrades: data.max_trades_per_day || 3,
+        riskPerTrade,
+        maxTrades,
+        maxDailyLoss: riskPerTrade,
       }));
     } catch (error) {
       console.error('Error loading trading settings:', error);
@@ -117,17 +141,41 @@ const Settings: React.FC = () => {
     setSettings({ ...settings, [key]: value });
   };
 
+  const updateIvLimit = (regime: string, field: 'min_atm_dist_pct' | 'max_risk_pct_capital', value: number) => {
+    setRiskLimits(prev => ({
+      ...prev,
+      iv_regime_limits: {
+        ...prev.iv_regime_limits,
+        [regime]: {
+          ...(prev.iv_regime_limits?.[regime] || DEFAULT_IV_LIMITS[regime] || {}),
+          [field]: value,
+        },
+      },
+    }));
+  };
+
   const handleSave = async () => {
     try {
-      await settingsAPI.saveTradingSettings({
-        risk_per_trade: settings.riskPerTrade,
-        max_trades_per_day: settings.maxTrades,
+      setRiskSaving(true);
+      await settingsAPI.saveRiskLimits({
+        max_portfolio_loss_pct: riskLimits.max_portfolio_loss_pct,
+        max_trades_per_day: riskLimits.max_trades_per_day,
+        iv_regime_limits: riskLimits.iv_regime_limits,
       });
+
+      // Keep legacy trading endpoint in sync for backward compatibility
+      await settingsAPI.saveTradingSettings({
+        risk_per_trade: riskLimits.max_portfolio_loss_pct,
+        max_trades_per_day: riskLimits.max_trades_per_day,
+      });
+
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error: any) {
       console.error('Error saving settings:', error);
       alert(error.response?.data?.detail || 'Error saving settings');
+    } finally {
+      setRiskSaving(false);
     }
   };
 
@@ -235,15 +283,82 @@ const Settings: React.FC = () => {
 
       {/* Trading Settings */}
       <SettingsCard title="Trading Configuration">
-        <SettingItem label="Risk Per Trade (%)" type="number" value={settings.riskPerTrade} onChange={(val) => handleChange('riskPerTrade', val)} min="0.5" max="10" step="0.5" />
-        <SettingItem label="Max Daily Loss (%)" type="number" value={settings.maxDailyLoss} onChange={(val) => handleChange('maxDailyLoss', val)} min="1" max="10" step="0.5" />
+        <SettingItem
+          label="Risk Per Trade (%)"
+          type="number"
+          value={riskLimits.max_portfolio_loss_pct}
+          onChange={(val) => {
+            setRiskLimits(prev => ({ ...prev, max_portfolio_loss_pct: val }));
+            handleChange('riskPerTrade', val);
+            handleChange('maxDailyLoss', val);
+          }}
+          min="0.5"
+          max="15"
+          step="0.1"
+        />
+        <SettingItem
+          label="Max Daily Loss (%)"
+          type="number"
+          value={riskLimits.max_portfolio_loss_pct}
+          onChange={(val) => {
+            setRiskLimits(prev => ({ ...prev, max_portfolio_loss_pct: val }));
+            handleChange('maxDailyLoss', val);
+            handleChange('riskPerTrade', val);
+          }}
+          min="0.5"
+          max="15"
+          step="0.1"
+        />
         <div className="space-y-2">
-          <SettingItem label="Max Daily Trades" type="number" value={settings.maxTrades} onChange={(val) => handleChange('maxTrades', val)} min="1" max="20" />
+          <SettingItem
+            label="Max Daily Trades"
+            type="number"
+            value={riskLimits.max_trades_per_day}
+            onChange={(val) => {
+              setRiskLimits(prev => ({ ...prev, max_trades_per_day: val }));
+              handleChange('maxTrades', val);
+            }}
+            min="1"
+            max="100"
+          />
           <div className="mt-2 p-3 bg-blue-900 bg-opacity-30 border border-blue-700 rounded text-sm text-blue-200">
             <strong>💡 Tip:</strong> In {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? <span className="text-blue-100">Dry Run mode</span> : <span className="text-orange-100">Live mode</span>}, set this higher to test more strategies.
             {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' && ' Recommended: 10-20 trades for testing.'}
             {zerodhaStatus.execution_mode === 'ZERODHA_LIVE' && ' Recommended: 2-5 trades for live trading.'}
           </div>
+        </div>
+      </SettingsCard>
+
+      {/* IV Regime Limits */}
+      <SettingsCard title="IV Regime Risk Limits">
+        <p className="text-sm text-slate-300">Tune how much risk each IV environment is allowed to take before a trade is blocked.</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {['LOW', 'NORMAL', 'HIGH'].map((regime) => (
+            <div key={regime} className="p-4 rounded-lg border border-slate-700 bg-slate-800/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-white">{regime} IV</span>
+                <span className="text-xs text-slate-400">caps</span>
+              </div>
+              <SettingItem
+                label="Min ATM Distance (%)"
+                type="number"
+                value={riskLimits.iv_regime_limits?.[regime]?.min_atm_dist_pct ?? DEFAULT_IV_LIMITS[regime].min_atm_dist_pct}
+                onChange={(val) => updateIvLimit(regime, 'min_atm_dist_pct', val)}
+                min="0"
+                max="5"
+                step="0.1"
+              />
+              <SettingItem
+                label="Max Risk % of Capital"
+                type="number"
+                value={riskLimits.iv_regime_limits?.[regime]?.max_risk_pct_capital ?? DEFAULT_IV_LIMITS[regime].max_risk_pct_capital}
+                onChange={(val) => updateIvLimit(regime, 'max_risk_pct_capital', val)}
+                min="0.1"
+                max="50"
+                step="0.1"
+              />
+            </div>
+          ))}
         </div>
       </SettingsCard>
 
@@ -279,10 +394,11 @@ const Settings: React.FC = () => {
       <div className="flex gap-3">
         <button
           onClick={handleSave}
+          disabled={riskSaving}
           className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
         >
           <Save className="w-5 h-5" />
-          Save Trading Settings
+          {riskSaving ? 'Saving...' : 'Save Trading Settings'}
         </button>
         {saved && (
           <div className="flex items-center gap-2 px-4 py-3 bg-green-900 text-green-200 rounded-lg">
@@ -682,9 +798,9 @@ const Settings: React.FC = () => {
 
       {/* Save Button */}
       <div className="flex gap-4">
-        <button onClick={handleSave} className="btn-primary flex items-center gap-2">
+        <button onClick={handleSave} disabled={riskSaving} className="btn-primary flex items-center gap-2 disabled:opacity-60">
           <Save className="w-4 h-4" />
-          Save Settings
+          {riskSaving ? 'Saving...' : 'Save Settings'}
         </button>
         {saved && <p className="text-green-400 flex items-center">✓ Settings saved!</p>}
       </div>

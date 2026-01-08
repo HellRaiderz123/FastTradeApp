@@ -3,11 +3,14 @@ from pydantic import BaseModel
 import os
 import logging
 from pathlib import Path
+from typing import Dict
 from dotenv import load_dotenv, set_key
 
 from app.core.execution.mode import normalize_execution_mode
 from app.services.notifications import NotificationService
 from app.db.session import SessionLocal
+from app.db.risk_repo import get_or_create_risk_limits, update_risk_limits
+from app.db.models_risk import default_iv_limits
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,17 @@ class TradingSettings(BaseModel):
 
     risk_per_trade: float
     max_trades_per_day: int
+
+
+class IVRegimeLimit(BaseModel):
+    min_atm_dist_pct: float
+    max_risk_pct_capital: float
+
+
+class RiskLimitsPayload(BaseModel):
+    max_portfolio_loss_pct: float
+    max_trades_per_day: int
+    iv_regime_limits: Dict[str, IVRegimeLimit]
 
 
 def get_env_value(key: str) -> str:
@@ -262,41 +276,52 @@ def set_execution_mode(mode: str):
 @router.get("/trading")
 def get_trading_settings():
     """Get current trading settings (risk per trade, max trades per day)"""
-    risk_per_trade = float(get_env_value("RISK_PER_TRADE") or "2.0")
-    max_trades_per_day = int(get_env_value("MAX_TRADES_PER_DAY") or "3")
-    
-    return {
-        "risk_per_trade": risk_per_trade,
-        "max_trades_per_day": max_trades_per_day
-    }
+    db = SessionLocal()
+    try:
+        record = get_or_create_risk_limits(db)
+        return {
+            "risk_per_trade": record.max_portfolio_loss_pct,
+            "max_trades_per_day": record.max_trades_per_day,
+        }
+    finally:
+        db.close()
 
 
 @router.post("/trading")
 def save_trading_settings(settings: TradingSettings):
-    """Save trading settings to .env"""
+    """Save trading settings to the DB (no restart needed)."""
     try:
-        if settings.risk_per_trade < 0.5 or settings.risk_per_trade > 10:
+        if settings.risk_per_trade < 0.1 or settings.risk_per_trade > 15:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Risk per trade must be between 0.5% and 10%"
+                detail="Risk per trade must be between 0.1% and 15%",
             )
-        
-        if settings.max_trades_per_day < 1 or settings.max_trades_per_day > 20:
+
+        if settings.max_trades_per_day < 1 or settings.max_trades_per_day > 50:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Max trades per day must be between 1 and 20"
+                detail="Max trades per day must be between 1 and 50",
             )
-        
-        set_key(str(ENV_FILE), "RISK_PER_TRADE", str(settings.risk_per_trade))
-        set_key(str(ENV_FILE), "MAX_TRADES_PER_DAY", str(settings.max_trades_per_day))
-        
+
+        db = SessionLocal()
+        record = get_or_create_risk_limits(db)
+        update_risk_limits(
+            db,
+            max_portfolio_loss_pct=settings.risk_per_trade,
+            max_trades_per_day=settings.max_trades_per_day,
+            iv_regime_limits=record.iv_regime_limits or default_iv_limits(),
+        )
+
+        # Keep process env in sync for legacy fallbacks (but don't touch .env)
         os.environ["RISK_PER_TRADE"] = str(settings.risk_per_trade)
         os.environ["MAX_TRADES_PER_DAY"] = str(settings.max_trades_per_day)
-        
-        logger.info(f"Trading settings updated: risk={settings.risk_per_trade}%, max_trades={settings.max_trades_per_day}")
+
+        logger.info(
+            f"Trading settings updated in DB: risk={settings.risk_per_trade}%, max_trades={settings.max_trades_per_day}"
+        )
         return {
             "status": "success",
-            "message": "Trading settings saved successfully"
+            "message": "Trading settings saved successfully",
         }
     except HTTPException:
         raise
@@ -304,8 +329,99 @@ def save_trading_settings(settings: TradingSettings):
         logger.error(f"Error saving trading settings: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error saving trading settings: {str(e)}"
+            detail=f"Error saving trading settings: {str(e)}",
         )
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@router.get("/risk")
+def get_risk_limits_settings():
+    """Return full risk limits including IV-regime caps from the DB."""
+    db = SessionLocal()
+    try:
+        record = get_or_create_risk_limits(db)
+        return {
+            "max_portfolio_loss_pct": record.max_portfolio_loss_pct,
+            "max_trades_per_day": record.max_trades_per_day,
+            "iv_regime_limits": record.iv_regime_limits or default_iv_limits(),
+        }
+    except Exception as e:
+        logger.error(f"Error fetching risk limits: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error fetching risk limits: {e}",
+        )
+    finally:
+        db.close()
+
+
+@router.post("/risk")
+def save_risk_limits(settings: RiskLimitsPayload):
+    """Persist risk limits (portfolio + IV regimes) to the DB."""
+    try:
+        if settings.max_portfolio_loss_pct < 0.1 or settings.max_portfolio_loss_pct > 25:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Max portfolio loss per trade must be between 0.1% and 25%",
+            )
+
+        if settings.max_trades_per_day < 1 or settings.max_trades_per_day > 100:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Max trades per day must be between 1 and 100",
+            )
+
+        iv_limits_models = settings.iv_regime_limits or {}
+        # Convert Pydantic models to plain dicts for JSON storage
+        iv_limits: Dict[str, dict] = {}
+        for regime, limits in iv_limits_models.items():
+            if limits.min_atm_dist_pct < 0 or limits.min_atm_dist_pct > 5:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"min_atm_dist_pct for {regime} must be between 0 and 5",
+                )
+            if limits.max_risk_pct_capital < 0.1 or limits.max_risk_pct_capital > 50:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"max_risk_pct_capital for {regime} must be between 0.1 and 50",
+                )
+            iv_limits[regime] = limits.dict()
+
+        db = SessionLocal()
+        update_risk_limits(
+            db,
+            max_portfolio_loss_pct=settings.max_portfolio_loss_pct,
+            max_trades_per_day=settings.max_trades_per_day,
+            iv_regime_limits=iv_limits or default_iv_limits(),
+        )
+
+        # Sync process env for legacy callers
+        os.environ["RISK_PER_TRADE"] = str(settings.max_portfolio_loss_pct)
+        os.environ["MAX_TRADES_PER_DAY"] = str(settings.max_trades_per_day)
+
+        logger.info(
+            "Risk limits updated in DB: loss_pct=%s, max_trades=%s",
+            settings.max_portfolio_loss_pct,
+            settings.max_trades_per_day,
+        )
+        return {"status": "success", "message": "Risk limits saved"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving risk limits: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error saving risk limits: {e}",
+        )
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 @router.get("/notifications")
 def get_notification_settings():
