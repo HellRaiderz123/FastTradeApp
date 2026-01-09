@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import cast, Optional
 import logging
@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/intent", tags=["Execution Intent"])
 
-
 def get_db():
     db = SessionLocal()
     try:
@@ -29,6 +28,27 @@ def get_db():
     finally:
         db.close()
 
+# PATCH endpoint to update TP/SL/trailing for an existing intent
+@router.patch("/{intent_id}/update_tp_sl")
+def update_tp_sl(
+    intent_id: str,
+    tp: Optional[float] = Body(None),
+    sl: Optional[float] = Body(None),
+    trailing_sl: Optional[float] = Body(None),
+    db: Session = Depends(get_db)
+):
+    intent = db.query(ExecutionIntent).filter(ExecutionIntent.intent_id == intent_id).first()
+    if not intent:
+        raise HTTPException(status_code=404, detail="Intent not found")
+    if tp is not None:
+        intent.tp = tp
+    if sl is not None:
+        intent.sl = sl
+    if trailing_sl is not None:
+        intent.trailing_sl_pct = trailing_sl
+    db.commit()
+    db.refresh(intent)
+    return {"success": True, "tp": intent.tp, "sl": intent.sl, "trailing_sl": intent.trailing_sl_pct}
 
 @router.post("/create")
 def create_intent(

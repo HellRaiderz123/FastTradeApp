@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView, TextInput, Alert } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { strategyAPI, executionAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 
 const StrategiesScreen = () => {
+  const navigation = useNavigation();
   const [underlying, setUnderlying] = useState('NIFTY');
   const [capital, setCapital] = useState('100000');
   const [lots, setLots] = useState('1');
@@ -123,10 +125,16 @@ const StrategiesScreen = () => {
           <StrategyResultCard result={strategyResult} onExecute={handleExecute} />
         )}
 
-        {/* Coming Soon */}
+        {/* More Features & Navigation */}
         <View style={styles.comingSoon}>
           <Text style={styles.comingSoonTitle}>More Features</Text>
-          {['Backtester', 'Strategy Builder', 'Signals', 'Analysis'].map((item) => (
+          <TouchableOpacity
+            style={[styles.button, styles.primaryButton, {marginBottom: 8}]}
+            onPress={() => navigation.navigate('StrategyBuilder')}
+          >
+            <Text style={styles.buttonText}>Open Strategy Builder</Text>
+          </TouchableOpacity>
+          {['Backtester', 'Signals', 'Analysis'].map((item) => (
             <View key={item} style={styles.comingSoonItem}>
               <Text style={styles.comingSoonText}>{item} 🔜</Text>
             </View>

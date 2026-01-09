@@ -13,19 +13,21 @@ interface DailyCapitalData {
 }
 
 const Dashboard: React.FC = () => {
-  const { capital, dailyPnL, trades, accountProfile, loading, setCapital, setAccountProfile, setLoading } = useTradeStore();
+  const { capital, dailyPnL, trades, accountProfile, loading, setTrades, setCapital, setAccountProfile, setLoading } = useTradeStore();
   const [dailyCapitalHistory, setDailyCapitalHistory] = useState<DailyCapitalData[]>([]);
 
   useEffect(() => {
     fetchAccountData();
     fetchDailyCapitalHistory();
     fetchRecentTrades();
+    fetchAllTrades();
     
-    // Refresh every 30 seconds
+    // Refresh every 60 seconds
     const interval = setInterval(() => {
       fetchAccountData();
       fetchDailyCapitalHistory();
-    }, 30000);
+      fetchAllTrades();
+    }, 60000);
     
     return () => clearInterval(interval);
   }, []);
@@ -40,6 +42,25 @@ const Dashboard: React.FC = () => {
       // Fallback to default if API fails
     }
   };
+
+  // Fetch both EXECUTED and CLOSED trades for dashboard stats
+const fetchAllTrades = async () => {
+  try {
+    setLoading(true);
+    // Get all execution intents (includes EXECUTED and CLOSED)
+    const response = await journalAPI.getExecutionIntents(100);
+    const data = response?.data;
+    // Filter for EXECUTED and CLOSED trades only
+    const allTrades = Array.isArray(data)
+      ? data.filter((t) => t.status === 'EXECUTED' || t.status === 'CLOSED')
+      : [];
+    setTrades(allTrades);
+  } catch (error) {
+    console.error('Failed to fetch trades:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const fetchDailyCapitalHistory = async () => {
     try {
@@ -63,9 +84,23 @@ const Dashboard: React.FC = () => {
   };
 
   const displayCapital = accountProfile?.capital || capital;
-  const pnlPercent = ((dailyPnL / displayCapital) * 100).toFixed(2);
-  const winCount = trades.filter((t) => t.pnl > 0).length;
-  const winRate = trades.length > 0 ? ((winCount / trades.length) * 100).toFixed(1) : '0';
+  // Filter trades for today only (by entry_time or exit_time)
+  const today = new Date();
+  const isToday = (dateStr: string) => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
+    return d.getFullYear() === today.getFullYear() &&
+      d.getMonth() === today.getMonth() &&
+      d.getDate() === today.getDate();
+  };
+  // Only trades executed or closed today
+  const tradesToday = trades.filter(
+    (t) => isToday(t.created_at) || isToday(t.closed_at)
+  );
+  const todayPnL = tradesToday.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const pnlPercent = ((todayPnL / displayCapital) * 100).toFixed(2);
+  const winCount = tradesToday.filter((t) => t.pnl > 0).length;
+  const winRate = tradesToday.length > 0 ? ((winCount / tradesToday.length) * 100).toFixed(1) : '0';
 
   // Use daily capital history if available, otherwise generate from trades
   const chartData = dailyCapitalHistory.length > 0
@@ -92,18 +127,18 @@ const Dashboard: React.FC = () => {
         { time: '12:45', balance: displayCapital + 3800, pnl: 3800 },
       ];
 
-  // Generate trade stats from actual trades
-  const tradeStats = trades.length > 0
+  // Generate trade stats from today's trades
+  const tradeStats = tradesToday.length > 0
     ? [
         {
-          totalTrades: trades.length,
-          wins: trades.filter(t => t.pnl > 0).length,
-          losses: trades.filter(t => t.pnl < 0).length,
-          averageWin: trades.filter(t => t.pnl > 0).length > 0 
-            ? trades.filter(t => t.pnl > 0).reduce((sum, t) => sum + (t.pnl || 0), 0) / trades.filter(t => t.pnl > 0).length
+          totalTrades: tradesToday.length,
+          wins: tradesToday.filter(t => t.pnl > 0).length,
+          losses: tradesToday.filter(t => t.pnl < 0).length,
+          averageWin: tradesToday.filter(t => t.pnl > 0).length > 0 
+            ? tradesToday.filter(t => t.pnl > 0).reduce((sum, t) => sum + (t.pnl || 0), 0) / tradesToday.filter(t => t.pnl > 0).length
             : 0,
-          averageLoss: trades.filter(t => t.pnl < 0).length > 0
-            ? trades.filter(t => t.pnl < 0).reduce((sum, t) => sum + (t.pnl || 0), 0) / trades.filter(t => t.pnl < 0).length
+          averageLoss: tradesToday.filter(t => t.pnl < 0).length > 0
+            ? tradesToday.filter(t => t.pnl < 0).reduce((sum, t) => sum + (t.pnl || 0), 0) / tradesToday.filter(t => t.pnl < 0).length
             : 0,
         }
       ]
@@ -123,22 +158,22 @@ const Dashboard: React.FC = () => {
         <MetricCard
           icon={TrendingUp}
           label="Today's P&L"
-          value={`₹${dailyPnL.toLocaleString()}`}
+          value={`₹${todayPnL.toLocaleString()}`}
           change={`${pnlPercent}%`}
-          color={dailyPnL >= 0 ? 'green' : 'red'}
+          color={todayPnL >= 0 ? 'green' : 'red'}
         />
         <MetricCard
           icon={Activity}
           label="Total Trades"
-          value={trades.length.toString()}
-          change={`${trades.length} today`}
+          value={tradesToday.length.toString()}
+          change={`${tradesToday.length} today`}
           color="purple"
         />
         <MetricCard
           icon={Target}
           label="Win Rate"
           value={`${winRate}%`}
-          change={`${winCount}/${trades.length} wins`}
+          change={`${winCount}/${tradesToday.length} wins`}
           color={parseFloat(winRate) >= 50 ? 'green' : 'orange'}
         />
       </div>
@@ -290,10 +325,12 @@ const TradeRow: React.FC<TradeRowProps> = ({ trade }) => (
         ₹{Math.abs(trade.pnl).toLocaleString()}
       </p>
       <p className={`text-xs ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-        {trade.pnl >= 0 ? '+' : ''}{trade.pnl_percent.toFixed(2)}%
+        {trade.pnl >= 0 ? '+' : ''}{trade.pnl_percent}%
       </p>
     </div>
   </div>
 );
 
+
 export default Dashboard;
+

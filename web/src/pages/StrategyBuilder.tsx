@@ -48,6 +48,7 @@ const StrategyBuilder: React.FC = () => {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [spot, setSpot] = useState<number>(26150);
   const [atm, setAtm] = useState<number>(26150);
+  const wsRef = React.useRef<WebSocket | null>(null);
   const [greeks, setGreeks] = useState<GreeksData | null>(null);
   const [payoffData, setPayoffData] = useState<StrategyPayoff[]>([]);
   const [strategyId, setStrategyId] = useState<number | null>(null);
@@ -93,50 +94,29 @@ const StrategyBuilder: React.FC = () => {
     setDragIndex(null);
   };
 
-  // Fetch spot price and expiry dates on component mount
+  // Fetch spot price and expiry dates on component mount, and subscribe to live spot price via WebSocket
   useEffect(() => {
+    let ws: WebSocket | null = null;
     const fetchMarketData = async () => {
       try {
         setFetchingSpot(true);
-        console.log('=== Starting market data fetch ===');
-        
-        // Fetch spot price
-        console.log('1. Fetching LTP...');
+        // Fetch spot price (initial)
         const spotResponse = await marketAPI.getLTP('NIFTY');
-        console.log('   LTP Response:', spotResponse);
-        console.log('   LTP Response data:', spotResponse?.data);
-        
-        // Handle axios response - data is inside .data property
         const spotData = spotResponse?.data || spotResponse;
         if (spotData?.ltp) {
-          console.log('   Setting spot to:', spotData.ltp);
           setSpot(Number(spotData.ltp));
           setAtm(Number(spotData.ltp));
-        } else {
-          console.warn('   No LTP in response, keeping default 26150');
         }
-        
         // Fetch available expiry dates
-        console.log('2. Fetching expiries...');
         const expiriesResponse = await marketAPI.getAvailableExpiries('NIFTY');
-        console.log('   Expiries Response:', expiriesResponse);
-        console.log('   Expiries Response data:', expiriesResponse?.data);
-        
-        // Handle axios response
         const expiryData = expiriesResponse?.data || expiriesResponse;
-        console.log('   Type of expiries:', typeof expiryData?.expiries);
-        console.log('   Is array?:', Array.isArray(expiryData?.expiries));
-        
         if (expiryData?.expiries && Array.isArray(expiryData.expiries) && expiryData.expiries.length > 0) {
-          console.log('   Setting expiry dates to:', expiryData.expiries);
           setExpiryDates(expiryData.expiries);
           setSelectedExpiry(expiryData.expiries[0]);
           const today = new Date();
           const dte = Math.max(1, Math.ceil((new Date(expiryData.expiries[0]).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
           setDaysToExpiry(dte);
-          console.log('   Set selected expiry to:', expiryData.expiries[0]);
         } else {
-          console.warn('   Empty or invalid expiries, using fallback');
           // Set defaults if API returns empty
           const today = new Date();
           const fallbackExpiries = [
@@ -145,25 +125,46 @@ const StrategyBuilder: React.FC = () => {
             new Date(today.getTime() + 20 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
             new Date(today.getTime() + 27 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
           ];
-          console.log('   Fallback expiries:', fallbackExpiries);
           setExpiryDates(fallbackExpiries);
           setSelectedExpiry(fallbackExpiries[0]);
           const dte = Math.max(1, Math.ceil((new Date(fallbackExpiries[0]).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
           setDaysToExpiry(dte);
         }
-        
-        console.log('=== Market data fetch complete ===');
       } catch (err) {
-        console.error('❌ Failed to fetch market data:', err);
         // Keep defaults if API fails
       } finally {
-        console.log('Setting fetchingSpot to false');
         setFetchingSpot(false);
       }
     };
 
-    console.log('StrategyBuilder mounted, fetching market data');
     fetchMarketData();
+
+    // WebSocket for live spot price
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const wsUrl = `${proto}://${window.location.host}/api/ws/spot`;
+      ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          // Expecting { type: 'spot_update', ltp: number }
+          if (msg?.type === 'spot_update' && typeof msg.ltp === 'number') {
+            setSpot(msg.ltp);
+            setAtm(msg.ltp);
+          }
+        } catch (e) {
+          // ignore malformed messages
+        }
+      };
+    } catch (e) {
+      // ignore ws errors
+    }
+
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      wsRef.current = null;
+    };
   }, []);
 
   // Update DTE when expiry changes

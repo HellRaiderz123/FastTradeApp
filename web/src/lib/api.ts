@@ -1,3 +1,8 @@
+// Position APIs
+export const positionsAPI = {
+  updateTPSL: (intentId: string, { tp, sl, trailing_sl }: { tp?: number; sl?: number; trailing_sl?: number }) =>
+    api.patch(`/intent/${intentId}/update_tp_sl`, { tp, sl, trailing_sl }),
+};
 import axios from 'axios';
 
 // Default to Vite dev proxy (/api). Override via VITE_API_BASE if needed.

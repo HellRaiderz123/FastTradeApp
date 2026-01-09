@@ -222,16 +222,23 @@ interface PositionCardProps {
 
 const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) => {
   const [showLegs, setShowLegs] = React.useState(false);
-  
+  const [editOpen, setEditOpen] = React.useState(false);
+  const [editTp, setEditTp] = React.useState(trade?.tp ?? '');
+  const [editSl, setEditSl] = React.useState(trade?.sl ?? '');
+  const [editTrailing, setEditTrailing] = React.useState(trade?.trailing_sl ?? '');
+  const [editLoading, setEditLoading] = React.useState(false);
+
   const pnl = Number(trade?.pnl ?? trade?.unrealized_pnl ?? 0);
   const tp = trade?.tp !== null && trade?.tp !== undefined ? Number(trade.tp) : null;
   const sl = trade?.sl !== null && trade?.sl !== undefined ? Number(trade.sl) : null;
+  const trailing = trade?.trailing_sl !== null && trade?.trailing_sl !== undefined ? Number(trade.trailing_sl) : null;
   const entryCredit = Number(trade?.entry_credit ?? trade?.entry_price ?? 0);
   const marginRequired = Number(trade?.margin_required ?? 0);
 
   const isProfitable = pnl >= 0;
   const tpHit = tp !== null ? pnl >= tp : false;
   const slHit = sl !== null ? pnl <= sl : false;
+  const trailingActive = trailing !== null && trailing !== undefined && trailing !== '';
 
   const openedAtRaw = trade?.created_at ?? trade?.entry_time ?? trade?.filled_at;
   const openedAtLabel = openedAtRaw ? new Date(openedAtRaw).toLocaleString() : '-';
@@ -241,14 +248,37 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
   // Percent metrics
   const pnlPercentPremium = entryCredit !== 0 ? (pnl / Math.abs(entryCredit)) * 100 : null;
   const pnlPercentMargin = marginRequired > 0 ? (pnl / marginRequired) * 100 : null;
-  
+
   // Extract legs from ticket
   const legs = trade?.ticket?.legs || [];
   const legsMetrics = trade?.legs_metrics || [];
   const mode = trade?.mode || 'UNKNOWN';
-  
+
   // Show margin only for Zerodha modes
   const isZerodhaMode = mode && String(mode).toUpperCase().includes('ZERODHA');
+
+  // Placeholder: update TP/SL/trailing for position (replace with real API call)
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEditLoading(true);
+    try {
+      // Real API call to update TP/SL/trailing for this position
+      // @ts-ignore
+      const { positionsAPI } = await import('../lib/api');
+      await positionsAPI.updateTPSL(trade.intent_id, {
+        tp: editTp !== '' ? Number(editTp) : undefined,
+        sl: editSl !== '' ? Number(editSl) : undefined,
+        trailing_sl: editTrailing !== '' ? Number(editTrailing) : undefined,
+      });
+      setEditOpen(false);
+      // Optionally, refresh positions here (reload page or trigger parent refresh)
+      window.location.reload();
+    } catch (err) {
+      alert('Failed to update TP/SL/Trailing');
+    } finally {
+      setEditLoading(false);
+    }
+  };
 
   return (
     <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition">
@@ -266,18 +296,28 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
             </p>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          disabled={loading}
-          aria-label="Close position"
-          title="Close position"
-          className="text-slate-400 hover:text-red-400 transition"
-        >
-          <X className="w-5 h-5" />
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setEditOpen(true)}
+            aria-label="Edit TP/SL/Trailing"
+            title="Edit TP/SL/Trailing"
+            className="text-slate-400 hover:text-blue-400 transition border border-slate-600 rounded px-2 py-1 text-xs"
+          >
+            Edit TP/SL
+          </button>
+          <button
+            onClick={onClose}
+            disabled={loading}
+            aria-label="Close position"
+            title="Close position"
+            className="text-slate-400 hover:text-red-400 transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
-      <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${isZerodhaMode && marginRequired > 0 ? 'grid-cols-2 md:grid-cols-6' : 'grid-cols-2 md:grid-cols-5'}`}>
+      <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${isZerodhaMode && marginRequired > 0 ? 'grid-cols-2 md:grid-cols-7' : 'grid-cols-2 md:grid-cols-6'}`}>
         <div>
           <p className="text-xs text-slate-400">Premium {isZerodhaMode ? 'Collected' : ''}</p>
           <p className="font-semibold text-white">₹{entryCredit.toLocaleString()}</p>
@@ -310,6 +350,36 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
             {slHit ? '✗ SL Hit' : '-'}
           </p>
         </div>
+        <div>
+          <p className="text-xs text-slate-400">Trailing SL: {trailingActive ? trailing : '-'}</p>
+          <p className={`font-semibold ${trailingActive ? 'text-blue-400' : 'text-slate-300'}`}>
+            {trailingActive ? 'Active' : '-'}
+          </p>
+        </div>
+            {/* Edit TP/SL/Trailing Modal */}
+            {editOpen && (
+              <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+                <form onSubmit={handleEditSubmit} className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-80 space-y-4">
+                  <h3 className="text-lg font-bold text-white mb-2">Edit TP / SL / Trailing</h3>
+                  <div className="space-y-2">
+                    <label className="block text-xs text-slate-300">Take Profit (TP)</label>
+                    <input type="number" className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm" value={editTp} onChange={e => setEditTp(e.target.value)} placeholder="e.g. 1000" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs text-slate-300">Stop Loss (SL)</label>
+                    <input type="number" className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm" value={editSl} onChange={e => setEditSl(e.target.value)} placeholder="e.g. -1000" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs text-slate-300">Trailing Stop</label>
+                    <input type="number" className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm" value={editTrailing} onChange={e => setEditTrailing(e.target.value)} placeholder="e.g. 500" />
+                  </div>
+                  <div className="flex gap-2 mt-4">
+                    <button type="submit" disabled={editLoading} className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded font-semibold transition">{editLoading ? 'Saving...' : 'Save'}</button>
+                    <button type="button" onClick={() => setEditOpen(false)} className="flex-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded transition">Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
       </div>
 
       {/* Legs Section - Expandable */}
