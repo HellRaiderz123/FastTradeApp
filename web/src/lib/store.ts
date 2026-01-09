@@ -11,8 +11,8 @@ export interface Trade {
   pnl_percent: number;
   tp: number;
   sl: number;
-  entry_time: string;
-  exit_time?: string;
+  created_at: string;
+  closed_at: string;
 }
 
 export interface Signal {

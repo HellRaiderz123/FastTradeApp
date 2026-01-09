@@ -1,9 +1,31 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
 import { useTradeStore } from '../lib/store';
+import { paperAPI } from '../lib/api';
 
 const PositionsScreen = () => {
-  const { trades } = useTradeStore();
+  const { trades, setTrades } = useTradeStore();
+  const [loading, setLoading] = useState(false);
+
+  const fetchPositions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await paperAPI.getPositions();
+      if (Array.isArray(response.data)) {
+        setTrades(response.data);
+      }
+    } catch (error) {
+      // Optionally show error
+    } finally {
+      setLoading(false);
+    }
+  }, [setTrades]);
+
+  useEffect(() => {
+    fetchPositions();
+    const interval = setInterval(fetchPositions, 30000); // Poll every 30s
+    return () => clearInterval(interval);
+  }, [fetchPositions]);
 
   const openPositions = trades.filter((t) => t.status === 'EXECUTED');
   const totalPnL = openPositions.reduce((sum, t) => sum + t.pnl, 0);
@@ -11,7 +33,12 @@ const PositionsScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Open Positions</Text>
+        <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
+          <Text style={styles.title}>Open Positions</Text>
+          <TouchableOpacity onPress={fetchPositions} disabled={loading} style={{padding:8}}>
+            <Text style={{color:'#3B82F6', fontWeight:'bold'}}>{loading ? 'Refreshing...' : 'Refresh'}</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Summary Cards */}
         <View style={styles.summaryContainer}>

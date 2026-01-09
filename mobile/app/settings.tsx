@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Switch,
 } from 'react-native';
-import { settingsAPI } from '../../lib/api';
+import { settingsAPI } from '../lib/api';
 
 export default function SettingsScreen() {
   const [apiKey, setApiKey] = useState('');

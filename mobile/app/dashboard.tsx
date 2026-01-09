@@ -1,40 +1,79 @@
+
 import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import { useTradeStore } from '../lib/store';
-import { systemAPI } from '../lib/api';
+import { systemAPI, journalAPI } from '../lib/api';
+import api from '../lib/api';
+
 
 const DashboardScreen = () => {
-  const { capital, dailyPnL, trades, setSystemEnabled } = useTradeStore();
+  const {
+    capital,
+    dailyPnL,
+    trades,
+    setSystemEnabled,
+    setCapital,
+    setDailyPnL,
+    setTrades
+  } = useTradeStore();
   const [systemEnabled, setSystemEnabledLocal] = useState(true);
 
+
   useEffect(() => {
-    checkSystemStatus();
+    fetchDashboardData();
   }, []);
 
-  const checkSystemStatus = async () => {
+  const fetchDashboardData = async () => {
     try {
-      const response = await systemAPI.status();
-      setSystemEnabled(response.data.trading_enabled);
-      setSystemEnabledLocal(response.data.trading_enabled);
+      // System status
+      const sysRes = await systemAPI.status();
+      setSystemEnabled(sysRes.data.trading_enabled);
+      setSystemEnabledLocal(sysRes.data.trading_enabled);
+
+      // Account profile (capital)
+      const accRes = await api.get('/account/profile');
+      setCapital(accRes.data.capital || 0);
+
+      // Daily capital (for P&L and chart)
+      const dailyRes = await api.get('/account/daily-capital?days=6');
+      // dailyRes.data: [{date, opening_capital, closing_capital, daily_pnl, daily_return_pct}]
+      if (Array.isArray(dailyRes.data) && dailyRes.data.length > 0) {
+        setDailyPnL(dailyRes.data[dailyRes.data.length - 1].daily_pnl || 0);
+        setChartData({
+          labels: dailyRes.data.map((d) => d.date.slice(5)),
+          datasets: [
+            {
+              data: dailyRes.data.map((d) => d.closing_capital),
+              color: (opacity = 1) => `rgba(16, 185, 129, ${opacity})`,
+            },
+          ],
+        });
+      }
+
+      // Recent trades
+      const tradesRes = await journalAPI.getExecutionIntents(10);
+      setTrades(Array.isArray(tradesRes.data) ? tradesRes.data : []);
     } catch (error) {
-      console.error('Failed to check system status:', error);
+      console.error('Failed to fetch dashboard data:', error);
     }
   };
 
-  const pnlPercent = ((dailyPnL / capital) * 100).toFixed(2);
+
+  const pnlPercent = capital ? ((dailyPnL / capital) * 100).toFixed(2) : '0.00';
   const winCount = trades.filter((t) => t.pnl > 0).length;
   const winRate = trades.length > 0 ? ((winCount / trades.length) * 100).toFixed(1) : '0';
 
-  const chartData = {
-    labels: ['09:15', '10:15', '11:15', '12:15', '13:15', '14:15'],
+  // chartData is now set by fetchDashboardData
+  const [chartData, setChartData] = useState({
+    labels: [],
     datasets: [
       {
-        data: [100000, 101200, 101800, 100900, 102500, 103200],
+        data: [],
         color: (opacity = 1) => `rgba(16, 185, 129, ${opacity})`,
       },
     ],
-  };
+  });
 
   return (
     <SafeAreaView style={styles.container}>

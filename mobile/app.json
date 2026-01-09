@@ -2,6 +2,7 @@
   "expo": {
     "name": "FastTrade",
     "slug": "fasttrade",
+    "scheme": "fasttrade",
     "version": "1.0.0",
     "assetBundlePatterns": [
       "**/*"
@@ -19,6 +20,9 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router"
+    ]
   }
 }

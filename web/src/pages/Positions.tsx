@@ -238,7 +238,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
   const isProfitable = pnl >= 0;
   const tpHit = tp !== null ? pnl >= tp : false;
   const slHit = sl !== null ? pnl <= sl : false;
-  const trailingActive = trailing !== null && trailing !== undefined && trailing !== '';
+  const trailingActive = trailing !== null && trailing !== undefined;
 
   const openedAtRaw = trade?.created_at ?? trade?.entry_time ?? trade?.filled_at;
   const openedAtLabel = openedAtRaw ? new Date(openedAtRaw).toLocaleString() : '-';
