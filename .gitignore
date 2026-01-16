@@ -32,7 +32,7 @@ build/
 # ================================
 # FastAPI / Uvicorn
 # ================================
-*.log
+*.log*
 uvicorn.log
 app.log
 debug.log

@@ -72,6 +72,11 @@ export const StrategyManager: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategies.length]);
 
+  // Refresh every 60 seconds
+    const interval = setInterval(() => {
+      
+    }, 60000);
+
   const refreshSuggestions = async () => {
     setSuggestionsLoading(true);
     try {
@@ -79,7 +84,7 @@ export const StrategyManager: React.FC = () => {
       const payload = {
         underlyings: underlyings.length > 0 ? underlyings : ['NIFTY'],
         capital: 100000,
-        lots: 1,
+        lots: 2,
         risk_mode: 'Conservative',
         use_ml: false,
         min_confidence: 75,

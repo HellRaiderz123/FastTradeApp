@@ -1,0 +1,4 @@
+1. in intent or during exection, we need to store whether executed from which mode, paper, dry run or live
+2. Similary journal should also have modes, so that we can filter the actual Trades
+3. I think when the mode change, whole stats should change based on the mode executed trade.
+4. 
