@@ -167,9 +167,9 @@ def get_vix_iv_data() -> Dict[str, Optional[float]]:
 
     # Hard fallback (safe default)
     if result["india_vix"] is None:
-        result["india_vix"] = 10.0
+        result["india_vix"] = 18.0
         result["vix_source"] = "hardcoded"
-        logger.warning("⚠️ Using fallback India VIX = 10.0")
+        logger.warning("⚠️ Using fallback India VIX = 18.0")
 
     # ---- VIX Rank ----
     vix_rank = get_vix_rank_from_db()

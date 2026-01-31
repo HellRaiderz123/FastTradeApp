@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X, TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
+import { Wallet } from 'lucide-react';
 
 interface SidebarProps {
   open: boolean;
@@ -41,6 +42,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     { path: '/backtest', icon: LineChart, label: 'Backtest' },
     { path: '/positions', icon: Briefcase, label: 'Positions' },
     { path: '/journal', icon: BookOpen, label: 'Journal' },
+    { path: '/finance', icon: Wallet, label: 'Finance' },
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
 

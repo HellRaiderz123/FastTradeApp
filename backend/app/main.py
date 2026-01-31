@@ -21,6 +21,8 @@ from app.api.system_control import router as system_router
 from app.api.routes import notifications
 from app.api.routes import websocket_routes
 from app.api.routes import health
+from app.api.routes.finance import router as finance_router
+
 from app.core.market.scheduler import (
     start_candle_scheduler,
     start_vix_scheduler,
@@ -193,5 +195,6 @@ app.include_router(system_router)
 app.include_router(notifications.router)
 app.include_router(websocket_routes.router)
 app.include_router(health.router)
+app.include_router(finance_router)
 
 logger.info(" All routers registered (including Phase 5 features)")

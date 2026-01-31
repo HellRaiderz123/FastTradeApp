@@ -70,7 +70,7 @@ const Settings: React.FC = () => {
     loadTradingSettings();
     // Refresh every 5 seconds to sync with backend
     const interval = setInterval(() => {
-      loadZerodhaSettings();
+      //loadZerodhaSettings();
       loadNotificationSettings();
     }, 5000);
     return () => clearInterval(interval);

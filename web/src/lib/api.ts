@@ -231,4 +231,40 @@ export const settingsAPI = {
     api.post('/settings/notifications/gmail/test', null, { params: { subject, body } }),
 };
 
+// Finance APIs
+export const financeAPI = {
+  // 🔹 Bulk insert transactions (CSV import)
+  bulkCreateTransactions: (transactions: {
+    tran_date: string;
+    description: string;
+    debit: number;
+    credit: number;
+    balance: number;
+    category: string;
+    source?: string;
+  }[]) =>
+    api.post('/finance/transactions', transactions),
+
+  // 🔹 Fetch all finance transactions
+  getTransactions: () =>
+    api.get('/finance/transactions'),
+
+  // 🔹 Update category for a single transaction
+  updateTransactionCategory: (
+    transactionId: number,
+    category: string
+  ) =>
+    api.patch(
+      `/finance/transactions/${transactionId}`,
+      { category }
+    ),
+
+  // 🔹 Delete / clear all finance transactions
+  clearAllTransactions: () =>
+    api.delete('/finance/transactions'),
+
+  deleteTransaction: (transactionId: number) =>
+  api.delete(`/finance/transactions/${transactionId}`),
+};
+
 export default api;
