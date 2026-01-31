@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import Papa from "papaparse";
+import Papa from "papaparse"
 
 import FinanceDashboard from "../components/FinanceDashboard";
 import TransactionsTable from "../components/TransactionsTable";
 import { financeAPI } from "../lib/api";
+import AddTransactionModal from "../components/AddTransactionModal";
 
 // ---------------- Types ----------------
 export interface Transaction {
@@ -81,6 +82,7 @@ export default function FinanceTracker() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string>("ALL");
+  const [open, setOpen] = useState(false);
 
   // 🔹 Load on mount
   useEffect(() => {
@@ -147,7 +149,7 @@ export default function FinanceTracker() {
             source: "AXIS",
           }))
           .filter(
-            (t) =>
+            (t: FinanceTransactionDTO) =>
               t.tran_date &&
               /^\d{4}-\d{2}-\d{2}$/.test(t.tran_date) &&
               t.description &&
@@ -186,6 +188,13 @@ export default function FinanceTracker() {
         <h1 className="text-xl font-semibold flex items-center gap-2">
           💰 <span>Finance Tracker</span>
         </h1>
+
+        <button
+          onClick={() => setOpen(true)}
+          className="px-4 py-2 bg-blue-600 text-white rounded"
+        >
+          + Add Transaction
+        </button>
 
         <div className="flex items-center gap-3">
           {/* Month Filter */}
@@ -227,6 +236,14 @@ export default function FinanceTracker() {
         onCategoryChange={updateCategory}
         onDelete={deleteTransaction}
       />
+
+      {/* Add Transaction Modal */}
+      {open && (
+        <AddTransactionModal
+          onClose={() => setOpen(false)}
+          onSaved={loadTransactions}
+        />
+      )}
     </div>
   );
 }

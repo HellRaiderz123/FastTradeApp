@@ -102,7 +102,7 @@ export default function FinanceDashboard({ transactions }: Props) {
                   data={pieData}
                   dataKey="value"
                   nameKey="name"
-                  innerRadius={85}
+                  innerRadius={75}
                   outerRadius={105}
                   paddingAngle={2}
                 >
