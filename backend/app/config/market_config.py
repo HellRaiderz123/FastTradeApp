@@ -14,6 +14,8 @@ class MarketUniverse(str, Enum):
     NIFTY100 = "NIFTY100"
     NIFTY500 = "NIFTY500"
     BANKNIFTY = "BANKNIFTY"
+    FINNIFTY = "FINNIFTY"
+    NIFTY_IT = "NIFTY_IT"
     CUSTOM = "CUSTOM"
 
 
@@ -39,6 +41,11 @@ MARKET_SYMBOLS = {
     "NIFTY_IT": [
         "TCS", "INFY", "WIPRO", "HCLTECH", "TECHM",
         "LTIM", "COFORGE", "PERSISTENT", "MPHASIS"
+    ],
+    "FINNIFTY": [
+        "HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK",
+        "BAJFINANCE", "BAJAJFINSV", "HDFCLIFE", "SBILIFE", "ICICIGI",
+        "BAJAJHLDNG", "PFC", "RECLTD", "MUTHOOTFIN", "CHOLAFIN"
     ],
 }
 

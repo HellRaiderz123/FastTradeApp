@@ -12,6 +12,8 @@ import {
   Clock,
   Target,
   AlertTriangle,
+  Calendar,
+  Building2,
 } from 'lucide-react';
 import TechnicalChart from '../components/TechnicalChart';
 import NewsFeed from '../components/NewsFeed';
@@ -26,11 +28,13 @@ import {
   type SwingOpportunity,
   type SentimentData 
 } from '../lib/marketDashboardAPI';
+import { getTodayEvents, type CalendarEvent } from '../api/calendarAPI';
 
 const Terminal: React.FC = () => {
   const [selectedSymbol, setSelectedSymbol] = useState('RELIANCE');
   const [searchInput, setSearchInput] = useState('');
   const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '30m' | '1h' | '1d'>('15m');
+  const [universe, setUniverse] = useState<string>('NIFTY50');
   
   // Market data
   const [topMovers, setTopMovers] = useState<{
@@ -44,6 +48,7 @@ const Terminal: React.FC = () => {
   const [swingOpportunities, setSwingOpportunities] = useState<SwingOpportunity[]>([]);
   const [swingDataSource, setSwingDataSource] = useState<string>('live');
   const [marketBreadth, setMarketBreadth] = useState<any>(null);
+  const [todayEvents, setTodayEvents] = useState<CalendarEvent[]>([]);
   
   // Watchlist
   const watchlistSymbols = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN'];
@@ -54,7 +59,7 @@ const Terminal: React.FC = () => {
     const fetchMarketData = async () => {
       try {
         // Top movers
-        const movers = await marketDashboardAPI.getTopMovers(5);
+        const movers = await marketDashboardAPI.getTopMovers(5, universe);
         setTopMovers(movers);
 
         // Sector performance
@@ -66,15 +71,22 @@ const Terminal: React.FC = () => {
         setSentiment(sentimentData);
 
         // Market breadth
-        const breadth = await marketDashboardAPI.getMarketBreadth();
+        const breadth = await marketDashboardAPI.getMarketBreadth(universe);
         setMarketBreadth(breadth);
 
         // Swing opportunities
-        const opportunities = await swingScannerAPI.scan('all', 60);
+        const opportunities = await swingScannerAPI.scan('all', 60, universe);
         setSwingOpportunities(opportunities.opportunities.slice(0, 5));
         setSwingDataSource(opportunities.data_source || 'unknown');
+
+        // Today's calendar events (high-impact only)
+        const calendarData = await getTodayEvents();
+        console.log('📅 Calendar API response:', calendarData);
+        const highImpactEvents = calendarData.events.filter(e => e.impact === 'high').slice(0, 4);
+        console.log('📅 High-impact events for today:', highImpactEvents);
+        setTodayEvents(highImpactEvents);
       } catch (error) {
-        console.error('Failed to fetch market data:', error);
+        console.error('❌ Failed to fetch market data:', error);
       }
     };
 
@@ -82,7 +94,7 @@ const Terminal: React.FC = () => {
     const interval = setInterval(fetchMarketData, 30000); // Refresh every 30s
 
     return () => clearInterval(interval);
-  }, []);
+  }, [universe]);
 
   const handleSymbolSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && searchInput.trim()) {
@@ -96,9 +108,28 @@ const Terminal: React.FC = () => {
       {/* Header with Market Overview */}
       <header className="terminal-panel rounded-2xl px-6 py-4 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Bloomberg-Style Terminal</p>
-            <h1 className="terminal-title text-3xl text-white">NIFTY 50 Command Center</h1>
+          <div className="flex items-center gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Bloomberg-Style Terminal</p>
+              <h1 className="terminal-title text-3xl text-white">
+                {universe === 'NIFTY50' ? 'NIFTY 50' : 
+                 universe === 'BANKNIFTY' ? 'BANK NIFTY' : 
+                 universe === 'FINNIFTY' ? 'FIN NIFTY' : 
+                 universe === 'NIFTY_IT' ? 'NIFTY IT' : 'MARKET'} Command Center
+              </h1>
+            </div>
+            
+            {/* Universe Switcher */}
+            <select 
+              value={universe}
+              onChange={(e) => setUniverse(e.target.value)}
+              className="bg-slate-900/80 border border-slate-700/50 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:border-emerald-400/50 hover:border-slate-500/70 transition cursor-pointer"
+            >
+              <option value="NIFTY50">NIFTY 50 (50 stocks)</option>
+              <option value="BANKNIFTY">BANK NIFTY (12 stocks)</option>
+              <option value="FINNIFTY">FIN NIFTY (15 stocks)</option>
+              <option value="NIFTY_IT">NIFTY IT (9 stocks)</option>
+            </select>
           </div>
           
           <div className="flex items-center gap-3">
@@ -142,7 +173,7 @@ const Terminal: React.FC = () => {
               onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={handleSymbolSearch}
               className="bg-transparent w-full text-sm text-slate-200 focus:outline-none"
-              placeholder="Search NIFTY 50 stocks (e.g., TCS, RELIANCE)"
+              placeholder={`Search ${universe === 'NIFTY50' ? 'NIFTY 50' : universe === 'BANKNIFTY' ? 'BANK NIFTY' : universe === 'FINNIFTY' ? 'FIN NIFTY' : 'NIFTY IT'} stocks (e.g., TCS, RELIANCE)`}
             />
           </div>
 
@@ -359,7 +390,68 @@ const Terminal: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+          {/* Today's Key Events */}
+          {todayEvents.length > 0 && (
+            <div className="terminal-panel rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Today's Events</p>
+                  <h2 className="terminal-title text-xl text-white">Key Calendar</h2>
+                </div>
+                <Calendar size={16} className="text-orange-300" />
+              </div>
+
+              <div className="space-y-2">
+                {todayEvents.map((event, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-slate-900/60 border border-slate-700/40 rounded-lg px-3 py-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          {event.type === 'earnings' && <Building2 size={12} className="text-emerald-400" />}
+                          {event.type === 'rbi' && <Building2 size={12} className="text-orange-400" />}
+                          {event.type === 'ipo' && <TrendingUp size={12} className="text-blue-400" />}
+                          <span className="text-xs font-semibold text-white">{event.title}</span>
+                        </div>
+                        {event.symbol && (
+                          <span className="text-[10px] text-slate-400">{event.symbol}</span>
+                        )}
+                        {event.description && (
+                          <p className="text-[10px] text-slate-500 mt-1 line-clamp-1">{event.description}</p>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                          <Clock size={10} />
+                          {event.time}
+                        </div>
+                        <span className={`inline-block mt-1 px-2 py-0.5 rounded text-[9px] font-semibold ${
+                          event.impact === 'high'
+                            ? 'bg-red-500/20 text-red-300'
+                            : event.impact === 'medium'
+                            ? 'bg-orange-500/20 text-orange-300'
+                            : 'bg-slate-500/20 text-slate-300'
+                        }`}>
+                          {event.impact.toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-slate-700/40">
+                <a
+                  href="/calendar"
+                  className="text-xs text-blue-400 hover:text-blue-300 transition"
+                >
+                  View full calendar →
+                </a>
+              </div>
+            </div>
+          )}        </div>
 
         {/* Right Column - Watchlist, Sectors, Sentiment */}
         <div className="flex flex-col gap-4">

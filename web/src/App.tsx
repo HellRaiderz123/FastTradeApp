@@ -16,6 +16,7 @@ import Heatmap from './pages/Heatmap';
 import { systemAPI } from './lib/api';
 import { useTradeStore } from './lib/store';
 import FinanceTracker from './pages/FinanceTracker';
+import Calendar from './pages/Calendar';
 
 // Simple Error Boundary to avoid white screen and show errors
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }>{
@@ -87,6 +88,7 @@ function App() {
                 <Route path="/journal" element={<Journal />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/finance" element={<FinanceTracker />} />
+                <Route path="/calendar" element={<Calendar />} />
               </Routes>
             </main>
           </div>

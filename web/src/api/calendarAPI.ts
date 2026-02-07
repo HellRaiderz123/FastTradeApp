@@ -1,7 +1,9 @@
 import axios from 'axios';
 
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
+
 const CALENDAR_API = axios.create({
-  baseURL: 'http://localhost:8000/calendar',
+  baseURL: `${API_BASE}/calendar`,
   timeout: 15000,
 });
 

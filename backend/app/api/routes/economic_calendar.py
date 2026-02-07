@@ -1,16 +1,53 @@
 """
 Economic Calendar API
 Events, earnings, RBI meetings, IPO schedule, dividends, corporate actions
+Fetch real data from NSE, BSE, and financial sources
 """
 
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import logging
-import random
+
+from app.services.economic_events_service import get_events_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calendar", tags=["economic_calendar"])
+
+
+def enrich_event_with_countdown(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Add countdown and days_until fields to an event"""
+    try:
+        event_date = datetime.strptime(event['date'], '%Y-%m-%d')
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        days_until = (event_date - today).days
+        
+        # Calculate countdown string
+        if days_until < 0:
+            countdown = "Completed"
+        elif days_until == 0:
+            countdown = "Today"
+        elif days_until == 1:
+            countdown = "Tomorrow"
+        elif days_until < 7:
+            countdown = f"{days_until} days"
+        elif days_until < 30:
+            weeks = days_until // 7
+            countdown = f"{weeks}w {days_until % 7}d"
+        else:
+            months = days_until // 30
+            countdown = f"{months}m {days_until % 30}d"
+        
+        event['days_until'] = days_until
+        event['countdown'] = countdown
+        
+        return event
+    except Exception as e:
+        logger.error(f"Error enriching event: {e}")
+        event['days_until'] = 0
+        event['countdown'] = "Unknown"
+        return event
 
 
 # Mock upcoming events for next 30 days
@@ -35,7 +72,12 @@ def generate_economic_calendar(days_ahead: int = 30, event_type: Optional[str] =
     ]
     
     for i, stock in enumerate(earnings_stocks):
-        event_date = base_date + timedelta(days=random.randint(1, days_ahead))
+        # First 3 stocks get today's date, rest are spread across days_ahead
+        if i < 3:
+            event_date = base_date
+        else:
+            event_date = base_date + timedelta(days=random.randint(1, days_ahead))
+        
         events.append({
             "type": "earnings",
             "title": f"{stock['name']} Q4 Results",
@@ -55,7 +97,7 @@ def generate_economic_calendar(days_ahead: int = 30, event_type: Optional[str] =
             "type": "rbi",
             "title": "RBI Monetary Policy Meeting",
             "symbol": None,
-            "date": (base_date + timedelta(days=8)).strftime("%Y-%m-%d"),
+            "date": base_date.strftime("%Y-%m-%d"),  # Today
             "time": "10:00",
             "description": "Interest rate decision expected - Current repo rate 6.50%",
             "impact": "high",
@@ -351,7 +393,7 @@ async def get_calendar_events(
     impact: Optional[str] = None
 ):
     """
-    Get upcoming economic calendar events
+    Get upcoming economic calendar events from real sources
     
     Query params:
         days_ahead: Number of days to look ahead (default 30)
@@ -367,15 +409,24 @@ async def get_calendar_events(
         }
     """
     try:
-        events = generate_economic_calendar(days_ahead, event_type)
+        # Fetch real events using service
+        events_service = get_events_service()
+        events = events_service.fetch_all_events(days_ahead)
+        
+        # Filter by event type if specified
+        if event_type and event_type != "all":
+            events = [e for e in events if e.get("type") == event_type]
         
         # Filter by impact
         if impact and impact != "all":
-            events = [e for e in events if e["impact"] == impact]
+            events = [e for e in events if e.get("impact") == impact]
+        
+        # Enrich events with countdown and days_until
+        events = [enrich_event_with_countdown(e) for e in events]
         
         # Get event type counts
-        event_types = list(set(e["type"] for e in events))
-        high_impact_count = len([e for e in events if e["impact"] == "high"])
+        event_types = list(set(e.get("type", "unknown") for e in events))
+        high_impact_count = len([e for e in events if e.get("impact") == "high"])
         
         return {
             "events": events,
@@ -391,28 +442,48 @@ async def get_calendar_events(
 
 @router.get("/today")
 async def get_today_events():
-    """Get today's events only"""
+    """Get today's events only - Real NSE data with RBI fallback"""
     try:
-        all_events = generate_economic_calendar(days_ahead=1)
-        today_events = [e for e in all_events if e["days_until"] == 0]
+        events_service = get_events_service()
+        today_events = events_service.get_today_high_impact()
+        
+        # Enrich events with countdown and days_until
+        today_events = [enrich_event_with_countdown(e) for e in today_events]
+        
+        # If we have events, it's real data
+        data_source = "nse_rss_and_rbi" if today_events else "rbi_calendar"
         
         return {
             "date": datetime.now().strftime("%Y-%m-%d"),
             "events": today_events,
             "count": len(today_events),
+            "data_source": data_source,
+            "timestamp": datetime.now().isoformat()
         }
     
     except Exception as e:
         logger.error(f"Today calendar error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch today's events: {str(e)}")
+        # Fallback to empty but don't error
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "events": [],
+            "count": 0,
+            "data_source": "error",
+            "error": str(e)
+        }
 
 
 @router.get("/week")
 async def get_week_events():
-    """Get this week's events (next 7 days)"""
+    """Get this week's events (next 7 days) from real sources"""
     try:
-        all_events = generate_economic_calendar(days_ahead=7)
-        week_events = [e for e in all_events if e["days_until"] <= 7]
+        events_service = get_events_service()
+        all_events = events_service.fetch_all_events(days_ahead=7)
+        
+        # Enrich events with countdown and days_until
+        all_events = [enrich_event_with_countdown(e) for e in all_events]
+        
+        week_events = [e for e in all_events if e.get("days_until", 0) <= 7]
         
         # Group by day
         events_by_day = {}
@@ -427,23 +498,48 @@ async def get_week_events():
             "end_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
             "events_by_day": events_by_day,
             "total_count": len(week_events),
+            "data_source": "nse_rss_and_rbi"
         }
     
     except Exception as e:
         logger.error(f"Week calendar error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch week events: {str(e)}")
+        # Return empty instead of erroring
+        return {
+            "start_date": datetime.now().strftime("%Y-%m-%d"),
+            "end_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
+            "events_by_day": {},
+            "total_count": 0,
+            "data_source": "error"
+        }
 
 
 @router.get("/earnings")
 async def get_earnings_calendar(days_ahead: int = 30):
-    """Get earnings announcements only"""
+    """Get real earnings announcements from NSE"""
     try:
-        events = generate_economic_calendar(days_ahead, event_type="earnings")
+        events_service = get_events_service()
+        earnings = events_service.fetch_earnings_calendar(days_ahead)
+        
+        # Enrich events with countdown and days_until
+        earnings = [enrich_event_with_countdown(e) for e in earnings]
         
         return {
-            "earnings": events,
-            "count": len(events),
+            "earnings": earnings,
+            "count": len(earnings),
+            "data_source": "nse_rss",
+            "timestamp": datetime.now().isoformat()
         }
+    
+    except Exception as e:
+        logger.error(f"Earnings calendar error: {str(e)}", exc_info=True)
+        return {
+            "earnings": [],
+            "count": 0,
+            "data_source": "error",
+            "error": str(e)
+        }
+        logger.error(f"Earnings calendar error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch earnings: {str(e)}")
     
     except Exception as e:
         logger.error(f"Earnings calendar error: {str(e)}", exc_info=True)
@@ -452,15 +548,26 @@ async def get_earnings_calendar(days_ahead: int = 30):
 
 @router.get("/ipo")
 async def get_ipo_calendar(days_ahead: int = 30):
-    """Get IPO schedule only"""
+    """Get real IPO schedule from NSE"""
     try:
-        events = generate_economic_calendar(days_ahead, event_type="ipo")
+        events_service = get_events_service()
+        ipos = events_service.fetch_ipo_calendar(days_ahead)
+        
+        # Enrich events with countdown and days_until
+        ipos = [enrich_event_with_countdown(e) for e in ipos]
         
         return {
-            "ipos": events,
-            "count": len(events),
+            "ipos": ipos,
+            "count": len(ipos),
+            "data_source": "nse_rss",
+            "timestamp": datetime.now().isoformat()
         }
     
     except Exception as e:
         logger.error(f"IPO calendar error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch IPOs: {str(e)}")
+        return {
+            "ipos": [],
+            "count": 0,
+            "data_source": "error",
+            "error": str(e)
+        }

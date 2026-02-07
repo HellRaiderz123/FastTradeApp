@@ -130,22 +130,22 @@ export interface SentimentData {
 
 export const marketDashboardAPI = {
   // Top movers
-  async getTopMovers(limit: number = 10) {
+  async getTopMovers(limit: number = 10, universe: string = 'NIFTY50') {
     return apiRequest<{
       gainers: TopMover[];
       losers: TopMover[];
       most_active: TopMover[];
-    }>(`/market-dashboard/top-movers?limit=${limit}`);
+    }>(`/market-dashboard/top-movers?limit=${limit}&universe=${universe}`);
   },
 
   // Market breadth
-  async getMarketBreadth() {
-    return apiRequest<MarketBreadth>('/market-dashboard/market-breadth');
+  async getMarketBreadth(universe: string = 'NIFTY50') {
+    return apiRequest<MarketBreadth>(`/market-dashboard/market-breadth?universe=${universe}`);
   },
 
   // Heatmap data
-  async getHeatmap() {
-    return apiRequest<{ stocks: HeatmapStock[] }>('/market-dashboard/heatmap');
+  async getHeatmap(universe: string = 'NIFTY50') {
+    return apiRequest<{ stocks: HeatmapStock[] }>(`/market-dashboard/heatmap?universe=${universe}`);
   },
 
   // Sector performance
@@ -161,14 +161,14 @@ export const marketDashboardAPI = {
 
 // Swing Scanner API
 export const swingScannerAPI = {
-  async scan(strategy: string = 'all', minScore: number = 50) {
+  async scan(strategy: string = 'all', minScore: number = 50, universe: string = 'NIFTY50') {
     return apiRequest<{
       opportunities: SwingOpportunity[];
       total_scanned: number;
       matches_found: number;
       data_source?: string;
       timestamp: string;
-    }>(`/swing-scanner/scan?strategy=${strategy}&min_score=${minScore}`);
+    }>(`/swing-scanner/scan?strategy=${strategy}&min_score=${minScore}&universe=${universe}`);
   },
 
   async getStrategies() {

@@ -32,6 +32,7 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedSentiment, setSelectedSentiment] = useState<string>('all');
   const [categories, setCategories] = useState<string[]>([]);
+  const [dataSource, setDataSource] = useState<string>('loading');
 
   useEffect(() => {
     loadNewsFeed();
@@ -58,8 +59,10 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
       setNews(response.news);
       setCategories(response.categories);
       setSentimentSummary(response.sentiment_summary);
+      setDataSource(response.data_source || 'unknown');
     } catch (error) {
       console.error('Failed to load news feed:', error);
+      setDataSource('error');
     } finally {
       setLoading(false);
     }
@@ -223,28 +226,41 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
       )}
 
       {/* Filters */}
-      <div className="flex items-center space-x-2 pb-2">
-        <select
-          value={selectedCategory}
-          onChange={(e) => setSelectedCategory(e.target.value)}
-          className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm text-gray-300 focus:outline-none focus:border-blue-500"
-        >
-          <option value="all">All Categories</option>
-          {categories.map((cat) => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </select>
+      <div className="flex items-center justify-between pb-2">
+        <div className="flex items-center space-x-2">
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm text-gray-300 focus:outline-none focus:border-blue-500"
+          >
+            <option value="all">All Categories</option>
+            {categories.map((cat) => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
 
-        <select
-          value={selectedSentiment}
-          onChange={(e) => setSelectedSentiment(e.target.value)}
-          className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm text-gray-300 focus:outline-none focus:border-blue-500"
-        >
-          <option value="all">All Sentiment</option>
-          <option value="bullish">Bullish</option>
-          <option value="bearish">Bearish</option>
-          <option value="neutral">Neutral</option>
-        </select>
+          <select
+            value={selectedSentiment}
+            onChange={(e) => setSelectedSentiment(e.target.value)}
+            className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm text-gray-300 focus:outline-none focus:border-blue-500"
+          >
+            <option value="all">All Sentiment</option>
+            <option value="bullish">Bullish</option>
+            <option value="bearish">Bearish</option>
+            <option value="neutral">Neutral</option>
+          </select>
+        </div>
+
+        {/* Data Source Badge */}
+        <div className={`px-2 py-1 rounded text-xs font-semibold ${
+          dataSource === 'rss_feeds' 
+            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+            : dataSource === 'error'
+            ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+            : 'bg-slate-500/20 text-slate-300 border border-slate-500/40'
+        }`}>
+          {dataSource === 'rss_feeds' ? '🟢 LIVE' : dataSource === 'error' ? '🔴 ERROR' : '⏳ LOADING'}
+        </div>
       </div>
 
       {/* News Feed */}
@@ -258,39 +274,36 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
             <div className="text-gray-500 text-sm">No news found</div>
           </div>
         ) : (
-          news.map((item) => (
-            <div
-              key={item.id}
-              className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 hover:border-slate-600 hover:bg-slate-800/70 transition-all cursor-pointer group"
+          news.map((item, index) => (
+            <a
+              key={index}
+              href={item.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 hover:border-slate-600 hover:bg-slate-800/70 transition-all cursor-pointer group block"
             >
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center space-x-2">
                   <div className={`p-1 rounded ${getSentimentColor(item.sentiment)}`}>
                     {getSentimentIcon(item.sentiment)}
                   </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full border ${getImpactBadgeColor(item.impact)}`}>
-                    {item.impact}
-                  </span>
-                  <span className="text-xs text-gray-500">{item.category}</span>
+                  <span className="text-xs text-slate-400">{item.category}</span>
+                  <span className="text-xs text-slate-500">{item.source}</span>
                 </div>
-                <ExternalLink className="w-3 h-3 text-gray-600 group-hover:text-gray-400 transition-colors" />
+                <ExternalLink className="w-3 h-3 text-gray-600 group-hover:text-gray-400 transition-colors flex-shrink-0" />
               </div>
-
-              <h4 className="text-sm text-gray-200 font-medium mb-2 leading-snug">
-                {item.headline}
-              </h4>
-
-              <div className="flex items-center justify-between text-xs text-gray-500">
-                <div className="flex items-center space-x-2">
-                  <span className="font-mono">{item.source}</span>
-                  <span>•</span>
-                  <span>{formatTimestamp(item.timestamp)}</span>
-                </div>
-                <div className={`px-2 py-0.5 rounded-full ${getSentimentColor(item.sentiment)}`}>
-                  {item.sentiment_score > 0 ? '+' : ''}{(item.sentiment_score * 100).toFixed(0)}%
-                </div>
+              <h3 className="text-sm font-medium text-gray-100 group-hover:text-white transition-colors leading-tight">
+                {item.title}
+              </h3>
+              {item.description && (
+                <p className="text-xs text-gray-400 mt-2 line-clamp-2">
+                  {item.description}
+                </p>
+              )}
+              <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
+                <span>{formatTimestamp(item.published)}</span>
               </div>
-            </div>
+            </a>
           ))
         )}
       </div>

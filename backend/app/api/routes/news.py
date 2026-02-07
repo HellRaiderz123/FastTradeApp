@@ -1,12 +1,14 @@
 """
 Market News Feed with Sentiment Analysis
-Generate Bloomberg-style news feed
+Fetch real news from NSE RSS feeds with mock fallback
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, List, Any
 from datetime import datetime, timedelta
 import logging
 import random
+
+from app.services.rss_feed_service import get_rss_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/news", tags=["news"])
@@ -201,45 +203,68 @@ async def get_news_feed(
     sentiment: str = Query(default=None)
 ) -> Dict[str, Any]:
     """
-    Get market news feed with sentiment analysis
+    Get market news feed with sentiment analysis from NSE RSS feeds
     
     Args:
         limit: Number of news items to return
-        category: Filter by category (Market, Stocks, Economy, RBI, IPO, Global, Commodities)
+        category: Filter by category (Market, Stocks, Economy, RBI, IPO, Earnings, Corporate)
         sentiment: Filter by sentiment (bullish, bearish, neutral)
     
     Returns:
         {
             "news": [...],
             "total_count": 20,
-            "categories": ["Market", "Stocks", "Economy", ...],
-            "sentiment_summary": {
-                "bullish": 8,
-                "bearish": 6,
-                "neutral": 6
-            },
+            "categories": [...],
+            "sentiment_summary": {...},
+            "data_source": "nse_rss" or "simulated",
             "timestamp": "2024-01-09T15:30:00"
         }
     """
     try:
-        # Generate news feed
-        news_items = generate_news_feed(count=limit, category=category, sentiment=sentiment)
+        news_items = []
+        data_source = "failed"
+        
+        # Fetch real RSS feeds - with fallback to simulated if feeds unavailable
+        rss_service = get_rss_service()
+        logger.info("Fetching real news from RSS feeds...")
+        news_items = rss_service.fetch_all_feeds()
+        
+        if not news_items:
+            logger.warning("No news items fetched from RSS feeds, using simulated data as fallback")
+            # RSS feeds failed - use simulated data as fallback
+            data_source = "simulated"
+            news_items = generate_news_feed(count, category, sentiment)
+            logger.info(f"Generated {len(news_items)} simulated news items as fallback")
+        else:
+            data_source = "rss_feeds"
+            logger.info(f"Successfully fetched {len(news_items)} news items from RSS feeds")
+        
+        # Apply filters
+        if category:
+            news_items = [n for n in news_items if n.get('category', '').lower() == category.lower()]
+        
+        if sentiment:
+            news_items = [n for n in news_items if n.get('sentiment', '').lower() == sentiment.lower()]
+        
+        # Limit results
+        news_items = news_items[:limit]
         
         # Calculate sentiment summary
         sentiment_summary = {
-            'bullish': len([n for n in news_items if n['sentiment'] == 'bullish']),
-            'bearish': len([n for n in news_items if n['sentiment'] == 'bearish']),
-            'neutral': len([n for n in news_items if n['sentiment'] == 'neutral'])
+            'bullish': len([n for n in news_items if n.get('sentiment') == 'bullish']),
+            'bearish': len([n for n in news_items if n.get('sentiment') == 'bearish']),
+            'neutral': len([n for n in news_items if n.get('sentiment') == 'neutral'])
         }
         
         # Get unique categories
-        categories = list(set([item['category'] for item in MOCK_NEWS_ITEMS]))
+        categories = sorted(list(set([item.get('category', 'Unknown') for item in news_items])))
         
         return {
             'news': news_items,
             'total_count': len(news_items),
-            'categories': sorted(categories),
+            'categories': categories,
             'sentiment_summary': sentiment_summary,
+            'data_source': data_source,
             'timestamp': datetime.now().isoformat()
         }
     

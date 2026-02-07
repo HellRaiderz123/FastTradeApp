@@ -6,15 +6,13 @@ const NEWS_API = axios.create({
 });
 
 export interface NewsItem {
-  id: string;
-  headline: string;
+  title: string;
+  description: string;
+  link: string;
+  published: string;
   category: string;
   sentiment: 'bullish' | 'bearish' | 'neutral';
-  sentiment_score: number;
-  impact: 'high' | 'medium' | 'low';
-  timestamp: string;
   source: string;
-  read: boolean;
 }
 
 export interface SentimentSummary {
@@ -28,6 +26,8 @@ export interface NewsFeedResponse {
   total_count: number;
   categories: string[];
   sentiment_summary: SentimentSummary;
+  data_source: string;
+  timestamp: string;
 }
 
 export interface TrendingTopic {
