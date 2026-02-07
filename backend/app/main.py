@@ -13,6 +13,8 @@ from app.api.routes import backtest
 from app.api.routes import greeks
 from app.api.routes import market
 from app.api.routes import suggestions
+from app.api.routes import screener
+from app.api.routes import options
 from app.api.routes import ws_positions
 from app.api.routes.paper_mtm import router as paper_mtm_router
 from app.api.routes.exit import router as exit_router
@@ -22,6 +24,13 @@ from app.api.routes import notifications
 from app.api.routes import websocket_routes
 from app.api.routes import health
 from app.api.routes.finance import router as finance_router
+from app.api.routes import market_dashboard
+from app.api.routes import swing_scanner
+from app.api.routes import sentiment
+from app.api.routes import config_routes
+from app.api.routes import news
+from app.api.routes import economic_calendar
+from app.api.routes import market_depth
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
@@ -185,6 +194,8 @@ app.include_router(settings.router)
 app.include_router(backtest.router)
 app.include_router(greeks.router)
 app.include_router(market.router)
+app.include_router(screener.router)
+app.include_router(options.router)
 app.include_router(suggestions.router)
 app.include_router(ws_positions.router)
 app.include_router(paper_mtm_router)
@@ -196,5 +207,12 @@ app.include_router(notifications.router)
 app.include_router(websocket_routes.router)
 app.include_router(health.router)
 app.include_router(finance_router)
+app.include_router(market_dashboard.router)
+app.include_router(swing_scanner.router)
+app.include_router(sentiment.router)
+app.include_router(news.router)
+app.include_router(economic_calendar.router)
+app.include_router(market_depth.router)
+app.include_router(config_routes.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

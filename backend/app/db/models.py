@@ -194,3 +194,147 @@ class BacktestTrade(Base):
     status = Column(String)  # open, closed
     
     created_at = Column(DateTime(timezone=True), default=now_ist)
+
+
+# ===================================================================
+# MULTI-ASSET MODELS FOR BLOOMBERG TERMINAL EXPANSION
+# ===================================================================
+
+
+class Symbol(Base):
+    """NIFTY 50 stocks and derivative metadata"""
+    __tablename__ = "symbols"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Identification
+    ticker = Column(String, unique=True, index=True)  # e.g., "RELIANCE", "INFY", "NIFTY50"
+    name = Column(String, nullable=False)  # Full company name or index name
+    asset_type = Column(String, index=True)  # STOCK, INDEX, FUTURE, OPTION
+    
+    # Classification
+    sector = Column(String, nullable=True, index=True)  # IT, Finance, Pharma, Energy, etc.
+    sub_sector = Column(String, nullable=True)
+    
+    # Index Membership
+    is_nifty50 = Column(Boolean, default=False, index=True)
+    weight_in_nifty = Column(Float, nullable=True)  # % weight in NIFTY50
+    nifty_50_rank = Column(Integer, nullable=True)  # 1-50
+    
+    # Fundamentals (refreshed daily/weekly)
+    market_cap = Column(Float, nullable=True)  # In INR crores
+    pe_ratio = Column(Float, nullable=True)
+    pb_ratio = Column(Float, nullable=True)
+    dividend_yield = Column(Float, nullable=True)
+    roe = Column(Float, nullable=True)  # Return on equity %
+    roa = Column(Float, nullable=True)  # Return on assets %
+    
+    # Debt metrics
+    debt_to_equity = Column(Float, nullable=True)
+    current_ratio = Column(Float, nullable=True)
+    
+    # Derived data
+    fifty_two_week_high = Column(Float, nullable=True)
+    fifty_two_week_low = Column(Float, nullable=True)
+    average_volume = Column(Float, nullable=True)  # In shares/day
+    
+    # Exchange info
+    exchange = Column(String, default="NSE")  # NSE, BSE
+    trading_symbol = Column(String, nullable=True)  # For broker APIs
+    
+    # Extra data (earnings_date, next_dividend, etc.)
+    extra_data = Column(JSON, nullable=True)
+    
+    # Status
+    is_active = Column(Boolean, default=True, index=True)
+    
+    # Audit timestamps
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+    last_fundamental_update = Column(DateTime(timezone=True), nullable=True)
+
+
+class MarketData(Base):
+    """Candlestick data for all assets (stocks, options, futures, indices)"""
+    __tablename__ = "market_data"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # References
+    symbol_id = Column(Integer, nullable=False, index=True)  # FK to Symbol
+    ticker = Column(String, index=True)  # Denormalized for fast queries
+    
+    # Time and Frame
+    timeframe = Column(String, index=True)  # 1m, 5m, 15m, 1h, 1d, 1w, 1M
+    timestamp = Column(DateTime(timezone=True), index=True, nullable=False)
+    
+    # OHLCV data
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    
+    # For Options/Futures
+    open_interest = Column(Float, nullable=True)  # Open interest (options/futures)
+    settlement_price = Column(Float, nullable=True)  # Settlement for futures
+    
+    # Quality Flags
+    is_complete = Column(Boolean, default=False)  # Candle is complete/closed?
+    is_valid = Column(Boolean, default=True)  # Data validation (no anomalies)
+    
+    # Metadata
+    source = Column(String)  # zerodha, nse, local_cache, etc.
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    
+    # Indexes for fast queries
+    # Note: Create compound index on (ticker, timeframe, timestamp) in migration
+
+
+class AlertRule(Base):
+    """Dynamic alert rules for price, technical, and fundamental events"""
+    __tablename__ = "alert_rules"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Identification
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    
+    # References
+    symbol_id = Column(Integer, nullable=False, index=True)  # FK to Symbol
+    ticker = Column(String, index=True)  # Denormalized
+    
+    # Alert Type
+    alert_type = Column(String, index=True)  # PRICE, TECHNICAL, FUNDAMENTAL, RISK
+    
+    # Conditions (flexible JSON for different alert types)
+    # Examples:
+    # PRICE: {"operator": "above", "price": 1500}
+    # TECHNICAL: {"indicator": "RSI", "operator": "below", "value": 40}
+    # FUNDAMENTAL: {"field": "pe_ratio", "operator": "below", "value": 25}
+    # RISK: {"field": "margin_utilization", "operator": "above", "percent": 70}
+    condition = Column(JSON, nullable=False)
+    
+    # Alert Configuration
+    is_enabled = Column(Boolean, default=True)
+    is_recurring = Column(Boolean, default=True)  # Trigger multiple times or once?
+    
+    # Notification Channels
+    notify_via = Column(JSON, default={})  # {"email": true, "sms": true, "push": true, "webhook": false}
+    
+    # Execution
+    action_on_trigger = Column(String, nullable=True)  # NOTIFY, AUTO_TRADE, WEBHOOK, etc.
+    action_params = Column(JSON, nullable=True)  # {strategy: "stock_momentum_15m", ...}
+    
+    # State
+    last_triggered_at = Column(DateTime(timezone=True), nullable=True)
+    trigger_count = Column(Integer, default=0)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+    updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+    created_by = Column(String, nullable=True)  # User ID who created
+    
+    # Archive
+    deleted_at = Column(DateTime(timezone=True), nullable=True)  # Soft delete

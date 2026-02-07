@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
 * {
   margin: 0;
   padding: 0;
@@ -9,16 +11,52 @@
 }
 
 html {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
   color-scheme: light;
 }
 
 body {
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-  color: #f1f5f9;
+  background: radial-gradient(1200px 600px at 15% 10%, #0b1120 0%, #0b1222 50%, #08101c 100%);
+  color: #e5e7eb;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+:root {
+  --terminal-ink: #e5e7eb;
+  --terminal-muted: #94a3b8;
+  --terminal-border: rgba(148, 163, 184, 0.2);
+  --terminal-glow: rgba(45, 212, 191, 0.18);
+  --terminal-accent: #14b8a6;
+  --terminal-accent-2: #f97316;
+  --terminal-panel: rgba(10, 15, 25, 0.82);
+}
+
+.terminal-shell {
+  background:
+    radial-gradient(700px 400px at 80% 0%, rgba(20, 184, 166, 0.12) 0%, transparent 60%),
+    radial-gradient(900px 600px at 10% 80%, rgba(249, 115, 22, 0.12) 0%, transparent 55%),
+    linear-gradient(180deg, #070b14 0%, #0b1222 40%, #0a111f 100%);
+}
+
+.terminal-pattern {
+  background-image:
+    linear-gradient(0deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.terminal-panel {
+  background: var(--terminal-panel);
+  border: 1px solid var(--terminal-border);
+  box-shadow: 0 20px 60px rgba(5, 10, 20, 0.45);
+  backdrop-filter: blur(12px);
+}
+
+.terminal-title {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  letter-spacing: -0.01em;
 }
 
 a {
@@ -56,4 +94,23 @@ button {
 
 .btn-danger {
   @apply bg-danger hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.6);
 }

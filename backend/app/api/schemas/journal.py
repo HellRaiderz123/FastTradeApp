@@ -16,7 +16,7 @@ class StrategyRunOut(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class ExecutionIntentOut(BaseModel):
@@ -42,4 +42,4 @@ class ExecutionIntentOut(BaseModel):
     closed_at: Optional[datetime]
     
     class Config:
-        orm_mode = True
+        from_attributes = True

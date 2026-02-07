@@ -3,12 +3,16 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
+import Terminal from './pages/TerminalBloomberg';
+import Screener from './pages/Screener';
+import OptionsChain from './pages/OptionsChain';
 import Strategies from './pages/Strategies';
 import StrategyBuilder from './pages/StrategyBuilder';
 import Backtest from './pages/Backtest';
 import Positions from './pages/Positions';
 import Journal from './pages/Journal';
 import Settings from './pages/Settings';
+import Heatmap from './pages/Heatmap';
 import { systemAPI } from './lib/api';
 import { useTradeStore } from './lib/store';
 import FinanceTracker from './pages/FinanceTracker';
@@ -59,7 +63,7 @@ function App() {
   return (
     <ErrorBoundary>
       <Router>
-        <div className="flex h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div className="flex h-screen terminal-shell">
           <Sidebar open={sidebarOpen} />
           
           <div className="flex-1 flex flex-col overflow-hidden">
@@ -71,7 +75,11 @@ function App() {
             
             <main className="flex-1 overflow-auto p-6">
               <Routes>
-                <Route path="/" element={<Dashboard />} />
+                <Route path="/" element={<Terminal />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/screener" element={<Screener />} />
+                <Route path="/heatmap" element={<Heatmap />} />
+                <Route path="/options" element={<OptionsChain />} />
                 <Route path="/strategies" element={<Strategies />} />
                 <Route path="/strategies/builder" element={<StrategyBuilder />} />
                 <Route path="/backtest" element={<Backtest />} />

@@ -134,12 +134,24 @@ export const journalAPI = {
 
 // Market Data APIs
 export const marketAPI = {
-  getCandles: (symbol: string, limit = 50) =>
-    api.get(`/candles/15m/${symbol}?limit=${limit}`),
+  getCandles: (symbol: string, interval: string = '15minute', from_date?: string, to_date?: string) =>
+    api.get(`/market/candles/${symbol}`, { 
+      params: { interval, from_date, to_date } 
+    }),
   
   // Get live LTP (Last Traded Price) for spot price
   getLTP: (symbol: string = 'NIFTY') =>
     api.get(`/market/ltp/${symbol}`),
+  
+  // Get bulk quotes for multiple symbols
+  getBulkQuotes: (symbols: string[]) =>
+    api.get(`/market/bulk-quotes`, { 
+      params: { symbols: symbols.join(',') } 
+    }),
+  
+  // Get sector performance data
+  getSectorPerformance: () =>
+    api.get(`/market/sector-performance`),
   
   // Get option chain for a symbol and expiry
   getOptionChain: (symbol: string = 'NIFTY', expiry: string) =>
@@ -154,6 +166,28 @@ export const marketAPI = {
     api.get(`/market/option-premium`, { 
       params: { symbol, strike, option_type, expiry } 
     }),
+};
+
+// Screener APIs
+export const screenerAPI = {
+  // Filter stocks based on criteria
+  filterStocks: (filters: any) =>
+    api.post(`/screener/filter`, filters),
+  
+  // Get predefined screener presets
+  getPresets: () =>
+    api.get(`/screener/presets`),
+};
+
+// Options Chain APIs
+export const optionsAPI = {
+  // Get full options chain with Greeks
+  getChain: (symbol: string, expiry?: string) =>
+    api.get(`/options/chain/${symbol}`, { params: { expiry } }),
+  
+  // Get available expiry dates
+  getExpiries: (symbol: string) =>
+    api.get(`/options/expiries/${symbol}`),
 };
 
 // System Control APIs

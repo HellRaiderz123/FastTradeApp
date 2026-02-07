@@ -75,6 +75,49 @@ class KiteConnectService:
             logger.error(f"Error fetching quote for {symbol}: {e}")
             return None
     
+    def get_full_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get full quote data including OHLC for a symbol
+        
+        Args:
+            symbol: NSE symbol (e.g., 'RELIANCE', 'TCS', 'INFY')
+        
+        Returns:
+            Dict with keys: last_price, ohlc, volume, change, etc.
+            Returns None if symbol not found or API fails
+        """
+        try:
+            if not self.kite:
+                self._initialize()
+            
+            if not self.kite:
+                return None
+            
+            # Format as NSE:SYMBOL for quote API
+            instrument = f"NSE:{symbol}"
+            
+            # Get full quote (includes OHLC)
+            data = self.kite.quote([instrument])
+            
+            if instrument not in data:
+                logger.warning(f"Symbol {instrument} not in response")
+                return None
+            
+            quote_data = data[instrument]
+            
+            return {
+                "last_price": quote_data.get("last_price"),
+                "ohlc": quote_data.get("ohlc", {}),
+                "volume": quote_data.get("volume", 0),
+                "buy_quantity": quote_data.get("buy_quantity", 0),
+                "sell_quantity": quote_data.get("sell_quantity", 0),
+                "timestamp": quote_data.get("timestamp"),
+            }
+        
+        except Exception as e:
+            logger.error(f"Error fetching full quote for {symbol}: {e}")
+            return None
+    
     def get_ltp(self, symbol: str) -> Optional[float]:
         """
         Get Last Trading Price (LTP) for a symbol
@@ -90,6 +133,36 @@ class KiteConnectService:
             return quote.get("last_price") if quote else None
         except Exception as e:
             logger.error(f"Error fetching LTP for {symbol}: {e}")
+            return None
+    
+    def get_bulk_quotes(self, symbols: list) -> Optional[Dict[str, Any]]:
+        """
+        Get quotes for multiple symbols at once
+        
+        Args:
+            symbols: List of NSE symbols (e.g., ['RELIANCE', 'TCS', 'INFY'])
+        
+        Returns:
+            Dict with keys like "NSE:RELIANCE" containing quote data
+            Returns None if API fails or not initialized
+        """
+        try:
+            if not self.kite:
+                self._initialize()
+            
+            if not self.kite:
+                return None
+            
+            # Format symbols as NSE:SYMBOL
+            instruments = [f"NSE:{symbol}" for symbol in symbols]
+            
+            # Get quotes for all symbols
+            data = self.kite.quote(instruments)
+            
+            return data
+        
+        except Exception as e:
+            logger.error(f"Error fetching bulk quotes: {e}")
             return None
     
     def get_option_chain(self, symbol: str, expiry: str) -> Optional[list]:
