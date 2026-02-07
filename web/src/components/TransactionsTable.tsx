@@ -11,6 +11,7 @@ const categories = [
   "Entertainment",
   "Health",
   "Education",
+  "Kid",
   "Uncategorized",
 ];
 

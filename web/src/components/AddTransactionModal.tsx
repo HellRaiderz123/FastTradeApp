@@ -94,6 +94,7 @@ export default function AddTransactionModal({
           <option value="Entertainment">Entertainment</option>
           <option value="Health">Health</option>
           <option value="Education">Education</option>
+	  <option value="Education">Kid</option>
            <option value="Uncategorized">Uncategorized</option>
         </select>
 
