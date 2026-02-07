@@ -4,6 +4,7 @@ Events, earnings, RBI meetings, IPO schedule, dividends, corporate actions
 Fetch real data from NSE, BSE, and financial sources
 """
 
+from random import random
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional

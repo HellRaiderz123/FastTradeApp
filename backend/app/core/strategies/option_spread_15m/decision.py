@@ -59,9 +59,10 @@ def decide_strategy(
     ratio_quality_min = 6
 
     # ================================================
-    # BREAKOUT / STRONG TREND → RATIO BACKSPREADS
+    # BREAKOUT / STRONG TREND → RATIO BACKSPREADS OR LONG STRADDLE/STRANGLE
     # ================================================
     if market_mode in ["TRENDING", "BREAKOUT_SETUP"]:
+        # Strong directional conviction + low/normal IV → Ratio Backspreads
         if (
             adx >= 20
             and iv_regime in ["LOW", "NORMAL"]
@@ -78,6 +79,14 @@ def decide_strategy(
                     "PUT_RATIO_BACKSPREAD",
                     f"Strong bearish move expected (ADX={adx:.1f}, IV={iv_regime}, conf={confidence:.0f}%)",
                 )
+        
+        # Expecting volatility spike (low IV currently) + no strong directional bias
+        if iv_regime == "LOW" and confidence < 60 and quality_score >= 5:
+            # Neutral/uncertain direction but expect big move → Long Straddle/Strangle
+            return (
+                "LONG_STRANGLE",
+                f"Expecting volatility spike without clear direction (IV={iv_regime}, conf={confidence:.0f}%)"
+            )
 
         # Fallback inside trend → safer spreads
         if confidence >= spread_min_conf:
@@ -89,22 +98,47 @@ def decide_strategy(
         return "NO_TRADE", "Trend present but conviction insufficient"
 
     # ================================================
-    # RANGE + HIGH IV → IRON CONDOR
+    # RANGE + HIGH IV → PREMIUM SELLING STRATEGIES
     # ================================================
     if market_mode == "RANGE" and iv_regime == "HIGH":
+        # VERY HIGH CONFIDENCE → SHORT STRADDLE (aggressive)
+        if quality_score >= 6 and confidence >= 80:
+            return (
+                "SHORT_STRADDLE",
+                f"Very high confidence range-bound with high IV (conf={confidence:.0f}%, qual={quality_score}/8)"
+            )
+        
+        # HIGH CONFIDENCE → SHORT STRANGLE (less aggressive)
+        if quality_score >= 6 and confidence >= 75:
+            return (
+                "SHORT_STRANGLE",
+                f"High confidence range-bound with high IV (conf={confidence:.0f}%, qual={quality_score}/8)"
+            )
+        
+        # MODERATE CONFIDENCE → IRON CONDOR (defined risk)
         if quality_score >= 5:
             return "IRON_CONDOR", "Range-bound market with high IV"
+        
         return "NO_TRADE", "Range + high IV but insufficient quality"
 
     # ================================================
-    # RANGE + LOW/NORMAL IV → DIRECTIONAL SPREADS ONLY
+    # RANGE + LOW/NORMAL IV → DIRECTIONAL SPREADS OR BUTTERFLY
     # ================================================
     if market_mode == "RANGE" and iv_regime in ["LOW", "NORMAL"]:
+        # If neutral (no strong bias) → Butterfly
+        if confidence < 60 and quality_score >= 5:
+            return (
+                "BUTTERFLY_SPREAD",
+                f"Range-bound with neutral bias and low volatility expected (conf={confidence:.0f}%)"
+            )
+        
+        # If directional bias → spreads
         if confidence >= spread_min_conf:
             if take_bull:
                 return "BULL_PUT", f"Range but bullish bias (conf={confidence:.0f}%)"
             if take_bear:
                 return "BEAR_CALL", f"Range but bearish bias (conf={confidence:.0f}%)"
+        
         return "NO_TRADE", "Range + low/normal IV without strong bias"
 
     # ================================================

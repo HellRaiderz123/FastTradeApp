@@ -58,6 +58,17 @@ export const StrategyManager: React.FC = () => {
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionUnderlyings, setSuggestionUnderlyings] = useState<string[]>([
+    'NIFTY',
+    'BANKNIFTY',
+    'FINNIFTY',
+  ]);
+
+  const underlyingLabels: Record<string, string> = {
+    NIFTY: 'NIFTY50',
+    BANKNIFTY: 'BANKNIFTY',
+    FINNIFTY: 'FINNIFTY',
+  };
 
   // Load strategies on mount
   useEffect(() => {
@@ -72,17 +83,23 @@ export const StrategyManager: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategies.length]);
 
-  // Refresh every 60 seconds
+  useEffect(() => {
+    if (strategies.length === 0) return;
     const interval = setInterval(() => {
-      
+      refreshSuggestions();
     }, 60000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategies.length, suggestionUnderlyings]);
 
   const refreshSuggestions = async () => {
     setSuggestionsLoading(true);
     try {
-      const underlyings = Array.from(new Set(strategies.map(s => s.underlying))).filter(Boolean);
+      const underlyings = suggestionUnderlyings.length > 0
+        ? suggestionUnderlyings
+        : ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
       const payload = {
-        underlyings: underlyings.length > 0 ? underlyings : ['NIFTY'],
+        underlyings,
         capital: 100000,
         lots: 2,
         risk_mode: 'Conservative',
@@ -252,6 +269,19 @@ export const StrategyManager: React.FC = () => {
     setSelectedStrategies(newSelected);
   };
 
+  const toggleSuggestionUnderlying = (value: string) => {
+    setSuggestionUnderlyings((prev) => {
+      if (prev.includes(value)) {
+        return prev.filter((u) => u !== value);
+      }
+      return [...prev, value];
+    });
+  };
+
+  const filteredSuggestions = suggestionUnderlyings.length > 0
+    ? suggestions.filter((s) => suggestionUnderlyings.includes(s.underlying))
+    : suggestions;
+
   return (
     <div className="space-y-6 p-6">
       {/* Suggestions */}
@@ -271,17 +301,38 @@ export const StrategyManager: React.FC = () => {
           </button>
         </div>
 
+        <div className="mt-3 flex flex-wrap gap-2">
+          {['NIFTY', 'BANKNIFTY', 'FINNIFTY'].map((u) => {
+            const active = suggestionUnderlyings.includes(u);
+            return (
+              <button
+                key={u}
+                onClick={() => toggleSuggestionUnderlying(u)}
+                className={`px-2.5 py-1 rounded text-xs font-semibold border transition ${
+                  active
+                    ? 'bg-blue-600 text-white border-blue-500'
+                    : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-700'
+                }`}
+                aria-pressed={active}
+                title={`Filter ${underlyingLabels[u] || u}`}
+              >
+                {underlyingLabels[u] || u}
+              </button>
+            );
+          })}
+        </div>
+
         {suggestionsLoading ? (
           <div className="text-slate-400 text-sm mt-3">Loading suggestions...</div>
-        ) : suggestions.length === 0 ? (
+        ) : filteredSuggestions.length === 0 ? (
           <div className="text-slate-400 text-sm mt-3">No suggestions available right now.</div>
         ) : (
           <div className="grid gap-3 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 mt-3">
-            {suggestions.slice(0, 6).map((s, idx) => (
+            {filteredSuggestions.slice(0, 6).map((s, idx) => (
               <div key={idx} className="bg-slate-900 border border-slate-700 rounded p-3">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-white font-semibold">{s.underlying}</div>
+                    <div className="text-white font-semibold">{underlyingLabels[s.underlying] || s.underlying}</div>
                     <div className="text-xs text-slate-400">Score: <span className="font-mono text-slate-200">{s.score}</span></div>
                   </div>
                   <span className={`px-2 py-1 rounded text-xs font-semibold ${

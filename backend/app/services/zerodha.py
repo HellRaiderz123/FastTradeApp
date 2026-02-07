@@ -4,6 +4,7 @@ import logging
 from typing import Optional, Dict, Any
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.broker.zerodha.instruments import get_index_token
+from app.core.rate_limiter import zerodha_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,15 @@ class KiteConnectService:
             Returns None if symbol not found or API fails
         """
         try:
+            # Check cache first
+            cache_key = f"ltp:{symbol}"
+            cached_data = zerodha_limiter.get_cache(cache_key)
+            if cached_data:
+                return cached_data
+            
+            # Rate limit before API call
+            zerodha_limiter.acquire_for_quote()
+            
             if not self.kite:
                 self._initialize()
             
@@ -62,7 +72,7 @@ class KiteConnectService:
             if not price_data:
                 return None
             
-            return {
+            result = {
                 "last_price": price_data.get("last_price"),
                 "bid_price": price_data.get("bid"),
                 "ask_price": price_data.get("ask"),
@@ -70,6 +80,11 @@ class KiteConnectService:
                 "open_interest": price_data.get("oi"),
                 "volume": price_data.get("volume"),
             }
+            
+            # Cache the result
+            zerodha_limiter.set_cache(cache_key, result, ttl=1)  # Shorter TTL for LTP
+            
+            return result
         
         except Exception as e:
             logger.error(f"Error fetching quote for {symbol}: {e}")
@@ -87,6 +102,16 @@ class KiteConnectService:
             Returns None if symbol not found or API fails
         """
         try:
+            # Check cache first
+            cache_key = f"quote:{symbol}"
+            cached_data = zerodha_limiter.get_cache(cache_key)
+            if cached_data:
+                logger.debug(f"Cache hit: {symbol}")
+                return cached_data
+            
+            # Rate limit before API call
+            zerodha_limiter.acquire_for_quote()
+            
             if not self.kite:
                 self._initialize()
             
@@ -105,7 +130,7 @@ class KiteConnectService:
             
             quote_data = data[instrument]
             
-            return {
+            result = {
                 "last_price": quote_data.get("last_price"),
                 "ohlc": quote_data.get("ohlc", {}),
                 "volume": quote_data.get("volume", 0),
@@ -113,6 +138,11 @@ class KiteConnectService:
                 "sell_quantity": quote_data.get("sell_quantity", 0),
                 "timestamp": quote_data.get("timestamp"),
             }
+            
+            # Cache the result
+            zerodha_limiter.set_cache(cache_key, result, ttl=2)
+            
+            return result
         
         except Exception as e:
             logger.error(f"Error fetching full quote for {symbol}: {e}")
@@ -147,6 +177,16 @@ class KiteConnectService:
             Returns None if API fails or not initialized
         """
         try:
+            # Check cache first
+            cache_key = f"bulk_quotes:{','.join(sorted(symbols))}"
+            cached_data = zerodha_limiter.get_cache(cache_key)
+            if cached_data:
+                logger.debug(f"Cache hit for bulk quotes: {len(symbols)} symbols")
+                return cached_data
+            
+            # Rate limit before API call
+            zerodha_limiter.acquire_for_quote(cost=1)  # Bulk request = 1 token
+            
             if not self.kite:
                 self._initialize()
             
@@ -158,6 +198,9 @@ class KiteConnectService:
             
             # Get quotes for all symbols
             data = self.kite.quote(instruments)
+            
+            # Cache the result
+            zerodha_limiter.set_cache(cache_key, data, ttl=2)
             
             return data
         

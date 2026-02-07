@@ -197,6 +197,30 @@ export const systemAPI = {
   status: () => api.get('/system/status'),
 };
 
+// Alerts APIs
+export const alertsAPI = {
+  createAlert: (payload: {
+    name?: string;
+    ticker: string;
+    alert_type?: string;
+    condition: { operator: string; price: number };
+    is_enabled?: boolean;
+    is_recurring?: boolean;
+    notify_via?: Record<string, any>;
+    action_on_trigger?: string;
+    created_by?: string;
+  }) => api.post('/alerts/create', payload),
+
+  listAlerts: (ticker?: string) =>
+    api.get('/alerts/list', { params: ticker ? { ticker } : {} }),
+
+  enableAlert: (id: number) => api.post(`/alerts/${id}/enable`, {}),
+  disableAlert: (id: number) => api.post(`/alerts/${id}/disable`, {}),
+  deleteAlert: (id: number) => api.delete(`/alerts/${id}`),
+  evaluateAlerts: (ticker?: string) =>
+    api.post('/alerts/evaluate', {}, { params: ticker ? { ticker } : {} }),
+};
+
 // Greeks Calculation APIs
 export const greeksAPI = {
   calculate: (payload: any) =>

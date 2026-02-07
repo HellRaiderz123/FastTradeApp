@@ -41,11 +41,22 @@ type StrategyTemplate =
   | 'SHORT_STRANGLE'
   | 'LONG_STRADDLE';
 
-const NIFTY_LOT_SIZE = 65;
+const LOT_SIZES: Record<string, number> = {
+  NIFTY: 65,
+  BANKNIFTY: 15,
+  FINNIFTY: 40,
+};
+
+const STRIKE_STEPS: Record<string, number> = {
+  NIFTY: 50,
+  BANKNIFTY: 100,
+  FINNIFTY: 50,
+};
 
 const StrategyBuilder: React.FC = () => {
   const [legs, setLegs] = useState<OptionLeg[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [underlying, setUnderlying] = useState<'NIFTY' | 'BANKNIFTY' | 'FINNIFTY'>('NIFTY');
   const [spot, setSpot] = useState<number>(26150);
   const [atm, setAtm] = useState<number>(26150);
   const wsRef = React.useRef<WebSocket | null>(null);
@@ -75,6 +86,9 @@ const StrategyBuilder: React.FC = () => {
   const [popPct, setPopPct] = useState<number | null>(null);
   const [popVerdict, setPopVerdict] = useState<'GOOD' | 'NEUTRAL' | 'RISKY' | null>(null);
 
+  const lotSize = LOT_SIZES[underlying] || 1;
+  const strikeStep = STRIKE_STEPS[underlying] || 50;
+
   // Drag & drop handlers for reordering legs
   const handleDragStart = (index: number) => {
     setDragIndex(index);
@@ -101,14 +115,14 @@ const StrategyBuilder: React.FC = () => {
       try {
         setFetchingSpot(true);
         // Fetch spot price (initial)
-        const spotResponse = await marketAPI.getLTP('NIFTY');
+        const spotResponse = await marketAPI.getLTP(underlying);
         const spotData = spotResponse?.data || spotResponse;
         if (spotData?.ltp) {
           setSpot(Number(spotData.ltp));
           setAtm(Number(spotData.ltp));
         }
         // Fetch available expiry dates
-        const expiriesResponse = await marketAPI.getAvailableExpiries('NIFTY');
+        const expiriesResponse = await marketAPI.getAvailableExpiries(underlying);
         const expiryData = expiriesResponse?.data || expiriesResponse;
         if (expiryData?.expiries && Array.isArray(expiryData.expiries) && expiryData.expiries.length > 0) {
           setExpiryDates(expiryData.expiries);
@@ -165,7 +179,7 @@ const StrategyBuilder: React.FC = () => {
       if (wsRef.current) wsRef.current.close();
       wsRef.current = null;
     };
-  }, []);
+  }, [underlying]);
 
   // Update DTE when expiry changes
   useEffect(() => {
@@ -210,7 +224,7 @@ const StrategyBuilder: React.FC = () => {
       }
       
       console.log(`Fetching premium for ${strike} ${optionType} expiry ${selectedExpiry}`);
-      const premiumResponse = await marketAPI.getOptionPremium('NIFTY', strike, optionType, selectedExpiry);
+      const premiumResponse = await marketAPI.getOptionPremium(underlying, strike, optionType, selectedExpiry);
       
       // Handle axios response - data is inside .data property
       const premiumData = premiumResponse?.data || premiumResponse;
@@ -225,13 +239,13 @@ const StrategyBuilder: React.FC = () => {
     }
   };
 
-  const getStep = () => 50; // NIFTY default
+  const getStep = () => strikeStep;
 
   const roundToStep = (value: number, step: number) => Math.round(value / step) * step;
 
   // Calculate absolute strike from relative offset
   const calculateAbsoluteStrike = (offset: number) => {
-    const atmStrike = Math.round(atm / 50) * 50;
+    const atmStrike = Math.round(atm / strikeStep) * strikeStep;
     return atmStrike + offset;
   };
 
@@ -471,7 +485,7 @@ const StrategyBuilder: React.FC = () => {
         expiry_days: Math.max(daysToExpiry, 1),
         volatility: 20,
         // UI quantity is in lots; API expects actual contract quantity
-        quantity: Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE,
+        quantity: Math.max(1, Math.floor(leg.quantity)) * lotSize,
       }));
 
       const response = await greeksAPI.calculate({
@@ -548,7 +562,7 @@ const StrategyBuilder: React.FC = () => {
             : Math.max(leg.strike - s, 0);
 
           // Fix: SELL should be premium - intrinsic, BUY should be intrinsic - premium
-          const qty = Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE;
+          const qty = Math.max(1, Math.floor(leg.quantity)) * lotSize;
           const legPnl = leg.type === 'BUY'
             ? (intrinsic - (leg.premium || 0)) * qty
             : ((leg.premium || 0) - intrinsic) * qty;
@@ -735,7 +749,7 @@ const StrategyBuilder: React.FC = () => {
     try {
       // Calculate total premium (net debit/credit)
       const totalPremium = legs.reduce((sum, leg) => {
-        const qty = Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE;
+        const qty = Math.max(1, Math.floor(leg.quantity)) * lotSize;
         const legPremium = (leg.premium || 0) * qty;
         return sum + (leg.type === 'BUY' ? -legPremium : legPremium);
       }, 0);
@@ -748,7 +762,7 @@ const StrategyBuilder: React.FC = () => {
         name: strategyName,
         description: `${legs.length}-leg strategy created on ${new Date().toLocaleDateString()}`,
         strategy_type: 'option_spread_custom',
-        underlying: 'NIFTY',
+        underlying,
         parameters: {
           tp_pct: tpPct,
           sl_pct: slPct,
@@ -764,7 +778,7 @@ const StrategyBuilder: React.FC = () => {
             strike_type: leg.strike_type || 'ABSOLUTE',
             strike_offset: leg.strike_offset || 0,
             // Persist actual quantity to match execution/backtest expectations
-            quantity: Math.max(1, Math.floor(leg.quantity)) * NIFTY_LOT_SIZE,
+            quantity: Math.max(1, Math.floor(leg.quantity)) * lotSize,
             premium: leg.premium,
           })),
           total_premium: totalPremium,
@@ -819,6 +833,8 @@ const StrategyBuilder: React.FC = () => {
 
   const handleLoadStrategy = (strategy: any) => {
     try {
+      const strategyUnderlying = String(strategy.underlying || 'NIFTY').toUpperCase();
+      const lotSizeForStrategy = LOT_SIZES[strategyUnderlying] || 1;
       const params = strategy.parameters || {};
       const strategyLegs = params.legs || [];
       
@@ -834,12 +850,13 @@ const StrategyBuilder: React.FC = () => {
         quantity: (() => {
           const q = Number(leg.quantity);
           if (!Number.isFinite(q) || q <= 0) return 1;
-          if (q >= NIFTY_LOT_SIZE && q % NIFTY_LOT_SIZE === 0) return q / NIFTY_LOT_SIZE;
+          if (q >= lotSizeForStrategy && q % lotSizeForStrategy === 0) return q / lotSizeForStrategy;
           return q; // backward compat if older saved strategies used lots
         })(),
         premium: leg.premium,
       })));
       
+      setUnderlying(strategyUnderlying as typeof underlying);
       setSelectedExpiry(params.expiry || '');
       setSpot(params.spot_at_creation || spot);
       setStrategyId(strategy.id);
@@ -991,6 +1008,21 @@ const StrategyBuilder: React.FC = () => {
             </div>
           )}
 
+          {/* Underlying */}
+          <div className="space-y-2">
+            <label className="text-xs text-slate-300">Underlying</label>
+            <select
+              value={underlying}
+              onChange={(e) => setUnderlying(e.target.value as typeof underlying)}
+              className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+              aria-label="Underlying"
+            >
+              <option value="NIFTY">NIFTY50</option>
+              <option value="BANKNIFTY">BANKNIFTY</option>
+              <option value="FINNIFTY">FINNIFTY</option>
+            </select>
+          </div>
+
           {/* Spot Price Input */}
           <div className="space-y-2">
             <label className="text-xs text-slate-300">Spot Price (Live: {atm.toFixed(2)})</label>
@@ -1137,13 +1169,13 @@ const StrategyBuilder: React.FC = () => {
                         <div>
                           <label className="text-xs text-slate-400">
                             Offset from ATM
-                            <span className="ml-1 text-slate-500">(ATM: {Math.round(atm / 50) * 50})</span>
+                            <span className="ml-1 text-slate-500">(ATM: {Math.round(atm / strikeStep) * strikeStep})</span>
                           </label>
                           <input
                             type="number"
                             value={leg.strike_offset || 0}
                             onChange={(e) => updateLeg(leg.id, 'strike_offset', Number(e.target.value))}
-                            step={50}
+                            step={strikeStep}
                             className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
                             aria-label="Strike offset"
                             placeholder="e.g., 0, +100, -200"
@@ -1170,14 +1202,14 @@ const StrategyBuilder: React.FC = () => {
                           type="number"
                           value={leg.strike}
                           onChange={(e) => updateLeg(leg.id, 'strike', Number(e.target.value))}
-                          step={50}
+                          step={strikeStep}
                           className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-xs"
                           aria-label="Strike"
                         />
                       </div>
                     )}
                     <div>
-                      <label className="text-xs text-slate-400">Lots (1 lot = {NIFTY_LOT_SIZE})</label>
+                      <label className="text-xs text-slate-400">Lots (1 lot = {lotSize})</label>
                       <input
                         type="number"
                         value={leg.quantity}
@@ -1582,7 +1614,7 @@ const StrategyBuilder: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold text-white truncate">{strategy.name}</p>
                       <p className="text-xs text-slate-400 mt-1">
-                        Underlying: {strategy.underlying} | Expiry: {strategy.parameters?.expiry || 'N/A'} | Max Profit: {strategy.parameters?.max_profit?.toFixed(2) || 'N/A'} | Max Loss: {strategy.parameters?.max_loss?.toFixed(2) || 'N/A'}
+                        Underlying: {strategy.underlying === 'NIFTY' ? 'NIFTY50' : strategy.underlying} | Expiry: {strategy.parameters?.expiry || 'N/A'} | Max Profit: {strategy.parameters?.max_profit?.toFixed(2) || 'N/A'} | Max Loss: {strategy.parameters?.max_loss?.toFixed(2) || 'N/A'}
                       </p>
                     </div>
                     <div className="flex gap-2 ml-2">

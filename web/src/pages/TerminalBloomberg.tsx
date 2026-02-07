@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Search,
   Activity,
@@ -17,8 +17,9 @@ import {
 } from 'lucide-react';
 import TechnicalChart from '../components/TechnicalChart';
 import NewsFeed from '../components/NewsFeed';
+import ErrorBoundary from '../components/ErrorBoundary';
 import { useRealtimeQuotes } from '../hooks/useRealtimeQuotes';
-import { marketAPI } from '../lib/api';
+import { marketAPI, alertsAPI } from '../lib/api';
 import { 
   marketDashboardAPI,
   swingScannerAPI,
@@ -49,10 +50,35 @@ const Terminal: React.FC = () => {
   const [swingDataSource, setSwingDataSource] = useState<string>('live');
   const [marketBreadth, setMarketBreadth] = useState<any>(null);
   const [todayEvents, setTodayEvents] = useState<CalendarEvent[]>([]);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [commandInput, setCommandInput] = useState('');
+  const [alertOperator, setAlertOperator] = useState<'above' | 'below' | 'above_or_equal' | 'below_or_equal'>('above');
+  const [alertPriceInput, setAlertPriceInput] = useState('');
+  const [alertTouched, setAlertTouched] = useState(false);
+  const [alertSubmitting, setAlertSubmitting] = useState(false);
+  const [alertMessage, setAlertMessage] = useState<string | null>(null);
   
-  // Watchlist
-  const watchlistSymbols = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN'];
+  // Watchlist - Universe aware
+  const universeWatchlist: Record<string, string[]> = {
+    'NIFTY50': ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN'],
+    'BANKNIFTY': ['HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK', 'INDUSINDBK'],
+    'FINNIFTY': ['HDFCBANK', 'BAJFINANCE', 'BAJAJFINSV', 'HDFCLIFE', 'SBILIFE', 'ICICIGI'],
+    'NIFTY_IT': ['TCS', 'INFY', 'WIPRO', 'HCLTECH', 'TECHM', 'LTIM']
+  };
+  
+  // Memoize watchlist symbols to prevent unnecessary WebSocket reconnections
+  const watchlistSymbols = useMemo(
+    () => universeWatchlist[universe] || ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN'],
+    [universe]
+  );
   const { quotes, loading: quotesLoading, connected } = useRealtimeQuotes(watchlistSymbols, true);
+
+  useEffect(() => {
+    const currentQuote = quotes[selectedSymbol];
+    if (!alertTouched && currentQuote?.ltp) {
+      setAlertPriceInput(String(currentQuote.ltp));
+    }
+  }, [quotes, selectedSymbol, alertTouched]);
 
   // Fetch market data
   useEffect(() => {
@@ -96,6 +122,52 @@ const Terminal: React.FC = () => {
     return () => clearInterval(interval);
   }, [universe]);
 
+  // Keyboard shortcuts handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in search input
+      const isInputFocused = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA';
+      
+      // Ctrl/Cmd + K: Open command palette
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setShowCommandPalette(true);
+        setCommandInput('');
+        return;
+      }
+      
+      // Esc: Close command palette or clear selection
+      if (e.key === 'Escape') {
+        if (showCommandPalette) {
+          setShowCommandPalette(false);
+          setCommandInput('');
+        } else {
+          setSearchInput('');
+        }
+        return;
+      }
+      
+      if (isInputFocused) return;
+      
+      // 1-5: Quick timeframe switching
+      const timeframeMap: Record<string, typeof timeframe> = {
+        '1': '1m',
+        '2': '5m',
+        '3': '15m',
+        '4': '1h',
+        '5': '1d'
+      };
+      
+      if (timeframeMap[e.key]) {
+        e.preventDefault();
+        setTimeframe(timeframeMap[e.key]);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showCommandPalette]);
+
   const handleSymbolSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && searchInput.trim()) {
       setSelectedSymbol(searchInput.toUpperCase().trim());
@@ -103,8 +175,115 @@ const Terminal: React.FC = () => {
     }
   };
 
+  const handleCommandPaletteSubmit = (symbol: string) => {
+    setSelectedSymbol(symbol.toUpperCase());
+    setShowCommandPalette(false);
+    setCommandInput('');
+  };
+  
+  // Get all available symbols for command palette
+  const getAllSymbols = (): string[] => {
+    const allSymbols = Object.values(universeWatchlist).flat();
+    return [...new Set(allSymbols)].sort();
+  };
+  
+  // Filter symbols based on command input
+  const getFilteredSymbols = (): string[] => {
+    if (!commandInput.trim()) return getAllSymbols().slice(0, 10);
+    
+    const input = commandInput.toUpperCase().trim();
+    return getAllSymbols()
+      .filter(s => s.includes(input))
+      .slice(0, 10);
+  };
+
+  const handleCreateAlert = async () => {
+    const price = Number(alertPriceInput);
+    if (!selectedSymbol || Number.isNaN(price) || price <= 0) {
+      setAlertMessage('Enter a valid price for the alert.');
+      return;
+    }
+
+    setAlertSubmitting(true);
+    setAlertMessage(null);
+    try {
+      await alertsAPI.createAlert({
+        ticker: selectedSymbol,
+        alert_type: 'PRICE',
+        condition: { operator: alertOperator, price },
+        is_enabled: true,
+        is_recurring: true,
+        notify_via: { in_app: true, email: false },
+      });
+      setAlertMessage(`Alert created for ${selectedSymbol}.`);
+      setAlertTouched(false);
+    } catch (error) {
+      setAlertMessage('Failed to create alert.');
+    } finally {
+      setAlertSubmitting(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col gap-4 terminal-pattern overflow-y-auto pb-6">
+      {/* Command Palette Overlay */}
+      {showCommandPalette && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-start justify-center pt-20">
+          <div className="w-full max-w-2xl">
+            <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+              {/* Command Palette Input */}
+              <div className="border-b border-slate-700 p-4">
+                <input
+                  autoFocus
+                  value={commandInput}
+                  onChange={(e) => setCommandInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && getFilteredSymbols().length > 0) {
+                      handleCommandPaletteSubmit(getFilteredSymbols()[0]);
+                    }
+                  }}
+                  className="w-full bg-transparent text-lg text-white focus:outline-none"
+                  placeholder="Search stocks... (type TCS, INFY, etc.)"
+                />
+              </div>
+
+              {/* Command Palette Results */}
+              <div className="max-h-96 overflow-y-auto">
+                {getFilteredSymbols().length > 0 ? (
+                  getFilteredSymbols().map((symbol, idx) => (
+                    <button
+                      key={symbol}
+                      onClick={() => handleCommandPaletteSubmit(symbol)}
+                      className={`w-full text-left px-4 py-3 border-b border-slate-800 hover:bg-slate-800/50 transition flex items-center justify-between ${
+                        idx === 0 ? 'bg-slate-800/50' : ''
+                      }`}
+                    >
+                      <div>
+                        <div className="text-white font-semibold">{symbol}</div>
+                        <div className="text-xs text-slate-400 mt-1">
+                          Press Enter to load chart
+                        </div>
+                      </div>
+                      <Search size={16} className="text-slate-500" />
+                    </button>
+                  ))
+                ) : (
+                  <div className="px-4 py-8 text-center text-slate-400">
+                    No stocks found matching "{commandInput}"
+                  </div>
+                )}
+              </div>
+
+              {/* Help Footer */}
+              <div className="border-t border-slate-700 bg-slate-900/50 px-4 py-2 text-xs text-slate-500">
+                <span className="mr-4">Press <kbd className="bg-slate-800 px-2 py-1 rounded">ESC</kbd> to close</span>
+                <span>Press <kbd className="bg-slate-800 px-2 py-1 rounded">↑↓</kbd> to navigate</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header with Market Overview */}
       <header className="terminal-panel rounded-2xl px-6 py-4 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -161,6 +340,15 @@ const Terminal: React.FC = () => {
                 </div>
               </div>
             )}
+            
+            {/* Keyboard Shortcuts Hint */}
+            <div className="flex items-center gap-2 px-3 py-2 rounded-full bg-slate-900/70 border border-slate-700/50 text-xs text-slate-400">
+              <span>⌘K</span>
+              <span className="text-slate-600">•</span>
+              <span>1-5</span>
+              <span className="text-slate-600">•</span>
+              <span>ESC</span>
+            </div>
           </div>
         </div>
 
@@ -250,146 +438,152 @@ const Terminal: React.FC = () => {
         <div className="flex flex-col gap-4">
           {/* Technical Chart Panel with Indicators */}
           <div className="h-[650px]">
-            <TechnicalChart symbol={selectedSymbol} timeframe={timeframe} height={630} />
+            <ErrorBoundary>
+              <TechnicalChart symbol={selectedSymbol} timeframe={timeframe} height={630} />
+            </ErrorBoundary>
           </div>
 
           {/* Swing Trade Opportunities */}
-          <div className="terminal-panel rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Swing Scanner</p>
-                <h2 className="terminal-title text-xl text-white">Top Opportunities</h2>
+          <ErrorBoundary>
+            <div className="terminal-panel rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Swing Scanner</p>
+                  <h2 className="terminal-title text-xl text-white">Top Opportunities</h2>
+                </div>
+                <div className="flex items-center gap-2">
+                  {swingDataSource.includes('simulated') && (
+                    <span className="px-2 py-1 rounded text-xs font-semibold bg-yellow-500/20 text-yellow-300 border border-yellow-500/40">
+                      SIMULATED
+                    </span>
+                  )}
+                  {swingDataSource.includes('live') && (
+                    <span className="px-2 py-1 rounded text-xs font-semibold bg-green-500/20 text-green-300 border border-green-500/40">
+                      LIVE
+                    </span>
+                  )}
+                  <Target size={18} className="text-orange-300" />
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                {swingDataSource.includes('simulated') && (
-                  <span className="px-2 py-1 rounded text-xs font-semibold bg-yellow-500/20 text-yellow-300 border border-yellow-500/40">
-                    SIMULATED
-                  </span>
-                )}
-                {swingDataSource.includes('live') && (
-                  <span className="px-2 py-1 rounded text-xs font-semibold bg-green-500/20 text-green-300 border border-green-500/40">
-                    LIVE
-                  </span>
-                )}
-                <Target size={18} className="text-orange-300" />
-              </div>
-            </div>
 
-            <div className="space-y-3">
-              {swingOpportunities.length > 0 ? (
-                swingOpportunities.map((opp) => (
-                  <div
-                    key={opp.symbol}
-                    onClick={() => setSelectedSymbol(opp.symbol)}
-                    className="flex items-center justify-between bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 cursor-pointer hover:bg-slate-800/60 transition"
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-semibold text-white">{opp.symbol}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded font-medium ${
-                          opp.signal === 'BULLISH'
-                            ? 'bg-emerald-500/20 text-emerald-200'
-                            : opp.signal === 'BEARISH'
-                            ? 'bg-red-500/20 text-red-200'
-                            : 'bg-slate-500/20 text-slate-200'
-                        }`}>
-                          {opp.signal}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 mt-1">
-                        <span className="text-xs text-slate-400">
-                          Strength: {opp.strength}% • RSI: {opp.indicators.rsi?.toFixed(1)}
-                        </span>
-                        {opp.indicators.volume_spike && (
-                          <span className="text-xs bg-orange-500/20 text-orange-300 px-2 py-0.5 rounded">
-                            VOL📈
+              <div className="space-y-3">
+                {swingOpportunities.length > 0 ? (
+                  swingOpportunities.map((opp) => (
+                    <div
+                      key={opp.symbol}
+                      onClick={() => setSelectedSymbol(opp.symbol)}
+                      className="flex items-center justify-between bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 cursor-pointer hover:bg-slate-800/60 transition"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-semibold text-white">{opp.symbol}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                            opp.signal === 'BULLISH'
+                              ? 'bg-emerald-500/20 text-emerald-200'
+                              : opp.signal === 'BEARISH'
+                              ? 'bg-red-500/20 text-red-200'
+                              : 'bg-slate-500/20 text-slate-200'
+                          }`}>
+                            {opp.signal}
                           </span>
-                        )}
+                        </div>
+                        <div className="flex items-center gap-3 mt-1">
+                          <span className="text-xs text-slate-400">
+                            Strength: {opp.strength}% • RSI: {opp.indicators.rsi?.toFixed(1)}
+                          </span>
+                          {opp.indicators.volume_spike && (
+                            <span className="text-xs bg-orange-500/20 text-orange-300 px-2 py-0.5 rounded">
+                              VOL📈
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-sm font-semibold text-white">₹{opp.ltp}</div>
+                        <div className={`text-xs ${opp.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {opp.change_percent >= 0 ? '+' : ''}{opp.change_percent.toFixed(2)}%
+                        </div>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-sm font-semibold text-white">₹{opp.ltp}</div>
-                      <div className={`text-xs ${opp.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {opp.change_percent >= 0 ? '+' : ''}{opp.change_percent.toFixed(2)}%
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-slate-500">Loading opportunities...</p>
-              )}
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-500">Loading opportunities...</p>
+                )}
+              </div>
             </div>
-          </div>
+          </ErrorBoundary>
 
           {/* Top Movers Tabs */}
-          <div className="terminal-panel rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Top Movers</p>
-                <h2 className="terminal-title text-xl text-white">Market Leaders</h2>
+          <ErrorBoundary>
+            <div className="terminal-panel rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Top Movers</p>
+                  <h2 className="terminal-title text-xl text-white">Market Leaders</h2>
+                </div>
+                <BarChart3 size={18} className="text-emerald-300" />
               </div>
-              <BarChart3 size={18} className="text-emerald-300" />
+
+              <div className="grid grid-cols-3 gap-4">
+                {/* Gainers */}
+                <div>
+                  <h3 className="text-xs font-semibold text-emerald-400 mb-3 flex items-center gap-1">
+                    <TrendingUp size={14} /> GAINERS
+                  </h3>
+                  <div className="space-y-2">
+                    {topMovers.gainers.slice(0, 5).map((stock) => (
+                      <div
+                        key={stock.symbol}
+                        onClick={() => setSelectedSymbol(stock.symbol)}
+                        className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
+                      >
+                        <span className="text-slate-200 font-medium">{stock.symbol}</span>
+                        <span className="text-emerald-400 font-semibold">+{stock.change_percent.toFixed(2)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Losers */}
+                <div>
+                  <h3 className="text-xs font-semibold text-red-400 mb-3 flex items-center gap-1">
+                    <TrendingDown size={14} /> LOSERS
+                  </h3>
+                  <div className="space-y-2">
+                    {topMovers.losers.slice(0, 5).map((stock) => (
+                      <div
+                        key={stock.symbol}
+                        onClick={() => setSelectedSymbol(stock.symbol)}
+                        className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
+                      >
+                        <span className="text-slate-200 font-medium">{stock.symbol}</span>
+                        <span className="text-red-400 font-semibold">{stock.change_percent.toFixed(2)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Most Active */}
+                <div>
+                  <h3 className="text-xs font-semibold text-orange-400 mb-3 flex items-center gap-1">
+                    <Activity size={14} /> MOST ACTIVE
+                  </h3>
+                  <div className="space-y-2">
+                    {topMovers.most_active.slice(0, 5).map((stock) => (
+                      <div
+                        key={stock.symbol}
+                        onClick={() => setSelectedSymbol(stock.symbol)}
+                        className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
+                      >
+                        <span className="text-slate-200 font-medium">{stock.symbol}</span>
+                        <span className="text-slate-400">{(stock.volume / 1000000).toFixed(2)}M</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              {/* Gainers */}
-              <div>
-                <h3 className="text-xs font-semibold text-emerald-400 mb-3 flex items-center gap-1">
-                  <TrendingUp size={14} /> GAINERS
-                </h3>
-                <div className="space-y-2">
-                  {topMovers.gainers.slice(0, 5).map((stock) => (
-                    <div
-                      key={stock.symbol}
-                      onClick={() => setSelectedSymbol(stock.symbol)}
-                      className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
-                    >
-                      <span className="text-slate-200 font-medium">{stock.symbol}</span>
-                      <span className="text-emerald-400 font-semibold">+{stock.change_percent.toFixed(2)}%</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Losers */}
-              <div>
-                <h3 className="text-xs font-semibold text-red-400 mb-3 flex items-center gap-1">
-                  <TrendingDown size={14} /> LOSERS
-                </h3>
-                <div className="space-y-2">
-                  {topMovers.losers.slice(0, 5).map((stock) => (
-                    <div
-                      key={stock.symbol}
-                      onClick={() => setSelectedSymbol(stock.symbol)}
-                      className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
-                    >
-                      <span className="text-slate-200 font-medium">{stock.symbol}</span>
-                      <span className="text-red-400 font-semibold">{stock.change_percent.toFixed(2)}%</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Most Active */}
-              <div>
-                <h3 className="text-xs font-semibold text-orange-400 mb-3 flex items-center gap-1">
-                  <Activity size={14} /> MOST ACTIVE
-                </h3>
-                <div className="space-y-2">
-                  {topMovers.most_active.slice(0, 5).map((stock) => (
-                    <div
-                      key={stock.symbol}
-                      onClick={() => setSelectedSymbol(stock.symbol)}
-                      className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
-                    >
-                      <span className="text-slate-200 font-medium">{stock.symbol}</span>
-                      <span className="text-slate-400">{(stock.volume / 1000000).toFixed(2)}M</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
+          </ErrorBoundary>
           {/* Today's Key Events */}
           {todayEvents.length > 0 && (
             <div className="terminal-panel rounded-2xl p-5">
@@ -415,17 +609,8 @@ const Terminal: React.FC = () => {
                           {event.type === 'ipo' && <TrendingUp size={12} className="text-blue-400" />}
                           <span className="text-xs font-semibold text-white">{event.title}</span>
                         </div>
-                        {event.symbol && (
-                          <span className="text-[10px] text-slate-400">{event.symbol}</span>
-                        )}
-                        {event.description && (
-                          <p className="text-[10px] text-slate-500 mt-1 line-clamp-1">{event.description}</p>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                          <Clock size={10} />
-                          {event.time}
+                        <div className="text-[11px] text-slate-400">
+                          {event.time ? `${event.time} • ` : ''}{event.description || ''}
                         </div>
                         <span className={`inline-block mt-1 px-2 py-0.5 rounded text-[9px] font-semibold ${
                           event.impact === 'high'
@@ -451,107 +636,176 @@ const Terminal: React.FC = () => {
                 </a>
               </div>
             </div>
-          )}        </div>
+          )}
+        </div>
 
         {/* Right Column - Watchlist, Sectors, Sentiment */}
         <div className="flex flex-col gap-4">
           {/* Watchlist with Live Prices */}
-          <div className="terminal-panel rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Live Watchlist</p>
-                <h2 className="terminal-title text-xl text-white">Blue Chips</h2>
+          <ErrorBoundary>
+            <div className="terminal-panel rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Live Watchlist</p>
+                  <h2 className="terminal-title text-xl text-white">Blue Chips</h2>
+                </div>
+                {quotesLoading && <Activity size={14} className="text-blue-400 animate-pulse" />}
               </div>
-              {quotesLoading && <Activity size={14} className="text-blue-400 animate-pulse" />}
-            </div>
 
-            <div className="space-y-3">
-              {watchlistSymbols.map((symbol) => {
-                const quote = quotes[symbol];
-                if (!quote) {
+              <div className="space-y-3">
+                {watchlistSymbols.map((symbol) => {
+                  const quote = quotes[symbol];
+                  if (!quote) {
+                    return (
+                      <div key={symbol} className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 animate-pulse">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="h-4 bg-slate-700/50 rounded w-20 mb-2"></div>
+                            <div className="h-3 bg-slate-700/50 rounded w-16"></div>
+                          </div>
+                          <div className="text-right">
+                            <div className="h-5 bg-slate-700/50 rounded w-24 mb-1"></div>
+                            <div className="h-3 bg-slate-700/50 rounded w-16"></div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
                   return (
-                    <div key={symbol} className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3">
-                      <span className="text-sm text-slate-500">Loading {symbol}...</span>
+                    <div
+                      key={symbol}
+                      onClick={() => setSelectedSymbol(symbol)}
+                      className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 cursor-pointer hover:bg-slate-800/60 transition"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-white">{symbol}</div>
+                          <div className={`text-xs flex items-center gap-1 ${
+                            quote.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'
+                          }`}>
+                            {quote.change_percent >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                            {quote.change_percent >= 0 ? '+' : ''}{quote.change_percent}%
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-lg font-bold text-white">₹{quote.ltp}</div>
+                          <div className={`text-xs ${quote.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {quote.change >= 0 ? '+' : ''}{quote.change.toFixed(2)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   );
-                }
-
-                return (
-                  <div
-                    key={symbol}
-                    onClick={() => setSelectedSymbol(symbol)}
-                    className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 cursor-pointer hover:bg-slate-800/60 transition"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-semibold text-white">{symbol}</div>
-                        <div className={`text-xs flex items-center gap-1 ${
-                          quote.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'
-                        }`}>
-                          {quote.change_percent >= 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-                          {quote.change_percent >= 0 ? '+' : ''}{quote.change_percent}%
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-lg font-bold text-white">₹{quote.ltp}</div>
-                        <div className={`text-xs ${quote.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {quote.change >= 0 ? '+' : ''}{quote.change.toFixed(2)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                })}
+              </div>
             </div>
-          </div>
+          </ErrorBoundary>
+
+          {/* Price Alert */}
+          <ErrorBoundary>
+            <div className="terminal-panel rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Alerts</p>
+                  <h2 className="terminal-title text-xl text-white">Price Alert</h2>
+                </div>
+                <AlertTriangle size={16} className="text-amber-300" />
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 w-20">Symbol</span>
+                  <div className="flex-1 text-sm text-white font-semibold">{selectedSymbol}</div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 w-20">Condition</span>
+                  <select
+                    value={alertOperator}
+                    onChange={(e) => setAlertOperator(e.target.value as typeof alertOperator)}
+                    className="bg-slate-900/80 border border-slate-700/50 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400/50"
+                  >
+                    <option value="above">Above</option>
+                    <option value="below">Below</option>
+                    <option value="above_or_equal">Above or equal</option>
+                    <option value="below_or_equal">Below or equal</option>
+                  </select>
+                  <input
+                    value={alertPriceInput}
+                    onChange={(e) => {
+                      setAlertPriceInput(e.target.value);
+                      setAlertTouched(true);
+                    }}
+                    placeholder="Price"
+                    className="flex-1 bg-slate-900/80 border border-slate-700/50 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400/50"
+                  />
+                </div>
+
+                {alertMessage && (
+                  <div className="text-xs text-slate-400">{alertMessage}</div>
+                )}
+
+                <button
+                  onClick={handleCreateAlert}
+                  disabled={alertSubmitting}
+                  className="w-full bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-400/40 rounded-lg px-4 py-2 text-xs font-semibold transition disabled:opacity-50"
+                >
+                  {alertSubmitting ? 'Creating alert...' : 'Create Alert'}
+                </button>
+              </div>
+            </div>
+          </ErrorBoundary>
 
           {/* Sector Performance */}
-          <div className="terminal-panel rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Sector Pulse</p>
-                <h2 className="terminal-title text-xl text-white">Industry Heat</h2>
+          <ErrorBoundary>
+            <div className="terminal-panel rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Sector Pulse</p>
+                  <h2 className="terminal-title text-xl text-white">Industry Heat</h2>
+                </div>
+                <BarChart3 size={16} className="text-orange-300" />
               </div>
-              <BarChart3 size={16} className="text-orange-300" />
-            </div>
 
-            <div className="space-y-3">
-              {sectors.length > 0 ? (
-                sectors.map((sector) => (
-                  <div key={sector.name} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {sector.change_percent >= 0 ? (
-                        <TrendingUp size={14} className="text-emerald-400" />
-                      ) : (
-                        <TrendingDown size={14} className="text-red-400" />
-                      )}
-                      <span className="text-sm text-slate-200">{sector.name}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="w-24 h-2 rounded-full bg-slate-800 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${
-                            sector.change_percent >= 0 ? 'bg-emerald-400' : 'bg-red-400'
-                          }`}
-                          style={{ width: `${Math.min(100, Math.abs(sector.change_percent) * 40)}%` }}
-                        />
+              <div className="space-y-3">
+                {sectors.length > 0 ? (
+                  sectors.map((sector) => (
+                    <div key={sector.name} className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {sector.change_percent >= 0 ? (
+                          <TrendingUp size={14} className="text-emerald-400" />
+                        ) : (
+                          <TrendingDown size={14} className="text-red-400" />
+                        )}
+                        <span className="text-sm text-slate-200">{sector.name}</span>
                       </div>
-                      <span
-                        className={`text-xs font-medium min-w-[55px] text-right ${
-                          sector.change_percent >= 0 ? 'text-emerald-300' : 'text-red-300'
-                        }`}
-                      >
-                        {sector.change_percent >= 0 ? '+' : ''}
-                        {sector.change_percent.toFixed(2)}%
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <div className="w-24 h-2 rounded-full bg-slate-800 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${
+                              sector.change_percent >= 0 ? 'bg-emerald-400' : 'bg-red-400'
+                            }`}
+                            style={{ width: `${Math.min(100, Math.abs(sector.change_percent) * 40)}%` }}
+                          />
+                        </div>
+                        <span
+                          className={`text-xs font-medium min-w-[55px] text-right ${
+                            sector.change_percent >= 0 ? 'text-emerald-300' : 'text-red-300'
+                          }`}
+                        >
+                          {sector.change_percent >= 0 ? '+' : ''}
+                          {sector.change_percent.toFixed(2)}%
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-slate-500">Loading sectors...</p>
-              )}
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-500">Loading sectors...</p>
+                )}
+              </div>
             </div>
-          </div>
+          </ErrorBoundary>
 
           {/* Market Sentiment */}
           {sentiment && (

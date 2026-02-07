@@ -80,7 +80,11 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
     }
   };
 
-  const underlyings = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
+  const underlyings = [
+    { value: 'NIFTY', label: 'NIFTY50' },
+    { value: 'BANKNIFTY', label: 'BANKNIFTY' },
+    { value: 'FINNIFTY', label: 'FINNIFTY' },
+  ];
   const riskModes = ['CONSERVATIVE', 'BALANCED', 'AGGRESSIVE'];
 
   return (
@@ -151,8 +155,8 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
                 className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 {underlyings.map((u) => (
-                  <option key={u} value={u}>
-                    {u}
+                  <option key={u.value} value={u.value}>
+                    {u.label}
                   </option>
                 ))}
               </select>

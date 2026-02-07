@@ -13,6 +13,15 @@ class SpreadStrikes(TypedDict):
     bear: Tuple[int, int]
     # (short_put, long_put, short_call, long_call)
     condor: Tuple[int, int, int, int]
+    # Straddle/Strangle: (call_strike, put_strike)
+    straddle: Tuple[int, int]
+    strangle: Tuple[int, int]
+    # Butterfly: (lower, middle, upper)
+    butterfly_call: Tuple[int, int, int]
+    butterfly_put: Tuple[int, int, int]
+    # Ratio Backspreads: (short_strike, long_strike_near, long_strike_far)
+    call_ratio_backspread: Tuple[int, int, int]
+    put_ratio_backspread: Tuple[int, int, int]
     meta: Dict[str, int]
 
 
@@ -104,10 +113,53 @@ def compute_spread_strikes(
     condor_short_call = bear_short
     condor_long_call = bear_long
 
+    # ============================
+    # STRADDLE (ATM both sides)
+    # ============================
+    straddle_call = atm
+    straddle_put = atm
+
+    # ============================
+    # STRANGLE (OTM both sides)
+    # ============================
+    strangle_call = atm + step
+    strangle_put = atm - step
+
+    # ============================
+    # BUTTERFLY (Call or Put)
+    # ============================
+    # Buy 1 ITM, Sell 2 ATM, Buy 1 OTM
+    butterfly_lower = atm - width
+    butterfly_middle = atm
+    butterfly_upper = atm + width
+
+    # ============================
+    # CALL RATIO BACKSPREAD
+    # ============================
+    # Sell 1 ITM call, Buy 2 OTM calls
+    # Short strike slightly ITM, Long strikes OTM
+    call_ratio_short = atm - step  # Slightly ITM
+    call_ratio_long_near = atm + step  # OTM
+    call_ratio_long_far = atm + (step * 2)  # Further OTM
+
+    # ============================
+    # PUT RATIO BACKSPREAD
+    # ============================
+    # Sell 1 ITM put, Buy 2 OTM puts
+    put_ratio_short = atm + step  # Slightly ITM
+    put_ratio_long_near = atm - step  # OTM
+    put_ratio_long_far = atm - (step * 2)  # Further OTM
+
     return {
         "bull": (bull_short, bull_long),
         "bear": (bear_short, bear_long),
         "condor": (condor_short_put, condor_long_put, condor_short_call, condor_long_call),
+        "straddle": (straddle_call, straddle_put),
+        "strangle": (strangle_call, strangle_put),
+        "butterfly_call": (butterfly_lower, butterfly_middle, butterfly_upper),
+        "butterfly_put": (butterfly_lower, butterfly_middle, butterfly_upper),
+        "call_ratio_backspread": (call_ratio_short, call_ratio_long_near, call_ratio_long_far),
+        "put_ratio_backspread": (put_ratio_short, put_ratio_long_near, put_ratio_long_far),
         "meta": {
             "step": step,
             "width": width,

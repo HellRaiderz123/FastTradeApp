@@ -31,6 +31,7 @@ from app.api.routes import config_routes
 from app.api.routes import news
 from app.api.routes import economic_calendar
 from app.api.routes import market_depth
+from app.api.routes import alerts
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
@@ -198,6 +199,7 @@ app.include_router(screener.router)
 app.include_router(options.router)
 app.include_router(suggestions.router)
 app.include_router(ws_positions.router)
+app.include_router(alerts.router)
 app.include_router(paper_mtm_router)
 app.include_router(exit_router)
 app.include_router(auto_exit_router)

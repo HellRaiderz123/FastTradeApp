@@ -34,11 +34,19 @@ def get_next_weekly_expiry(today: date | None = None) -> date:
 
     return expiry
 
+def _is_last_weekday_of_month(expiry: date) -> bool:
+    """Return True if expiry is the last occurrence of its weekday in the month."""
+    return (expiry + timedelta(days=7)).month != expiry.month
+
+
 def format_zerodha_expiry(expiry: date) -> str:
     """
-    2026-01-25 → 26JAN
+    Monthly: 2026-01-29 → 26JAN
+    Weekly:  2026-01-09 → 26JAN09
     """
-    return expiry.strftime("%y%b").upper()
+    if _is_last_weekday_of_month(expiry):
+        return expiry.strftime("%y%b").upper()
+    return expiry.strftime("%y%b%d").upper()
 
 from datetime import date, timedelta
 

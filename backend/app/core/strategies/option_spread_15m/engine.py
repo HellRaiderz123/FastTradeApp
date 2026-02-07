@@ -28,7 +28,13 @@ from app.services.market_data import (
 from app.core.strategies.option_spread_15m.context import build_market_context
 from app.core.strategies.option_spread_15m.decision import decide_strategy
 from app.core.strategies.option_spread_15m.strikes import compute_spread_strikes
-from app.core.strategies.option_spread_15m.risk import check_spread_risk, check_condor_risk
+from app.core.strategies.option_spread_15m.risk import (
+    check_spread_risk,
+    check_condor_risk,
+    check_straddle_strangle_risk,
+    check_butterfly_risk,
+    check_ratio_backspread_risk,
+)
 from app.core.risk.risk_limits_config import get_risk_limits
 
 def _log_strategy_run(result: dict, underlying: str) -> Optional[StrategyRun]:
@@ -185,6 +191,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         )
 
 
+    # ============================
+    # EXTRACT STRIKES BY STRATEGY TYPE
+    # ============================
     if strategy_mode == "BULL_PUT":
         short_strike, long_strike = strikes["bull"]
         opt_type = "PE"
@@ -193,6 +202,20 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         opt_type = "CE"
     elif strategy_mode == "IRON_CONDOR":
         short_put, long_put, short_call, long_call = strikes["condor"]
+    elif strategy_mode == "SHORT_STRADDLE":
+        straddle_call, straddle_put = strikes["straddle"]
+    elif strategy_mode == "LONG_STRADDLE":
+        straddle_call, straddle_put = strikes["straddle"]
+    elif strategy_mode == "SHORT_STRANGLE":
+        strangle_call, strangle_put = strikes["strangle"]
+    elif strategy_mode == "LONG_STRANGLE":
+        strangle_call, strangle_put = strikes["strangle"]
+    elif strategy_mode == "BUTTERFLY_SPREAD":
+        butterfly_lower, butterfly_middle, butterfly_upper = strikes["butterfly_call"]
+    elif strategy_mode == "CALL_RATIO_BACKSPREAD":
+        ratio_short, ratio_long_near, ratio_long_far = strikes["call_ratio_backspread"]
+    elif strategy_mode == "PUT_RATIO_BACKSPREAD":
+        ratio_short, ratio_long_near, ratio_long_far = strikes["put_ratio_backspread"]
     else:
         return {
             "strategy": strategy_mode,
@@ -207,31 +230,103 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # =====================================================
     # Load DB-backed risk limits (env/profile fallback if DB unavailable)
     risk_config = get_risk_limits()
+    
+    capital = float(payload.get("capital", 0))
+    lots = int(payload.get("lots", 1))
+    iv_regime_str = str(ctx.get("iv_regime") or "LOW")
 
+    # Route to appropriate risk check function
     if strategy_mode in ["BULL_PUT", "BEAR_CALL"]:
         ok, risk_reason, risk_metrics = check_spread_risk(
             short_strike=short_strike,
             long_strike=long_strike,
             spot=spot,
-            capital=float(payload.get("capital", 0)),
+            capital=capital,
             lot_size=lot_size,
-            lots=int(payload.get("lots", 1)),
-            iv_regime=str(ctx.get("iv_regime") or "LOW"),
+            lots=lots,
+            iv_regime=iv_regime_str,
             risk_config=risk_config,
         )
-    else:
+    elif strategy_mode == "IRON_CONDOR":
         ok, risk_reason, risk_metrics = check_condor_risk(
             short_put=short_put,
             long_put=long_put,
             short_call=short_call,
             long_call=long_call,
             spot=spot,
-            capital=float(payload.get("capital", 0)),
+            capital=capital,
             lot_size=lot_size,
-            lots=int(payload.get("lots", 1)),
-            iv_regime=str(ctx.get("iv_regime") or "LOW"),
+            lots=lots,
+            iv_regime=iv_regime_str,
             risk_config=risk_config,
         )
+    elif strategy_mode in ["SHORT_STRADDLE", "LONG_STRADDLE"]:
+        ok, risk_reason, risk_metrics = check_straddle_strangle_risk(
+            call_strike=straddle_call,
+            put_strike=straddle_put,
+            spot=spot,
+            capital=capital,
+            lot_size=lot_size,
+            lots=lots,
+            iv_regime=iv_regime_str,
+            is_short=(strategy_mode == "SHORT_STRADDLE"),
+            risk_config=risk_config,
+        )
+    elif strategy_mode in ["SHORT_STRANGLE", "LONG_STRANGLE"]:
+        ok, risk_reason, risk_metrics = check_straddle_strangle_risk(
+            call_strike=strangle_call,
+            put_strike=strangle_put,
+            spot=spot,
+            capital=capital,
+            lot_size=lot_size,
+            lots=lots,
+            iv_regime=iv_regime_str,
+            is_short=(strategy_mode == "SHORT_STRANGLE"),
+            risk_config=risk_config,
+        )
+    elif strategy_mode == "BUTTERFLY_SPREAD":
+        ok, risk_reason, risk_metrics = check_butterfly_risk(
+            lower_strike=butterfly_lower,
+            middle_strike=butterfly_middle,
+            upper_strike=butterfly_upper,
+            spot=spot,
+            capital=capital,
+            lot_size=lot_size,
+            lots=lots,
+            iv_regime=iv_regime_str,
+            risk_config=risk_config,
+        )
+    elif strategy_mode == "CALL_RATIO_BACKSPREAD":
+        ok, risk_reason, risk_metrics = check_ratio_backspread_risk(
+            short_strike=ratio_short,
+            long_strike_near=ratio_long_near,
+            long_strike_far=ratio_long_far,
+            spot=spot,
+            capital=capital,
+            lot_size=lot_size,
+            lots=lots,
+            iv_regime=iv_regime_str,
+            is_call=True,
+            risk_config=risk_config,
+        )
+    elif strategy_mode == "PUT_RATIO_BACKSPREAD":
+        ok, risk_reason, risk_metrics = check_ratio_backspread_risk(
+            short_strike=ratio_short,
+            long_strike_near=ratio_long_near,
+            long_strike_far=ratio_long_far,
+            spot=spot,
+            capital=capital,
+            lot_size=lot_size,
+            lots=lots,
+            iv_regime=iv_regime_str,
+            is_call=False,
+            risk_config=risk_config,
+        )
+    else:
+        # Unknown strategy
+        ok = False
+        risk_reason = f"No risk check defined for {strategy_mode}"
+        risk_metrics = {}
 
 
     if not ok:
@@ -256,13 +351,17 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # 7️⃣ BUILD TICKET (PAPER)
     # =====================================================
     expiry = get_current_weekly_expiry(underlying)
+    lots = int(payload.get("lots", 1))
 
+    # ============================
+    # CREDIT/DEBIT SPREADS
+    # ============================
     if strategy_mode in ["BULL_PUT", "BEAR_CALL"]:
         ticket = {
             "strategy": strategy_mode,
             "underlying": underlying,
             "lot_size": lot_size,
-            "lots": int(payload.get("lots", 1)),
+            "lots": lots,
             "legs": [
                 {
                     "side": "SELL",
@@ -288,12 +387,16 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                 },
             ],
         }
-    else:
+    
+    # ============================
+    # IRON CONDOR
+    # ============================
+    elif strategy_mode == "IRON_CONDOR":
         ticket = {
             "strategy": strategy_mode,
             "underlying": underlying,
             "lot_size": lot_size,
-            "lots": int(payload.get("lots", 1)),
+            "lots": lots,
             "legs": [
                 {
                     "side": "SELL",
@@ -340,6 +443,294 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                 },
             ],
+        }
+    
+    # ============================
+    # SHORT STRADDLE
+    # ============================
+    elif strategy_mode == "SHORT_STRADDLE":
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "legs": [
+                {
+                    "side": "SELL",
+                    "strike": straddle_call,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=straddle_call,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "SELL",
+                    "strike": straddle_put,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=straddle_put,
+                        option_type="PE",
+                    ),
+                },
+            ],
+        }
+    
+    # ============================
+    # LONG STRADDLE
+    # ============================
+    elif strategy_mode == "LONG_STRADDLE":
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "legs": [
+                {
+                    "side": "BUY",
+                    "strike": straddle_call,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=straddle_call,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": straddle_put,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=straddle_put,
+                        option_type="PE",
+                    ),
+                },
+            ],
+        }
+    
+    # ============================
+    # SHORT STRANGLE
+    # ============================
+    elif strategy_mode == "SHORT_STRANGLE":
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "legs": [
+                {
+                    "side": "SELL",
+                    "strike": strangle_call,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=strangle_call,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "SELL",
+                    "strike": strangle_put,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=strangle_put,
+                        option_type="PE",
+                    ),
+                },
+            ],
+        }
+    
+    # ============================
+    # LONG STRANGLE
+    # ============================
+    elif strategy_mode == "LONG_STRANGLE":
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "legs": [
+                {
+                    "side": "BUY",
+                    "strike": strangle_call,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=strangle_call,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": strangle_put,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=strangle_put,
+                        option_type="PE",
+                    ),
+                },
+            ],
+        }
+    
+    # ============================
+    # BUTTERFLY SPREAD (CALL)
+    # ============================
+    elif strategy_mode == "BUTTERFLY_SPREAD":
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "legs": [
+                {
+                    "side": "BUY",
+                    "strike": butterfly_lower,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=butterfly_lower,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "SELL",
+                    "strike": butterfly_middle,
+                    "type": "CE",
+                    "quantity": lots * lot_size * 2,  # 2x middle
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=butterfly_middle,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": butterfly_upper,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=butterfly_upper,
+                        option_type="CE",
+                    ),
+                },
+            ],
+        }
+    
+    # ============================
+    # CALL RATIO BACKSPREAD
+    # ============================
+    elif strategy_mode == "CALL_RATIO_BACKSPREAD":
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "legs": [
+                {
+                    "side": "SELL",
+                    "strike": ratio_short,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=ratio_short,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": ratio_long_near,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=ratio_long_near,
+                        option_type="CE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": ratio_long_far,
+                    "type": "CE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=ratio_long_far,
+                        option_type="CE",
+                    ),
+                },
+            ],
+        }
+    
+    # ============================
+    # PUT RATIO BACKSPREAD
+    # ============================
+    elif strategy_mode == "PUT_RATIO_BACKSPREAD":
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "legs": [
+                {
+                    "side": "SELL",
+                    "strike": ratio_short,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=ratio_short,
+                        option_type="PE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": ratio_long_near,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=ratio_long_near,
+                        option_type="PE",
+                    ),
+                },
+                {
+                    "side": "BUY",
+                    "strike": ratio_long_far,
+                    "type": "PE",
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=ratio_long_far,
+                        option_type="PE",
+                    ),
+                },
+            ],
+        }
+    
+    else:
+        return {
+            "strategy": strategy_mode,
+            "approved": False,
+            "reason": "Ticket builder not implemented for this strategy",
+            "signal": sig,
+            "context": ctx,
         }
 
     # =====================================================

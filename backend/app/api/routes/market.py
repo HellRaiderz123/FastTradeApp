@@ -128,26 +128,26 @@ async def get_available_expiries(symbol: str = "NIFTY"):
         }
     """
     try:
+        from app.core.market.expiry import WEEKLY_EXPIRY_WEEKDAY
+
         today = datetime.now().date()
         expiries = []
-        
-        # Find next Tuesday (NSE weekly expiry day)
-        # In NSE, options expire on every Tuesday
-        def next_tuesday(date):
-            """Find next Tuesday from given date"""
-            # Tuesday = 1 in Python (Monday=0, Sunday=6)
-            days_until_tuesday = (1 - date.weekday()) % 7
-            if days_until_tuesday == 0:
-                # If today IS Tuesday, next expiry is next Tuesday
-                days_until_tuesday = 7
-            return date + timedelta(days=days_until_tuesday)
-        
-        # Generate weekly expiries (Tuesdays for next 13 weeks)
+
+        symbol_key = symbol.upper().strip()
+        expiry_weekday = WEEKLY_EXPIRY_WEEKDAY.get(symbol_key, 1)  # Default Tuesday
+
+        def next_weekday(date, weekday):
+            """Find next target weekday from given date (0=Mon..6=Sun)."""
+            days_until = (weekday - date.weekday()) % 7
+            if days_until == 0:
+                days_until = 7
+            return date + timedelta(days=days_until)
+
+        # Generate weekly expiries (next 13 weeks)
         current_date = today
         for _ in range(13):
-            current_date = next_tuesday(current_date)
+            current_date = next_weekday(current_date, expiry_weekday)
             expiries.append(current_date.strftime("%Y-%m-%d"))
-            # Move past this date to find next Tuesday
             current_date = current_date + timedelta(days=1)
         
         # Remove duplicates and sort

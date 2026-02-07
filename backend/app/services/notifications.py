@@ -29,6 +29,7 @@ class NotificationType(str, Enum):
     MARGIN_WARNING = "margin_warning"
     STRATEGY_ENABLED = "strategy_enabled"
     STRATEGY_DISABLED = "strategy_disabled"
+    ALERT_TRIGGERED = "alert_triggered"
 
 
 class NotificationPriority(str, Enum):
@@ -374,6 +375,42 @@ class NotificationService:
             message=message.strip(),
             priority=NotificationPriority.LOW,
             metadata={"strategy": strategy_name, "enabled": enabled}
+        )
+
+    # ============================
+    # ALERT NOTIFICATIONS
+    # ============================
+
+    def notify_alert_triggered(
+        self,
+        ticker: str,
+        operator: str,
+        target_price: float,
+        current_price: float,
+        alert_id: int
+    ):
+        """Notify when a price alert is triggered"""
+        message = f"""
+        🔔 Price Alert Triggered
+
+        Symbol: {ticker}
+        Condition: {operator} {target_price}
+        Current: {current_price}
+        Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """
+
+        self._send_notification(
+            type=NotificationType.ALERT_TRIGGERED,
+            title=f"🔔 Price Alert - {ticker}",
+            message=message.strip(),
+            priority=NotificationPriority.HIGH,
+            metadata={
+                "ticker": ticker,
+                "operator": operator,
+                "target": target_price,
+                "current": current_price,
+                "alert_id": alert_id,
+            }
         )
     
     # ============================
