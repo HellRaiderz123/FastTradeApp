@@ -425,7 +425,7 @@ async def get_sector_performance() -> Dict[str, Any]:
 @router.get("/stock-technicals/{symbol}")
 async def get_stock_technicals(symbol: str) -> Dict[str, Any]:
     """
-    Get comprehensive technical analysis for a stock
+    Get comprehensive technical analysis for a stock using REAL historical data
     
     Args:
         symbol: Stock symbol (e.g., "RELIANCE")
@@ -441,33 +441,62 @@ async def get_stock_technicals(symbol: str) -> Dict[str, Any]:
                 "adx": {...},
                 "volume": {...}
             },
-            "swing_pattern": {...},
             "signal": "BULLISH",
+            "trend": "UPTREND",
+            "recommendation": "BUY",
             "timestamp": "2024-01-09T15:30:00"
         }
     """
     try:
-        # Get historical data (last 100 candles)
-        from_date = (datetime.now() - timedelta(days=100)).strftime("%Y-%m-%d")
-        to_date = datetime.now().strftime("%Y-%m-%d")
+        from app.core.data.candles import get_historical_candles
         
-        # Try to get historical data
-        # For now, use current quote + mock historical
-        quote = kite_service.get_full_quote(symbol)
+        symbol = symbol.upper()
         
-        if not quote:
-            raise HTTPException(status_code=404, detail=f"Quote not found for {symbol}")
+        # Get real historical data (last 100 days of daily candles)
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=150)  # Get more data to be safe
         
-        ltp = quote.get("last_price", 0)
+        logger.info(f"📊 Fetching historical candles for {symbol} ({start_date} to {end_date})")
         
-        # Mock historical data for demonstration
-        # In production, fetch actual candle data
-        closes = [ltp * (1 + (i - 50) * 0.002) for i in range(100)]
-        highs = [c * 1.01 for c in closes]
-        lows = [c * 0.99 for c in closes]
-        volumes = [1000000 + i * 10000 for i in range(100)]
+        # Try to get real candles
+        candles = get_historical_candles(symbol, start_date, end_date, "daily")
         
-        # Calculate indicators
+        if not candles or len(candles) < 20:
+            logger.warning(f"⚠️ Insufficient candle data for {symbol} (got {len(candles) if candles else 0})")
+            
+            # Get current quote at least
+            quote = kite_service.get_full_quote(symbol)
+            if not quote:
+                raise HTTPException(status_code=404, detail=f"Quote not found for {symbol}")
+            
+            ltp = quote.get("last_price", 0)
+            return {
+                "symbol": symbol,
+                "ltp": round(ltp, 2),
+                "indicators": {
+                    "rsi": None,
+                    "macd": None,
+                    "bollinger": None,
+                    "adx": None,
+                    "volume": None
+                },
+                "swing_pattern": None,
+                "signal": "NEUTRAL",
+                "trend": "INSUFFICIENT_DATA",
+                "recommendation": "HOLD",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        # Extract OHLCV from candles
+        closes = [c.get("close", c.get("price", 0)) for c in candles]
+        highs = [c.get("high", c.get("price", 0)) for c in candles]
+        lows = [c.get("low", c.get("price", 0)) for c in candles]
+        volumes = [c.get("volume", 0) for c in candles]
+        ltp = closes[-1] if closes else 0
+        
+        logger.info(f"✅ Got {len(candles)} candles for {symbol}, calculating indicators...")
+        
+        # Calculate indicators from REAL data
         indicators = {
             "rsi": TechnicalIndicators.calculate_rsi(closes, 14),
             "macd": TechnicalIndicators.calculate_macd(closes),
@@ -479,15 +508,47 @@ async def get_stock_technicals(symbol: str) -> Dict[str, Any]:
         # Detect swing patterns
         swing_pattern = TechnicalIndicators.detect_swing_pattern(closes, volumes, highs, lows)
         
+        # Determine trend (comparing recent vs older price)
+        if len(closes) >= 50:
+            recent_avg = sum(closes[-20:]) / min(20, len(closes))
+            older_avg = sum(closes[-50:-30]) / 20 if len(closes) >= 50 else sum(closes[:20]) / min(20, len(closes))
+            
+            if older_avg > 0:
+                trend = "UPTREND" if recent_avg > older_avg else "DOWNTREND"
+            else:
+                trend = "SIDEWAYS"
+        else:
+            trend = "SIDEWAYS"
+        
+        # Get recommendation based on indicators
+        rsi = indicators.get("rsi")
+        adx_data = indicators.get("adx")
+        adx_val = adx_data.get("adx") if adx_data else None
+        
+        if rsi is None:
+            recommendation = "HOLD"
+        elif rsi > 70:
+            recommendation = "SELL"
+        elif rsi < 30:
+            recommendation = "BUY"
+        elif adx_val and adx_val > 25:
+            recommendation = "BUY" if trend == "UPTREND" else "SELL"
+        else:
+            recommendation = "HOLD"
+        
+        logger.info(f"✅ Technicals calculated for {symbol}: RSI={rsi}, ADX={adx_val}, Trend={trend}")
+        
         return {
             "symbol": symbol,
             "ltp": round(ltp, 2),
             "indicators": indicators,
             "swing_pattern": swing_pattern,
-            "signal": swing_pattern["signal"] if swing_pattern else "NEUTRAL",
+            "signal": swing_pattern.get("signal", "NEUTRAL") if swing_pattern else "NEUTRAL",
+            "trend": trend,
+            "recommendation": recommendation,
             "timestamp": datetime.now().isoformat()
         }
     
     except Exception as e:
-        logger.error(f"Error calculating technicals for {symbol}: {e}")
+        logger.error(f"❌ Error calculating technicals for {symbol}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

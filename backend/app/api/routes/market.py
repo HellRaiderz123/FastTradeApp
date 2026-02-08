@@ -665,9 +665,17 @@ async def get_candles(
             "day": 1440
         }.get(interval, 15)
         
-        # Generate last 100 candles
+        # Calculate number of candles based on date range
+        if interval == "day":
+            num_candles = max(1, (to_dt - from_dt).days)
+        else:
+            num_candles = max(1, int((to_dt - from_dt).total_seconds() / (minutes_per_candle * 60)))
+        
+        # Limit to reasonable max
+        num_candles = min(num_candles, 500)
+        
+        # Generate candles from from_date to to_date
         current_time = to_dt
-        num_candles = 100
         
         for i in range(num_candles - 1, -1, -1):
             # Calculate timestamp

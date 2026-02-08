@@ -234,13 +234,63 @@ class TechnicalIndicators:
             di_diff = abs(plus_di - minus_di)
             dx = (di_diff / di_sum * 100) if di_sum > 0 else 0
             
-            # ADX is the smoothed average of DX (simplified here)
-            adx = dx  # In practice, this should be EMA of DX values
+            # ADX is properly smoothed EMA of DX values, not just raw DX
+            # For more accurate ADX with limited data, use simple average fallback
+            adx = dx
+            if len(closes) >= period * 3:
+                # Calculate multiple DX values for EMA smoothing
+                dx_list = []
+                for lookback in range(period, len(closes)):
+                    end_idx = lookback
+                    start_idx = max(0, end_idx - period)
+                    
+                    period_highs = highs[start_idx:end_idx]
+                    period_lows = lows[start_idx:end_idx]
+                    period_closes = closes[start_idx:end_idx]
+                    
+                    if len(period_closes) >= 2:
+                        # Calculate TR for this period
+                        tr_sum = 0
+                        for i in range(1, len(period_closes)):
+                            high_low = period_highs[i] - period_lows[i]
+                            high_close = abs(period_highs[i] - period_closes[i-1])
+                            low_close = abs(period_lows[i] - period_closes[i-1])
+                            tr_sum += max(high_low, high_close, low_close)
+                        
+                        atr_val = tr_sum / len(period_closes) if period_closes else 1
+                        
+                        # Calculate +DM and -DM for this period
+                        plus_dm = 0
+                        minus_dm = 0
+                        for i in range(1, len(period_closes)):
+                            up_move = period_highs[i] - period_highs[i-1]
+                            down_move = period_lows[i-1] - period_lows[i]
+                            if up_move > down_move and up_move > 0:
+                                plus_dm += up_move
+                            if down_move > up_move and down_move > 0:
+                                minus_dm += down_move
+                        
+                        di_plus = (plus_dm / atr_val * 100) if atr_val > 0 else 0
+                        di_minus = (minus_dm / atr_val * 100) if atr_val > 0 else 0
+                        
+                        di_sum_val = di_plus + di_minus
+                        di_diff_val = abs(di_plus - di_minus)
+                        dx_val = (di_diff_val / di_sum_val * 100) if di_sum_val > 0 else 0
+                        dx_list.append(dx_val)
+                
+                # EMA of DX
+                if len(dx_list) >= period:
+                    adx = sum(dx_list[:period]) / period
+                    multiplier = 2 / (period + 1)
+                    for dx_val in dx_list[period:]:
+                        adx = (dx_val - adx) * multiplier + adx
+                elif dx_list:
+                    adx = sum(dx_list) / len(dx_list)
             
             return {
-                "adx": round(adx, 2),
-                "plus_di": round(plus_di, 2),
-                "minus_di": round(minus_di, 2)
+                "adx": round(min(max(adx, 0), 100), 2),  # Ensure 0-100 range
+                "plus_di": round(min(max(plus_di, 0), 100), 2),
+                "minus_di": round(min(max(minus_di, 0), 100), 2)
             }
         except Exception as e:
             logger.warning(f"Error calculating ADX: {e}")

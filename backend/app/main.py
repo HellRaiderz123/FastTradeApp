@@ -1,3 +1,14 @@
+# ⚡ LOAD ENV VARIABLES FIRST - BEFORE ANY IMPORTS
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from backend directory (before any other imports!)
+backend_dir = Path(__file__).parent.parent
+env_path = backend_dir / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
+
+# Now do all the imports
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +24,7 @@ from app.api.routes import backtest
 from app.api.routes import greeks
 from app.api.routes import market
 from app.api.routes import suggestions
+from app.api.routes import stock_suggestions
 from app.api.routes import screener
 from app.api.routes import options
 from app.api.routes import ws_positions
@@ -32,6 +44,9 @@ from app.api.routes import news
 from app.api.routes import economic_calendar
 from app.api.routes import market_depth
 from app.api.routes import alerts
+from app.api.routes import stock_news
+from app.api.routes import timeframe_suggestions
+from app.api.routes import peer_comparison
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
@@ -53,6 +68,11 @@ json_logs = os.getenv("JSON_LOGS", "false").lower() == "true"
 setup_logging(log_level=log_level, json_logs=json_logs)
 
 logger = logging.getLogger(__name__)
+
+# Debug: Show loaded environment variables
+newsdata_key = os.getenv("NEWSDATA_API_KEY", "")
+zerodha_key = os.getenv("ZERODHA_API_KEY", "")
+logger.info(f"📝 Environment loaded: NEWSDATA_API_KEY={bool(newsdata_key)} (len={len(newsdata_key) if newsdata_key else 0}), ZERODHA_API_KEY={bool(zerodha_key)}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -109,15 +129,6 @@ async def lifespan(app: FastAPI):
     except:
         pass
 
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-
-# Load .env from backend directory
-backend_dir = Path(__file__).parent.parent
-env_path = backend_dir / ".env"
-load_dotenv(dotenv_path=env_path, override=True)
-logger.info(f"📝 Loading .env from: {env_path}")
 
 app = FastAPI(
     title="AI ML Trading Backend",
@@ -198,6 +209,7 @@ app.include_router(market.router)
 app.include_router(screener.router)
 app.include_router(options.router)
 app.include_router(suggestions.router)
+app.include_router(stock_suggestions.router)
 app.include_router(ws_positions.router)
 app.include_router(alerts.router)
 app.include_router(paper_mtm_router)
@@ -216,5 +228,8 @@ app.include_router(news.router)
 app.include_router(economic_calendar.router)
 app.include_router(market_depth.router)
 app.include_router(config_routes.router)
+app.include_router(stock_news.router)
+app.include_router(timeframe_suggestions.router)
+app.include_router(peer_comparison.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

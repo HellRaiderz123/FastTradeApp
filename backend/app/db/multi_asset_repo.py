@@ -242,7 +242,15 @@ def create_alert_rule(
     """Create new alert rule"""
     symbol = get_symbol(db, ticker)
     if not symbol:
-        raise ValueError(f"Symbol {ticker} not found")
+        # Auto-create symbol if it doesn't exist
+        logger.info(f"Auto-creating symbol: {ticker}")
+        symbol = create_symbol(
+            db=db,
+            ticker=ticker,
+            name=ticker,  # Use ticker as name for now
+            asset_type="STOCK",
+            is_active=True
+        )
     
     rule = AlertRule(
         name=name,

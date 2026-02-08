@@ -14,10 +14,17 @@ import {
   AlertTriangle,
   Calendar,
   Building2,
+  Info,
+  Bell,
+  List,
 } from 'lucide-react';
 import TechnicalChart from '../components/TechnicalChart';
 import NewsFeed from '../components/NewsFeed';
 import ErrorBoundary from '../components/ErrorBoundary';
+import StockDetailModal from '../components/StockDetailModal';
+import AlertManager from '../components/AlertManager';
+import AlertList from '../components/AlertList';
+import ComparisonChart from '../components/ComparisonChart';
 import { useRealtimeQuotes } from '../hooks/useRealtimeQuotes';
 import { marketAPI, alertsAPI } from '../lib/api';
 import { 
@@ -36,6 +43,7 @@ const Terminal: React.FC = () => {
   const [searchInput, setSearchInput] = useState('');
   const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '30m' | '1h' | '1d'>('15m');
   const [universe, setUniverse] = useState<string>('NIFTY50');
+  const [detailModalSymbol, setDetailModalSymbol] = useState<string | null>(null);
   
   // Market data
   const [topMovers, setTopMovers] = useState<{
@@ -57,6 +65,11 @@ const Terminal: React.FC = () => {
   const [alertTouched, setAlertTouched] = useState(false);
   const [alertSubmitting, setAlertSubmitting] = useState(false);
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
+  
+  // Alert modals
+  const [showAlertManager, setShowAlertManager] = useState(false);
+  const [showAlertList, setShowAlertList] = useState(false);
+  const [alertRefreshTrigger, setAlertRefreshTrigger] = useState(0);
   
   // Watchlist - Universe aware
   const universeWatchlist: Record<string, string[]> = {
@@ -471,10 +484,12 @@ const Terminal: React.FC = () => {
                   swingOpportunities.map((opp) => (
                     <div
                       key={opp.symbol}
-                      onClick={() => setSelectedSymbol(opp.symbol)}
-                      className="flex items-center justify-between bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 cursor-pointer hover:bg-slate-800/60 transition"
+                      className="flex items-center justify-between bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 hover:bg-slate-800/60 transition group"
                     >
-                      <div className="flex-1">
+                      <div 
+                        onClick={() => setSelectedSymbol(opp.symbol)}
+                        className="flex-1 cursor-pointer"
+                      >
                         <div className="flex items-center gap-3">
                           <span className="text-sm font-semibold text-white">{opp.symbol}</span>
                           <span className={`text-xs px-2 py-0.5 rounded font-medium ${
@@ -498,11 +513,26 @@ const Terminal: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="text-sm font-semibold text-white">₹{opp.ltp}</div>
-                        <div className={`text-xs ${opp.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {opp.change_percent >= 0 ? '+' : ''}{opp.change_percent.toFixed(2)}%
+                      <div className="flex items-center gap-3">
+                        <div 
+                          onClick={() => setSelectedSymbol(opp.symbol)}
+                          className="text-right cursor-pointer"
+                        >
+                          <div className="text-sm font-semibold text-white">₹{opp.ltp}</div>
+                          <div className={`text-xs ${opp.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {opp.change_percent >= 0 ? '+' : ''}{opp.change_percent.toFixed(2)}%
+                          </div>
                         </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDetailModalSymbol(opp.symbol);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-slate-700/50 rounded-lg"
+                          title="More Details"
+                        >
+                          <Info size={16} className="text-blue-400" />
+                        </button>
                       </div>
                     </div>
                   ))
@@ -534,11 +564,27 @@ const Terminal: React.FC = () => {
                     {topMovers.gainers.slice(0, 5).map((stock) => (
                       <div
                         key={stock.symbol}
-                        onClick={() => setSelectedSymbol(stock.symbol)}
-                        className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
+                        className="flex items-center justify-between text-xs hover:bg-slate-800/40 rounded px-2 py-1 transition group"
                       >
-                        <span className="text-slate-200 font-medium">{stock.symbol}</span>
-                        <span className="text-emerald-400 font-semibold">+{stock.change_percent.toFixed(2)}%</span>
+                        <span 
+                          onClick={() => setSelectedSymbol(stock.symbol)}
+                          className="text-slate-200 font-medium cursor-pointer"
+                        >
+                          {stock.symbol}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-emerald-400 font-semibold">+{stock.change_percent.toFixed(2)}%</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDetailModalSymbol(stock.symbol);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-slate-700/50 rounded"
+                            title="More Details"
+                          >
+                            <Info size={12} className="text-blue-400" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -553,11 +599,27 @@ const Terminal: React.FC = () => {
                     {topMovers.losers.slice(0, 5).map((stock) => (
                       <div
                         key={stock.symbol}
-                        onClick={() => setSelectedSymbol(stock.symbol)}
-                        className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
+                        className="flex items-center justify-between text-xs hover:bg-slate-800/40 rounded px-2 py-1 transition group"
                       >
-                        <span className="text-slate-200 font-medium">{stock.symbol}</span>
-                        <span className="text-red-400 font-semibold">{stock.change_percent.toFixed(2)}%</span>
+                        <span 
+                          onClick={() => setSelectedSymbol(stock.symbol)}
+                          className="text-slate-200 font-medium cursor-pointer"
+                        >
+                          {stock.symbol}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-red-400 font-semibold">{stock.change_percent.toFixed(2)}%</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDetailModalSymbol(stock.symbol);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-slate-700/50 rounded"
+                            title="More Details"
+                          >
+                            <Info size={12} className="text-blue-400" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -572,11 +634,27 @@ const Terminal: React.FC = () => {
                     {topMovers.most_active.slice(0, 5).map((stock) => (
                       <div
                         key={stock.symbol}
-                        onClick={() => setSelectedSymbol(stock.symbol)}
-                        className="flex items-center justify-between text-xs cursor-pointer hover:bg-slate-800/40 rounded px-2 py-1 transition"
+                        className="flex items-center justify-between text-xs hover:bg-slate-800/40 rounded px-2 py-1 transition group"
                       >
-                        <span className="text-slate-200 font-medium">{stock.symbol}</span>
-                        <span className="text-slate-400">{(stock.volume / 1000000).toFixed(2)}M</span>
+                        <span 
+                          onClick={() => setSelectedSymbol(stock.symbol)}
+                          className="text-slate-200 font-medium cursor-pointer"
+                        >
+                          {stock.symbol}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-400">{(stock.volume / 1000000).toFixed(2)}M</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDetailModalSymbol(stock.symbol);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-slate-700/50 rounded"
+                            title="More Details"
+                          >
+                            <Info size={12} className="text-blue-400" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -674,12 +752,13 @@ const Terminal: React.FC = () => {
 
                   return (
                     <div
-                      key={symbol}
-                      onClick={() => setSelectedSymbol(symbol)}
-                      className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 cursor-pointer hover:bg-slate-800/60 transition"
+                      className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 hover:bg-slate-800/60 transition group"
                     >
                       <div className="flex items-center justify-between">
-                        <div>
+                        <div 
+                          onClick={() => setSelectedSymbol(symbol)}
+                          className="flex-1 cursor-pointer"
+                        >
                           <div className="text-sm font-semibold text-white">{symbol}</div>
                           <div className={`text-xs flex items-center gap-1 ${
                             quote.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'
@@ -688,11 +767,37 @@ const Terminal: React.FC = () => {
                             {quote.change_percent >= 0 ? '+' : ''}{quote.change_percent}%
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-lg font-bold text-white">₹{quote.ltp}</div>
-                          <div className={`text-xs ${quote.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {quote.change >= 0 ? '+' : ''}{quote.change.toFixed(2)}
+                        <div className="flex items-center gap-3">
+                          <div 
+                            onClick={() => setSelectedSymbol(symbol)}
+                            className="text-right cursor-pointer"
+                          >
+                            <div className="text-lg font-bold text-white">₹{quote.ltp}</div>
+                            <div className={`text-xs ${quote.change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {quote.change >= 0 ? '+' : ''}{quote.change.toFixed(2)}
+                            </div>
                           </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSymbol(symbol);
+                              setShowAlertManager(true);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-blue-500/10 rounded-lg"
+                            title="Create Alert"
+                          >
+                            <Bell size={14} className="text-blue-400" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDetailModalSymbol(symbol);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-slate-700/50 rounded-lg"
+                            title="More Details"
+                          >
+                            <Info size={16} className="text-blue-400" />
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -708,50 +813,36 @@ const Terminal: React.FC = () => {
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Alerts</p>
-                  <h2 className="terminal-title text-xl text-white">Price Alert</h2>
+                  <h2 className="terminal-title text-xl text-white">Price Alerts</h2>
                 </div>
-                <AlertTriangle size={16} className="text-amber-300" />
+                <Bell size={16} className="text-blue-400" />
               </div>
 
               <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400 w-20">Symbol</span>
-                  <div className="flex-1 text-sm text-white font-semibold">{selectedSymbol}</div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400 w-20">Condition</span>
-                  <select
-                    value={alertOperator}
-                    onChange={(e) => setAlertOperator(e.target.value as typeof alertOperator)}
-                    className="bg-slate-900/80 border border-slate-700/50 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400/50"
-                  >
-                    <option value="above">Above</option>
-                    <option value="below">Below</option>
-                    <option value="above_or_equal">Above or equal</option>
-                    <option value="below_or_equal">Below or equal</option>
-                  </select>
-                  <input
-                    value={alertPriceInput}
-                    onChange={(e) => {
-                      setAlertPriceInput(e.target.value);
-                      setAlertTouched(true);
-                    }}
-                    placeholder="Price"
-                    className="flex-1 bg-slate-900/80 border border-slate-700/50 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-400/50"
-                  />
-                </div>
-
-                {alertMessage && (
-                  <div className="text-xs text-slate-400">{alertMessage}</div>
-                )}
+                <p className="text-xs text-slate-400 mb-4">
+                  Set price alerts to get notified when targets are reached
+                </p>
 
                 <button
-                  onClick={handleCreateAlert}
-                  disabled={alertSubmitting}
-                  className="w-full bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-400/40 rounded-lg px-4 py-2 text-xs font-semibold transition disabled:opacity-50"
+                  onClick={() => {
+                    const currentQuote = quotes[selectedSymbol];
+                    if (currentQuote?.ltp) {
+                      setShowAlertManager(true);
+                    }
+                  }}
+                  disabled={!quotes[selectedSymbol]?.ltp}
+                  className="w-full bg-blue-500/20 hover:bg-blue-500/30 text-blue-200 border border-blue-400/40 rounded-lg px-4 py-3 text-sm font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  {alertSubmitting ? 'Creating alert...' : 'Create Alert'}
+                  <Bell size={16} />
+                  Create Alert for {selectedSymbol}
+                </button>
+
+                <button
+                  onClick={() => setShowAlertList(true)}
+                  className="w-full bg-slate-800/50 hover:bg-slate-800 text-slate-300 border border-slate-700/40 rounded-lg px-4 py-3 text-sm font-semibold transition flex items-center justify-center gap-2"
+                >
+                  <List size={16} />
+                  View All Alerts
                 </button>
               </div>
             </div>
@@ -922,6 +1013,52 @@ const Terminal: React.FC = () => {
           </div>
         </div>
       </section>
+
+      {/* Multi-Symbol Comparison Chart */}
+      <section className="w-full">
+        <ErrorBoundary>
+          <ComparisonChart 
+            initialSymbols={[selectedSymbol, 'TCS', 'INFY']}
+            timeframe="3M"
+          />
+        </ErrorBoundary>
+      </section>
+
+      {/* Stock Detail Modal */}
+      {detailModalSymbol && (
+        <StockDetailModal
+          symbol={detailModalSymbol}
+          onClose={() => setDetailModalSymbol(null)}
+          currentPrice={quotes[detailModalSymbol]?.ltp || 0}
+          change={quotes[detailModalSymbol]?.change || 0}
+          changePercent={quotes[detailModalSymbol]?.change_percent || 0}
+        />
+      )}
+
+      {/* Alert Manager Modal */}
+      {showAlertManager && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <AlertManager
+            symbol={selectedSymbol}
+            currentPrice={quotes[selectedSymbol]?.ltp || 0}
+            onClose={() => setShowAlertManager(false)}
+            onAlertCreated={() => {
+              setAlertRefreshTrigger(prev => prev + 1);
+              setTimeout(() => setShowAlertManager(false), 2000);
+            }}
+          />
+        </div>
+      )}
+
+      {/* Alert List Modal */}
+      {showAlertList && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <AlertList
+            onClose={() => setShowAlertList(false)}
+            refreshTrigger={alertRefreshTrigger}
+          />
+        </div>
+      )}
     </div>
   );
 };

@@ -242,6 +242,12 @@ export const suggestionsAPI = {
   get: (payload: any) => api.post('/suggestions', payload),
 };
 
+// Stock Suggestions APIs
+export const stockSuggestionsAPI = {
+  get: (payload: any) => api.post('/suggestions/stocks', payload),
+  getAvailableSymbols: () => api.get('/suggestions/stocks/available-symbols'),
+};
+
 // Settings APIs
 export const settingsAPI = {
   getZerodhaSettings: () =>

@@ -117,3 +117,23 @@ def load_instruments(exchange: str = "NFO", asof_date: Optional[date] = None) ->
 
 def get_index_token(index: str) -> int:
     return INDEX_TOKENS[index]
+
+
+def get_equity_token(symbol: str, exchange: str = "NSE") -> int:
+    symbol = symbol.upper().strip()
+    instruments = load_instruments(exchange=exchange)
+    if instruments.empty:
+        raise KeyError(f"No instruments available for exchange {exchange}")
+
+    if "tradingsymbol" not in instruments.columns or "instrument_token" not in instruments.columns:
+        raise KeyError(f"Missing instrument columns for exchange {exchange}")
+
+    row = instruments[instruments["tradingsymbol"] == symbol]
+    if row.empty:
+        raise KeyError(f"Instrument token not found for {symbol} on {exchange}")
+
+    token = row.iloc[0].get("instrument_token")
+    if pd.isna(token):
+        raise KeyError(f"Invalid instrument_token for {symbol} on {exchange}")
+
+    return int(token)

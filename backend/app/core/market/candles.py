@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.core.broker.zerodha.client import get_kite_client
-from app.core.broker.zerodha.instruments import get_index_token
+from app.core.broker.zerodha.instruments import get_index_token, get_equity_token, INDEX_TOKENS
 from app.db.models_candles import Candle15m
 from app.core.utils.time import now_ist
 
@@ -16,7 +16,10 @@ def fetch_15m_candles(db: Session, symbol: str, days: int = 15):
     symbol = symbol.upper().strip()
 
     kite = get_kite_client()
-    token = get_index_token(symbol)
+    if symbol in INDEX_TOKENS:
+        token = get_index_token(symbol)
+    else:
+        token = get_equity_token(symbol, exchange="NSE")
 
     to_dt = now_ist()
     from_dt = to_dt - timedelta(days=days)
