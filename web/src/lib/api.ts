@@ -60,6 +60,9 @@ export const strategyAPI = {
   
   getStatus: (id: number) =>
     api.get(`/strategies/${id}/status`),
+  
+  createFromSuggestion: (data: any) =>
+    api.post('/strategies/create-from-suggestion', data),
 };
 
 // Execution APIs
@@ -181,13 +184,20 @@ export const screenerAPI = {
 
 // Options Chain APIs
 export const optionsAPI = {
-  // Get full options chain with Greeks
+  // Get full options chain with real market data from Zerodha
+  // REAL DATA: Uses live premiums, volume, OI from Zerodha API
   getChain: (symbol: string, expiry?: string) =>
-    api.get(`/options/chain/${symbol}`, { params: { expiry } }),
+    api.get(`/options/real/chain/${symbol}`, { params: { expiry } }),
   
-  // Get available expiry dates
+  // Get available expiry dates from actual Zerodha instruments
   getExpiries: (symbol: string) =>
-    api.get(`/options/expiries/${symbol}`),
+    api.get(`/options/real/expiries/${symbol}`),
+  
+  // OLD STUB ENDPOINTS (simulated data):
+  // getChain: (symbol: string, expiry?: string) =>
+  //   api.get(`/options/chain/${symbol}`, { params: { expiry } }),
+  // getExpiries: (symbol: string) =>
+  //   api.get(`/options/expiries/${symbol}`),
 };
 
 // System Control APIs

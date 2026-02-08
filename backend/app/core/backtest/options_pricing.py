@@ -86,7 +86,27 @@ def fetch_option_series(
     interval: str = "15minute",
     instruments_df: Optional[pd.DataFrame] = None,
 ) -> CandleSeries:
-    """Fetch historical candle series for an option tradingsymbol."""
+    """Fetch historical candle series for an option tradingsymbol.
+    
+    Priority:
+    1. Database (option_historical_candles) - for expired contracts
+    2. Live API (Zerodha) - for current contracts
+    """
+    
+    # Try database first (critical for historical backtests)
+    try:
+        series = _fetch_from_database(tradingsymbol, from_dt, to_dt)
+        if series and len(series.times) > 0:
+            logger.info(
+                "✅ Loaded %d candles from DATABASE for %s",
+                len(series.times),
+                tradingsymbol,
+            )
+            return series
+    except Exception as e:
+        logger.debug(f"Database fetch failed for {tradingsymbol}: {e}")
+    
+    # Fall back to live API (only works for current contracts)
     token = get_instrument_token_for_tradingsymbol(tradingsymbol, instruments_df=instruments_df)
 
     key = (token, from_dt, to_dt, interval)
@@ -106,10 +126,46 @@ def fetch_option_series(
     _SERIES_CACHE[key] = series
 
     logger.info(
-        "Fetched option series: %s token=%s candles=%d",
+        "Fetched option series from API: %s token=%s candles=%d",
         tradingsymbol,
         token,
         len(series.times),
     )
 
     return series
+
+
+def _fetch_from_database(
+    tradingsymbol: str,
+    from_dt: datetime,
+    to_dt: datetime,
+) -> Optional[CandleSeries]:
+    """Fetch historical option candles from database"""
+    try:
+        from app.db.models_candles import OptionHistoricalCandle
+        from app.db.session import SessionLocal
+        
+        db = SessionLocal()
+        try:
+            candles = db.query(OptionHistoricalCandle).filter(
+                OptionHistoricalCandle.tradingsymbol == tradingsymbol,
+                OptionHistoricalCandle.timestamp >= from_dt,
+                OptionHistoricalCandle.timestamp <= to_dt,
+            ).order_by(OptionHistoricalCandle.timestamp.asc()).all()
+            
+            if not candles:
+                return None
+            
+            times = [c.timestamp.replace(tzinfo=None) for c in candles]
+            closes = [float(c.close) for c in candles]
+            
+            return CandleSeries(times=times, closes=closes)
+        finally:
+            db.close()
+    except ImportError:
+        # Table doesn't exist yet
+        return None
+    except Exception as e:
+        logger.debug(f"Database query failed: {e}")
+        return None
+

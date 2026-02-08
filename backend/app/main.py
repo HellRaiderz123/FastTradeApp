@@ -27,6 +27,7 @@ from app.api.routes import suggestions
 from app.api.routes import stock_suggestions
 from app.api.routes import screener
 from app.api.routes import options
+from app.api.routes import options_real
 from app.api.routes import ws_positions
 from app.api.routes.paper_mtm import router as paper_mtm_router
 from app.api.routes.exit import router as exit_router
@@ -208,6 +209,7 @@ app.include_router(greeks.router)
 app.include_router(market.router)
 app.include_router(screener.router)
 app.include_router(options.router)
+app.include_router(options_real.router)
 app.include_router(suggestions.router)
 app.include_router(stock_suggestions.router)
 app.include_router(ws_positions.router)

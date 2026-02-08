@@ -228,3 +228,87 @@ def get_strategy_status(
         "strategy_type": strategy.strategy_type,
         "underlying": strategy.underlying
     }
+
+
+class CreateFromSuggestionRequest(BaseModel):
+    """Request to create a strategy from a trade suggestion"""
+    underlying: str
+    strategy_type: str  # BULL_PUT, BEAR_CALL, BUTTERFLY_SPREAD, etc.
+    reason: str
+    confidence: float
+    capital: float = 100000
+    lots: int = 1
+    risk_mode: str = "Conservative"
+    min_confidence: float = 75
+
+
+@router.post("/create-from-suggestion", response_model=StrategyConfigResponseSchema)
+def create_strategy_from_suggestion(
+    request: CreateFromSuggestionRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Auto-create a strategy config from a trade suggestion.
+    
+    This bridges the gap between getting a suggestion (e.g., BUTTERFLY_SPREAD)
+    and having a deployable strategy config in the database.
+    """
+    
+    # Generate a unique name for the strategy
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    strategy_name = f"{request.underlying}_{request.strategy_type}_{timestamp}"
+    
+    # Check if this exact name exists (unlikely with timestamp, but be safe)
+    counter = 1
+    original_name = strategy_name
+    while db.query(StrategyConfig).filter(StrategyConfig.name == strategy_name).first():
+        strategy_name = f"{original_name}_{counter}"
+        counter += 1
+    
+    # Map strategy type to strategy_type used by the engine
+    # The engine expects lowercase with underscores
+    strategy_type_mapping = {
+        "BULL_PUT": "option_spread_15m",
+        "BEAR_CALL": "option_spread_15m",
+        "IRON_CONDOR": "option_spread_15m",
+        "BUTTERFLY_SPREAD": "option_spread_15m",
+        "SHORT_STRADDLE": "option_spread_15m",
+        "LONG_STRADDLE": "option_spread_15m",
+        "SHORT_STRANGLE": "option_spread_15m",
+        "LONG_STRANGLE": "option_spread_15m",
+        "CALL_RATIO_BACKSPREAD": "option_spread_15m",
+        "PUT_RATIO_BACKSPREAD": "option_spread_15m",
+    }
+    
+    engine_strategy_type = strategy_type_mapping.get(request.strategy_type, "option_spread_15m")
+    
+    # Build parameters
+    parameters = {
+        "interval": "15minute",
+        "risk_mode": request.risk_mode,
+        "lots": request.lots,
+        "capital": request.capital,
+        "min_confidence": request.min_confidence,
+        "use_ml": False,
+        # Store the specific strategy mode for tracking
+        "preferred_strategy": request.strategy_type,
+    }
+    
+    # Create the description
+    description = f"Auto-created from suggestion: {request.reason} (Confidence: {request.confidence:.1f}%)"
+    
+    strategy_config = StrategyConfig(
+        name=strategy_name,
+        description=description,
+        strategy_type=engine_strategy_type,
+        underlying=request.underlying,
+        parameters=parameters,
+        enabled=False,  # User must enable manually
+        created_by="auto_suggestion"
+    )
+    
+    db.add(strategy_config)
+    db.commit()
+    db.refresh(strategy_config)
+    
+    return strategy_config

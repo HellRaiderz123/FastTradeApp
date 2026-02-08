@@ -39,7 +39,11 @@ type StrategyTemplate =
   | 'BULL_CALL'
   | 'BEAR_PUT'
   | 'SHORT_STRANGLE'
-  | 'LONG_STRADDLE';
+  | 'LONG_STRADDLE'
+  | 'SHORT_STRADDLE'
+  | 'BUTTERFLY_SPREAD'
+  | 'LONG_STRANGLE'
+  | 'CALENDAR_SPREAD';
 
 const LOT_SIZES: Record<string, number> = {
   NIFTY: 65,
@@ -337,6 +341,47 @@ const StrategyBuilder: React.FC = () => {
         { id: `${Date.now()}-bc`, type: 'BUY', option_type: 'CE', strike: k, quantity: 1 },
         { id: `${Date.now()}-bp`, type: 'BUY', option_type: 'PE', strike: k, quantity: 1 },
       ];
+    }
+
+    if (tpl === 'SHORT_STRADDLE') {
+      const k = atmStrike;
+      newLegs = [
+        { id: `${Date.now()}-sc`, type: 'SELL', option_type: 'CE', strike: k, quantity: 1 },
+        { id: `${Date.now()}-sp`, type: 'SELL', option_type: 'PE', strike: k, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'BUTTERFLY_SPREAD') {
+      // Butterfly: Buy 1 lower, Sell 2 middle, Buy 1 upper (equal width)
+      const lowerStrike = atmStrike - width;
+      const middleStrike = atmStrike;
+      const upperStrike = atmStrike + width;
+      newLegs = [
+        { id: `${Date.now()}-bl`, type: 'BUY', option_type: 'CE', strike: lowerStrike, quantity: 1 },
+        { id: `${Date.now()}-sm1`, type: 'SELL', option_type: 'CE', strike: middleStrike, quantity: 2 },
+        { id: `${Date.now()}-bu`, type: 'BUY', option_type: 'CE', strike: upperStrike, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'LONG_STRANGLE') {
+      const longPut = atmStrike - offset;
+      const longCall = atmStrike + offset;
+      newLegs = [
+        { id: `${Date.now()}-bp`, type: 'BUY', option_type: 'PE', strike: longPut, quantity: 1 },
+        { id: `${Date.now()}-bc`, type: 'BUY', option_type: 'CE', strike: longCall, quantity: 1 },
+      ];
+    }
+
+    if (tpl === 'CALENDAR_SPREAD') {
+      // Calendar spread: Sell near-month, Buy far-month (same strike)
+      // Note: This is a simplified version. In reality, you'd need 2 different expiries.
+      // For now, we'll use same expiry but user can manually adjust
+      const k = atmStrike;
+      newLegs = [
+        { id: `${Date.now()}-sc`, type: 'SELL', option_type: 'CE', strike: k, quantity: 1 },
+        { id: `${Date.now()}-bc`, type: 'BUY', option_type: 'CE', strike: k, quantity: 1 },
+      ];
+      setError('Calendar spread requires different expiries. Please adjust legs manually after creation.');
     }
 
     // Fetch premiums in parallel
@@ -974,13 +1019,25 @@ const StrategyBuilder: React.FC = () => {
                 aria-label="Strategy template"
               >
                 <option value="CUSTOM">Custom</option>
-                <option value="BULL_PUT">Bull Put Spread</option>
-                <option value="BEAR_CALL">Bear Call Spread</option>
-                <option value="IRON_CONDOR">Iron Condor</option>
-                <option value="BULL_CALL">Bull Call Spread</option>
-                <option value="BEAR_PUT">Bear Put Spread</option>
-                <option value="SHORT_STRANGLE">Short Strangle</option>
-                <option value="LONG_STRADDLE">Long Straddle</option>
+                <optgroup label="Credit Spreads">
+                  <option value="BULL_PUT">Bull Put Spread</option>
+                  <option value="BEAR_CALL">Bear Call Spread</option>
+                  <option value="IRON_CONDOR">Iron Condor</option>
+                </optgroup>
+                <optgroup label="Debit Spreads">
+                  <option value="BULL_CALL">Bull Call Spread</option>
+                  <option value="BEAR_PUT">Bear Put Spread</option>
+                </optgroup>
+                <optgroup label="Straddles & Strangles">
+                  <option value="LONG_STRADDLE">Long Straddle (Buy ATM Call + Put)</option>
+                  <option value="SHORT_STRADDLE">Short Straddle (Sell ATM Call + Put)</option>
+                  <option value="LONG_STRANGLE">Long Strangle (Buy OTM Call + Put)</option>
+                  <option value="SHORT_STRANGLE">Short Strangle (Sell OTM Call + Put)</option>
+                </optgroup>
+                <optgroup label="Advanced">
+                  <option value="BUTTERFLY_SPREAD">Butterfly Spread (3 strikes)</option>
+                  <option value="CALENDAR_SPREAD">Calendar Spread (Same strike, different expiry)</option>
+                </optgroup>
               </select>
               <button
                 onClick={() => buildTemplateLegs(template)}

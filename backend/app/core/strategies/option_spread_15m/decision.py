@@ -39,10 +39,11 @@ def decide_strategy(
     adx = indicators.get("adx", 0)
 
     # ================================================
-    # HARD QUALITY GATE
+    # QUALITY GATE (relaxed for more trades)
     # ================================================
-    if quality_score < 4:
-        return "NO_TRADE", f"Insufficient quality score ({quality_score}/8)"
+    # Lowered from 4 to 3 to allow more trades in backtests
+    if quality_score < 3:
+        return "NO_TRADE", f"Insufficient quality score ({quality_score}/8 - minimum 3 required)"
 
     take_bull = bias == "BULLISH"
     take_bear = bias == "BEARISH"

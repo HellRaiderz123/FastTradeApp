@@ -39,6 +39,7 @@ interface Suggestion {
   approved: boolean;
   reason: string;
   score: number;
+  confidence?: number;
   spot?: number;
   atm?: number;
   ticket?: Record<string, any>;
@@ -115,6 +116,31 @@ export const StrategyManager: React.FC = () => {
       setSuggestions([]);
     } finally {
       setSuggestionsLoading(false);
+    }
+  };
+
+  const createStrategyFromSuggestion = async (suggestion: Suggestion) => {
+    try {
+      const payload = {
+        underlying: suggestion.underlying,
+        strategy_type: suggestion.strategy,
+        reason: suggestion.reason,
+        confidence: suggestion.confidence || 0,
+        capital: 100000,
+        lots: 2,
+        risk_mode: 'Conservative',
+        min_confidence: 75,
+      };
+
+      const response = await strategyAPI.createFromSuggestion(payload);
+      
+      if (response.data) {
+        alert(`✅ Strategy "${response.data.name}" created successfully! You can enable it from the strategies list below.`);
+        await loadStrategies();
+      }
+    } catch (error: any) {
+      console.error('Failed to create strategy from suggestion:', error);
+      alert(`❌ Failed to create strategy: ${error?.response?.data?.detail || error.message}`);
     }
   };
 
@@ -369,6 +395,17 @@ export const StrategyManager: React.FC = () => {
                     Risk: <span className="font-mono">{s.risk_metrics.risk_pct_capital.toFixed(2)}%</span>
                   </div>
                 )}
+
+                {s.approved && (
+                  <button
+                    onClick={() => createStrategyFromSuggestion(s)}
+                    className="mt-3 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs py-2 px-3 rounded transition flex items-center justify-center space-x-1"
+                    title="Create strategy from this suggestion"
+                  >
+                    <Plus size={14} />
+                    <span>Create Strategy</span>
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -378,15 +415,25 @@ export const StrategyManager: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-white">Strategy Manager</h1>
-        <button
-          onClick={loadStrategies}
-          disabled={loading}
-          title="Refresh strategies"
-          aria-label="Refresh strategies"
-          className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition"
-        >
-          <RefreshCw size={20} className={loading ? 'animate-spin' : ''} />
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setShowNewForm(true)}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded transition"
+            title="Create new strategy"
+          >
+            <Plus size={18} />
+            <span>New Strategy</span>
+          </button>
+          <button
+            onClick={loadStrategies}
+            disabled={loading}
+            title="Refresh strategies"
+            aria-label="Refresh strategies"
+            className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition"
+          >
+            <RefreshCw size={20} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
       {/* Bulk Actions */}
@@ -677,12 +724,27 @@ export const StrategyManager: React.FC = () => {
       {/* Edit Form Modal */}
       {editingId !== null && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-800 border border-slate-700 rounded-lg max-w-2xl w-full max-h-96 overflow-y-auto">
+          <div className="bg-slate-800 border border-slate-700 rounded-lg max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <StrategyForm
               initialData={strategies.find((s) => s.id === editingId)}
               onClose={() => setEditingId(null)}
               onSuccess={() => {
                 setEditingId(null);
+                loadStrategies();
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Create Form Modal */}
+      {showNewForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 border border-slate-700 rounded-lg max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <StrategyForm
+              onClose={() => setShowNewForm(false)}
+              onSuccess={() => {
+                setShowNewForm(false);
                 loadStrategies();
               }}
             />

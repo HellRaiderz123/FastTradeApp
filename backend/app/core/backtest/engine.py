@@ -190,9 +190,18 @@ class BacktestEngine:
                     raw_action = signal.get("action") or "HOLD"
                     self.raw_action_counts[raw_action] = self.raw_action_counts.get(raw_action, 0) + 1
                     
-                    # Only trade if confidence >= min_confidence (default 60%)
-                    min_confidence = self.config.parameters.get("min_confidence", 60)
+                    # Only trade if confidence >= min_confidence (default 55% for backtests)
+                    # Lowered from 60% to 55% to generate more trades
+                    min_confidence = self.config.parameters.get("min_confidence", 55)
                     is_confident = signal.get("confidence", 0) >= min_confidence
+                    
+                    # Log rejection reasons for debugging
+                    if not is_confident and raw_action in ("BUY", "SELL"):
+                        logger.debug(
+                            f"❌ Trade rejected at {candle.get('date')}: "
+                            f"confidence {signal.get('confidence', 0):.1f}% < {min_confidence}% "
+                            f"(signal: {raw_action}, quality: {signal.get('quality_score', 0)}/8)"
+                        )
 
                     if raw_action in self.signal_counts:
                         self.signal_counts[raw_action] += 1

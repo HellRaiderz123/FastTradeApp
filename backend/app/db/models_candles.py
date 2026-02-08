@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Index
+from sqlalchemy import Column, Integer, String, Float, DateTime, Index, Date
 from app.db.session import Base
 from app.core.utils.time import now_ist
 
@@ -17,4 +17,34 @@ class Candle15m(Base):
 
     created_at = Column(DateTime(timezone=True), default=now_ist)
 
+
+class OptionHistoricalCandle(Base):
+    """Store historical option chain candles for backtesting expired contracts"""
+    __tablename__ = "option_historical_candles"
+
+    id = Column(Integer, primary_key=True)
+    
+    # Option identification
+    tradingsymbol = Column(String, index=True)  # NIFTY24FEB48000CE
+    instrument_token = Column(Integer, index=True)  # Zerodha token
+    underlying = Column(String, index=True)  # NIFTY, BANKNIFTY, FINNIFTY
+    expiry = Column(Date, index=True)  # 2024-02-15
+    strike = Column(Float, index=True)  # 48000
+    option_type = Column(String, index=True)  # CE or PE
+    
+    # OHLCV data
+    timestamp = Column(DateTime(timezone=True), index=True)
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+    volume = Column(Float)
+    
+    # Metadata
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+
+
 Index("ix_candles_symbol_ts", Candle15m.symbol, Candle15m.timestamp, unique=True)
+Index("ix_option_candles_symbol_ts", OptionHistoricalCandle.tradingsymbol, OptionHistoricalCandle.timestamp, unique=True)
+Index("ix_option_candles_expiry_strike", OptionHistoricalCandle.underlying, OptionHistoricalCandle.expiry, OptionHistoricalCandle.strike, OptionHistoricalCandle.option_type)
+

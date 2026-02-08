@@ -1,6 +1,17 @@
-import React, { useState } from 'react';
-import { X, Save } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Save, Plus, Trash2 } from 'lucide-react';
 import { strategyAPI } from '../lib/api';
+
+interface Leg {
+  id?: string;
+  type: 'BUY' | 'SELL';
+  option_type: 'CE' | 'PE';
+  strike: number;
+  strike_type?: 'ABSOLUTE' | 'ATM_OFFSET' | 'PCT_OFFSET';
+  strike_offset?: number;
+  quantity: number;
+  premium?: number;
+}
 
 interface StrategyFormProps {
   onClose: () => void;
@@ -36,7 +47,50 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
     },
   });
 
+  // Extract legs from parameters if they exist
+  const [legs, setLegs] = useState<Leg[]>(() => {
+    const existingLegs = initialData?.parameters?.legs || [];
+    return existingLegs.map((leg: any, idx: number) => ({
+      id: `leg-${Date.now()}-${idx}`,
+      type: leg.type || 'BUY',
+      option_type: leg.option_type || 'CE',
+      strike: leg.strike || 0,
+      strike_type: leg.strike_type || 'ABSOLUTE',
+      strike_offset: leg.strike_offset || 0,
+      quantity: leg.quantity || 1,
+      premium: leg.premium || 0,
+    }));
+  });
+
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const addLeg = () => {
+    setLegs([
+      ...legs,
+      {
+        id: `leg-${Date.now()}`,
+        type: 'BUY',
+        option_type: 'CE',
+        strike: 0,
+        strike_type: 'ABSOLUTE',
+        strike_offset: 0,
+        quantity: 1,
+        premium: 0,
+      },
+    ]);
+  };
+
+  const removeLeg = (id: string) => {
+    setLegs(legs.filter((leg) => leg.id !== id));
+  };
+
+  const updateLeg = (id: string, field: keyof Leg, value: any) => {
+    setLegs(
+      legs.map((leg) =>
+        leg.id === id ? { ...leg, [field]: value } : leg
+      )
+    );
+  };
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -64,10 +118,29 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
 
     setLoading(true);
     try {
+      // Include legs in parameters if they exist
+      const dataToSubmit = {
+        ...formData,
+        parameters: {
+          ...formData.parameters,
+          ...(legs.length > 0 && {
+            legs: legs.map(leg => ({
+              type: leg.type,
+              option_type: leg.option_type,
+              strike: Number(leg.strike) || 0,
+              strike_type: leg.strike_type || 'ABSOLUTE',
+              strike_offset: Number(leg.strike_offset) || 0,
+              quantity: Number(leg.quantity) || 1,
+              premium: Number(leg.premium) || 0,
+            })),
+          }),
+        },
+      };
+
       if (initialData?.id) {
-        await strategyAPI.updateStrategy(initialData.id, formData);
+        await strategyAPI.updateStrategy(initialData.id, dataToSubmit);
       } else {
-        await strategyAPI.createStrategy(formData);
+        await strategyAPI.createStrategy(dataToSubmit);
       }
 
       onSuccess();
@@ -105,7 +178,7 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
       </div>
 
       {/* Form */}
-      <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-96 overflow-y-auto">
+      <form onSubmit={handleSubmit} className="p-6 space-y-4 flex-1 overflow-y-auto">
           {/* Name */}
           <div>
             <label htmlFor="strategy-name" className="block text-sm font-medium mb-1 text-slate-200">
@@ -416,6 +489,154 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
                 />
               </div>
             </div>
+          </div>
+
+          {/* Legs Section (for custom strategies) */}
+          <div className="border-t border-slate-700 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-slate-200">Option Legs</h3>
+              <button
+                type="button"
+                onClick={addLeg}
+                className="flex items-center space-x-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors"
+                title="Add new leg"
+              >
+                <Plus size={14} />
+                <span>Add Leg</span>
+              </button>
+            </div>
+
+            {legs.length === 0 ? (
+              <div className="text-slate-400 text-sm bg-slate-900 border border-slate-700 rounded p-4 text-center">
+                No legs defined. Click "Add Leg" to create option legs for this strategy.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {legs.map((leg, idx) => (
+                  <div
+                    key={leg.id}
+                    className="bg-slate-900 border border-slate-700 rounded p-3 space-y-3"
+                  >
+                    {/* Header */}
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-200">
+                        Leg {idx + 1}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeLeg(leg.id!)}
+                        className="text-red-400 hover:text-red-300 transition-colors"
+                        title="Remove leg"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+
+                    {/* Leg Fields */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* Side (BUY/SELL) */}
+                      <div>
+                        <label className="block text-xs font-medium mb-1 text-slate-300">
+                          Side
+                        </label>
+                        <select
+                          value={leg.type}
+                          onChange={(e) =>
+                            updateLeg(leg.id!, 'type', e.target.value)
+                          }
+                          className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                          <option value="BUY">BUY</option>
+                          <option value="SELL">SELL</option>
+                        </select>
+                      </div>
+
+                      {/* Option Type (CE/PE) */}
+                      <div>
+                        <label className="block text-xs font-medium mb-1 text-slate-300">
+                          Type
+                        </label>
+                        <select
+                          value={leg.option_type}
+                          onChange={(e) =>
+                            updateLeg(leg.id!, 'option_type', e.target.value)
+                          }
+                          className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                          <option value="CE">CE (Call)</option>
+                          <option value="PE">PE (Put)</option>
+                        </select>
+                      </div>
+
+                      {/* Strike */}
+                      <div>
+                        <label className="block text-xs font-medium mb-1 text-slate-300">
+                          Strike
+                        </label>
+                        <input
+                          type="number"
+                          value={leg.strike}
+                          onChange={(e) =>
+                            updateLeg(leg.id!, 'strike', Number(e.target.value))
+                          }
+                          className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          placeholder="e.g., 48000"
+                        />
+                      </div>
+
+                      {/* Quantity */}
+                      <div>
+                        <label className="block text-xs font-medium mb-1 text-slate-300">
+                          Quantity
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={leg.quantity}
+                          onChange={(e) =>
+                            updateLeg(leg.id!, 'quantity', Number(e.target.value))
+                          }
+                          className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          placeholder="Lots"
+                        />
+                      </div>
+
+                      {/* Premium (Optional) */}
+                      <div>
+                        <label className="block text-xs font-medium mb-1 text-slate-300">
+                          Premium (₹)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={leg.premium || 0}
+                          onChange={(e) =>
+                            updateLeg(leg.id!, 'premium', Number(e.target.value))
+                          }
+                          className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          placeholder="Optional"
+                        />
+                      </div>
+
+                      {/* Display Summary */}
+                      <div className="col-span-2 text-xs text-slate-400 bg-slate-800 px-2 py-1.5 rounded">
+                        <span className={leg.type === 'BUY' ? 'text-green-400' : 'text-red-400'}>
+                          {leg.type}
+                        </span>
+                        {' '}{leg.quantity}x {leg.strike} {leg.option_type}
+                        {leg.premium > 0 && ` @ ₹${leg.premium.toFixed(2)}`}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {legs.length > 0 && (
+              <div className="mt-2 text-xs text-slate-400">
+                💡 Tip: Use Strategy Builder for visual leg creation with Greeks calculation
+              </div>
+            )}
           </div>
 
           {/* Actions */}
