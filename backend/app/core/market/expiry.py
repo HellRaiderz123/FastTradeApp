@@ -41,12 +41,23 @@ def _is_last_weekday_of_month(expiry: date) -> bool:
 
 def format_zerodha_expiry(expiry: date) -> str:
     """
+    Format expiry date for Zerodha symbol construction.
+    
     Monthly: 2026-01-29 → 26JAN
-    Weekly:  2026-01-09 → 26JAN09
+    Weekly:  2026-02-10 → 26210  (YY + M + D, no zero-padding on month/day)
+    Weekly:  2026-02-17 → 26217  
+    Weekly:  2026-12-03 → 261203 (YY + M + D)
     """
     if _is_last_weekday_of_month(expiry):
+        # Monthly format: YYMMMM (e.g., 26JAN)
         return expiry.strftime("%y%b").upper()
-    return expiry.strftime("%y%b%d").upper()
+    
+    # Weekly format: YYMD where single-digit month/day have NO zero padding
+    # Feb 10, 2026 → 26 + 2 + 10 → 26210 (not 260210)
+    year = expiry.year % 100  # Last 2 digits of year
+    month = expiry.month      # Month as 1-12 (no zero padding)
+    day = expiry.day          # Day as 1-31 (no zero padding)
+    return f"{year}{month}{day}"
 
 from datetime import date, timedelta
 
@@ -64,7 +75,13 @@ WEEKLY_EXPIRY_WEEKDAY = {
 
 def get_current_weekly_expiry(underlying: str) -> date:
     """
-    Returns next weekly expiry date for the given underlying.
+    Returns next WEEKLY expiry date for the given underlying (skips monthly expiries).
+    
+    Weekly expiry days:
+    - NIFTY: Tuesday
+    - FINNIFTY: Tuesday
+    - BANKNIFTY: Wednesday
+    - MIDCPNIFTY: Monday
     """
     today = date.today()
     weekday_today = today.weekday()  # Monday=0
@@ -74,10 +91,17 @@ def get_current_weekly_expiry(underlying: str) -> date:
         raise ValueError(f"No weekly expiry rule defined for {underlying}")
 
     days_ahead = (expiry_weekday - weekday_today) % 7
+    
+    # If today is the expiry day, skip to next week
+    if days_ahead == 0:
+        days_ahead = 7
+    
     expiry = today + timedelta(days=days_ahead)
-
-    # If today is expiry day but market already closed,
-    # you may want next week's expiry (optional enhancement)
+    
+    # Skip monthly expiry (last occurrence of weekday in month) and get next weekly
+    if _is_last_weekday_of_month(expiry):
+        expiry = expiry + timedelta(days=7)
+    
     return expiry
 
 

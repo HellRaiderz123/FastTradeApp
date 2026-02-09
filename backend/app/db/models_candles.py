@@ -18,6 +18,22 @@ class Candle15m(Base):
     created_at = Column(DateTime(timezone=True), default=now_ist)
 
 
+class CandleDaily(Base):
+    __tablename__ = "candles_daily"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String, index=True)      # NIFTY, SBIN, etc
+    date = Column(Date, index=True)          # Trade date
+
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+    volume = Column(Float)
+
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+
+
 class OptionHistoricalCandle(Base):
     """Store historical option chain candles for backtesting expired contracts"""
     __tablename__ = "option_historical_candles"
@@ -45,6 +61,7 @@ class OptionHistoricalCandle(Base):
 
 
 Index("ix_candles_symbol_ts", Candle15m.symbol, Candle15m.timestamp, unique=True)
+Index("ix_candles_daily_symbol_date", CandleDaily.symbol, CandleDaily.date, unique=True)
 Index("ix_option_candles_symbol_ts", OptionHistoricalCandle.tradingsymbol, OptionHistoricalCandle.timestamp, unique=True)
 Index("ix_option_candles_expiry_strike", OptionHistoricalCandle.underlying, OptionHistoricalCandle.expiry, OptionHistoricalCandle.strike, OptionHistoricalCandle.option_type)
 

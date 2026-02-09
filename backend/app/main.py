@@ -51,6 +51,7 @@ from app.api.routes import peer_comparison
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
+    start_daily_candles_scheduler,
     start_vix_scheduler,
     start_auto_exit_scheduler,
     initialize_vix_data,
@@ -95,6 +96,7 @@ async def lifespan(app: FastAPI):
     try:
         initialize_vix_data()
         start_candle_scheduler()
+        start_daily_candles_scheduler()
         start_vix_scheduler()
         start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
         logger.info("✅ Schedulers started for live data updates + TP/SL monitoring")

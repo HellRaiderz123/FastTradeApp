@@ -10,7 +10,9 @@ import {
   XCircle,
   RefreshCw,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  X,
+  Clock
 } from 'lucide-react';
 import { strategyAPI, executionAPI, stockSuggestionsAPI } from '../lib/api';
 
@@ -61,13 +63,19 @@ interface StockStrategyPanelProps {
   symbol: string;
   currentPrice: number;
 }
-
+type TimeframeMode = 'intraday' | 'swing';
 const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, currentPrice }) => {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(false);
   const [executing, setExecuting] = useState<number | null>(null);
   const [result, setResult] = useState<ExecutionResult | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [timeframeMode, setTimeframeMode] = useState<TimeframeMode>('intraday');
+  const [formData, setFormData] = useState({
+    name: '',
+    strategyType: 'stock_momentum',
+    description: ''
+  });
   
   // Suggestions state
   const [suggestions, setSuggestions] = useState<StockSuggestion[]>([]);
@@ -81,7 +89,7 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
   useEffect(() => {
     loadStrategies();
     loadSuggestions();
-  }, [symbol]);
+  }, [symbol, timeframeMode]);
 
   const loadStrategies = async () => {
     setLoading(true);
@@ -99,11 +107,24 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
           'StockMomentum15m',
           'stock_momentum_15m',
           'stock_mean_reversion_15m',
-          'stock_trend_following_15m'
+          'stock_trend_following_15m',
+          'stock_momentum_daily',
+          'stock_trend_following_daily',
+          'stock_mean_reversion_daily'
         ].includes(s.strategy_type);
         
-        // Include if it's a stock strategy and either matches the symbol or has no specific underlying
-        return isStockStrategy && (!s.underlying || s.underlying === symbol);
+        // Filter by timeframe
+        let matchesTimeframe = true;
+        if (timeframeMode === 'intraday') {
+          matchesTimeframe = s.strategy_type.includes('15m') || 
+            (!s.strategy_type.includes('daily') && 
+             ['momentum', 'trend_following', 'mean_reversion'].includes(s.strategy_type));
+        } else {
+          matchesTimeframe = s.strategy_type.includes('daily');
+        }
+        
+        // Include if it's a stock strategy, matches timeframe, and either matches the symbol or has no specific underlying
+        return isStockStrategy && matchesTimeframe && (!s.underlying || s.underlying === symbol);
       });
       
       setStrategies(stockStrategies);
@@ -123,7 +144,8 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
         symbols: symbolsToAnalyze,
         capital: 100000,
         quantity: 1,
-        min_confidence: 60
+        min_confidence: 60,
+        timeframe: timeframeMode === 'swing' ? 'daily' : '15m'
       });
       
       const data = response?.data;
@@ -232,15 +254,56 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
     setShowCreateForm(true);
   };
 
+  const handleCancelCreate = () => {
+    setShowCreateForm(false);
+    setFormData({
+      name: '',
+      strategyType: 'stock_momentum',
+      description: ''
+    });
+  };
+
+  const handleSubmitCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const strategyType = timeframeMode === 'intraday' 
+        ? `${formData.strategyType}_15m`
+        : `${formData.strategyType}_daily`;
+      
+      await strategyAPI.createStrategy({
+        name: formData.name,
+        description: formData.description,
+        strategy_type: strategyType,
+        underlying: symbol,
+        enabled: true,
+        parameters: {}
+      });
+      
+      setShowCreateForm(false);
+      setFormData({
+        name: '',
+        strategyType: 'stock_momentum',
+        description: ''
+      });
+      await loadStrategies();
+    } catch (error) {
+      console.error('Failed to create strategy:', error);
+      alert('Failed to create strategy. Please try again.');
+    }
+  };
+
   const getStrategyTypeLabel = (type: string) => {
     const labels: Record<string, string> = {
       'momentum': 'Momentum',
       'StockMomentum15m': 'Momentum 15m',
       'stock_momentum_15m': 'Momentum 15m',
+      'stock_momentum_daily': 'Momentum Daily',
       'trend_following': 'Trend Following',
       'stock_trend_following_15m': 'Trend Following 15m',
+      'stock_trend_following_daily': 'Trend Following Daily',
       'mean_reversion': 'Mean Reversion',
-      'stock_mean_reversion_15m': 'Mean Reversion 15m'
+      'stock_mean_reversion_15m': 'Mean Reversion 15m',
+      'stock_mean_reversion_daily': 'Mean Reversion Daily'
     };
     return labels[type] || type;
   };
@@ -399,7 +462,7 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
 
       {/* Header */}
       <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-5">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-lg font-semibold text-white flex items-center gap-2">
               <Zap size={20} className="text-emerald-400" />
@@ -417,7 +480,111 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
             Create
           </button>
         </div>
+        
+        {/* Timeframe Toggle */}
+        <div className="flex items-center gap-2 p-1 bg-slate-900/50 rounded-lg border border-slate-700">
+          <button
+            onClick={() => setTimeframeMode('intraday')}
+            className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition ${
+              timeframeMode === 'intraday'
+                ? 'bg-blue-600 text-white'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Clock size={16} />
+            Intraday (15m)
+          </button>
+          <button
+            onClick={() => setTimeframeMode('swing')}
+            className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition ${
+              timeframeMode === 'swing'
+                ? 'bg-blue-600 text-white'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <TrendingUp size={16} />
+            Swing (Daily)
+          </button>
+        </div>
       </div>
+
+      {/* Create Strategy Form */}
+      {showCreateForm && (
+        <div className="bg-slate-800/50 border border-blue-500/30 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-lg font-semibold text-white">Create New Strategy</h4>
+            <button
+              onClick={handleCancelCreate}
+              className="text-slate-400 hover:text-white transition"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          
+          <form onSubmit={handleSubmitCreate} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Strategy Name
+              </label>
+              <input
+                type="text"
+                required
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                placeholder="e.g., My Momentum Strategy"
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Strategy Type
+              </label>
+              <select
+                value={formData.strategyType}
+                onChange={(e) => setFormData({ ...formData, strategyType: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="stock_momentum">Momentum</option>
+                <option value="stock_trend_following">Trend Following</option>
+                <option value="stock_mean_reversion">Mean Reversion</option>
+              </select>
+              <p className="text-xs text-slate-500 mt-1">
+                Will create a {timeframeMode === 'intraday' ? '15-minute' : 'daily'} timeframe strategy
+              </p>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Description (Optional)
+              </label>
+              <textarea
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                placeholder="Describe this strategy..."
+                rows={3}
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                type="submit"
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition"
+              >
+                Create Strategy
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelCreate}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Execution Result */}
       {result && (

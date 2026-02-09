@@ -109,26 +109,26 @@ async def get_ltp(symbol: str = "NIFTY"):
 
 
 @router.get("/expiries/{symbol}")
-async def get_available_expiries(symbol: str = "NIFTY"):
+async def get_available_expiries(symbol: str = "NIFTY", weekly_only: bool = True):
     """
     Get available expiry dates for an option symbol
-    NSE typically has weekly expiries on Thursdays
     
     Args:
         symbol: Instrument symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        weekly_only: If True, return only weekly expiries (skip monthly)
     
     Returns:
         {
             "symbol": "NIFTY",
             "expiries": [
-                "2026-01-09",
-                "2026-01-16",
-                "2026-01-23"
+                "2026-02-10",  # Weekly
+                "2026-02-17",  # Weekly
+                "2026-03-03"   # Weekly (skips monthly Feb 24)
             ]
         }
     """
     try:
-        from app.core.market.expiry import WEEKLY_EXPIRY_WEEKDAY
+        from app.core.market.expiry import WEEKLY_EXPIRY_WEEKDAY, _is_last_weekday_of_month
 
         today = datetime.now().date()
         expiries = []
@@ -143,24 +143,67 @@ async def get_available_expiries(symbol: str = "NIFTY"):
                 days_until = 7
             return date + timedelta(days=days_until)
 
-        # Generate weekly expiries (next 13 weeks)
+        # Generate expiries (next 15 to ensure we get enough after filtering)
         current_date = today
-        for _ in range(13):
+        for _ in range(15):
             current_date = next_weekday(current_date, expiry_weekday)
+            
+            # Filter out monthly expiries if weekly_only is True
+            if weekly_only and _is_last_weekday_of_month(current_date):
+                # Skip monthly expiry
+                current_date = current_date + timedelta(days=1)
+                continue
+            
             expiries.append(current_date.strftime("%Y-%m-%d"))
             current_date = current_date + timedelta(days=1)
+            
+            # Stop when we have enough weekly expiries
+            if len(expiries) >= 8:
+                break
         
         # Remove duplicates and sort
         expiries = sorted(list(set(expiries)))
         
         return {
             "symbol": symbol,
-            "expiries": expiries[:5]  # Return top 5 expiries
+            "expiries": expiries[:5],  # Return top 5 weekly expiries
+            "weekly_only": weekly_only
         }
     
     except Exception as e:
         logger.error(f"Error fetching expiries for {symbol}: {str(e)}")
-        # Return fallback expiries
+        # Return fallback expiries (weekly only)
+        try:
+            from app.core.market.expiry import WEEKLY_EXPIRY_WEEKDAY, _is_last_weekday_of_month
+            
+            today = datetime.now().date()
+            symbol_key = symbol.upper().strip()
+            expiry_weekday = WEEKLY_EXPIRY_WEEKDAY.get(symbol_key, 1)
+            
+            def next_weekday(d, wd):
+                days_until = (wd - d.weekday()) % 7
+                return d + timedelta(days=days_until if days_until else 7)
+            
+            fallback = []
+            current = today
+            for _ in range(10):
+                current = next_weekday(current, expiry_weekday)
+                if not _is_last_weekday_of_month(current):
+                    fallback.append(current.strftime("%Y-%m-%d"))
+                    if len(fallback) >= 5:
+                        break
+                current = current + timedelta(days=1)
+            
+            if fallback:
+                return {
+                    "symbol": symbol,
+                    "expiries": fallback,
+                    "weekly_only": True
+                }
+        except:
+            pass
+        
+        # If all else fails, use basic fallback (but these might include monthly)
         today = datetime.now().date()
         fallback = [
             (today + timedelta(days=2)).strftime("%Y-%m-%d"),

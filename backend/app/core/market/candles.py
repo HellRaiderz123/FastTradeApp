@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.broker.zerodha.instruments import get_index_token, get_equity_token, INDEX_TOKENS
-from app.db.models_candles import Candle15m
+from app.db.models_candles import Candle15m, CandleDaily
 from app.core.utils.time import now_ist
 
 import logging
@@ -62,3 +62,56 @@ def fetch_15m_candles(db: Session, symbol: str, days: int = 15):
     db.commit()
 
     logger.info("Candles inserted: %d (skipped duplicates)", inserted)
+
+
+def fetch_daily_candles(db: Session, symbol: str, days: int = 400):
+    """Fetch and store daily candles for a symbol."""
+    symbol = symbol.upper().strip()
+
+    kite = get_kite_client()
+    if symbol in INDEX_TOKENS:
+        token = get_index_token(symbol)
+    else:
+        token = get_equity_token(symbol, exchange="NSE")
+
+    to_dt = now_ist()
+    from_dt = to_dt - timedelta(days=days)
+
+    candles = kite.historical_data(
+        instrument_token=token,
+        from_date=from_dt,
+        to_date=to_dt,
+        interval="day",
+    )
+
+    inserted = 0
+
+    for c in candles:
+        ts = c["date"].date() if hasattr(c["date"], "date") else c["date"]
+
+        exists = db.query(CandleDaily.id).filter(
+            and_(
+                CandleDaily.symbol == symbol,
+                CandleDaily.date == ts,
+            )
+        ).first()
+
+        if exists:
+            continue
+
+        db.add(
+            CandleDaily(
+                symbol=symbol,
+                date=ts,
+                open=c["open"],
+                high=c["high"],
+                low=c["low"],
+                close=c["close"],
+                volume=c["volume"],
+            )
+        )
+        inserted += 1
+
+    db.commit()
+
+    logger.info("Daily candles inserted: %d (skipped duplicates)", inserted)

@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict
 from sqlalchemy.orm import Session
-from app.db.models_candles import Candle15m
+from app.db.models_candles import Candle15m, CandleDaily
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +293,221 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
         result["diagnostics"] = {
             "candle_count": len(candles),
             "last_candle_ts": last_ts.isoformat() if last_ts else None,
+            "last_close": candles[0].close if candles else None,
+        }
+    except Exception:
+        pass
+
+    return result
+
+
+def _ta_signal_daily_from_df(df: pd.DataFrame) -> Dict:
+    """Daily timeframe technical analysis for swing trading"""
+    if len(df) < 200:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": "Not enough daily candles",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+        }
+
+    df = df.copy()
+    
+    # Remove obvious price anomalies
+    original_len = len(df)
+    df, dropped, first_bad = _drop_price_anomalies(df, gap_threshold=0.10)  # Higher threshold for daily gaps
+    if len(df) < 200:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": f"Not enough candles after cleanup (dropped {dropped} from {original_len})",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+        }
+
+    # ================================================================
+    # SWING TRADING INDICATORS (Daily timeframe)
+    # ================================================================
+    # Use longer EMAs for swing trading (50/200 instead of 20/50)
+    df["sma_50"] = df["close"].rolling(50).mean()
+    df["sma_200"] = df["close"].rolling(200).mean()
+    df["ema_50"] = df["close"].ewm(span=50).mean()
+    df["ema_200"] = df["close"].ewm(span=200).mean()
+    df["ema_50_slope"] = df["ema_50"].diff()
+
+    # ADX for trend strength
+    df["adx"] = compute_adx(df)
+
+    # Momentum indicators
+    df["rsi"] = compute_rsi(df["close"])
+    df["macd"], df["macd_signal"], df["macd_hist"] = compute_macd(df["close"])
+    df["stoch_k"], df["stoch_d"] = compute_stochastic(df["high"], df["low"], df["close"])
+
+    # Volatility & Volume
+    df["bb_upper"], df["bb_middle"], df["bb_lower"] = compute_bollinger_bands(df["close"])
+    df["volatility_pct"] = df["close"].pct_change().rolling(50).std() * 100  # 50-day volatility
+    df["volume_ma"] = df["volume"].rolling(50).mean()
+    df["volume_ratio"] = df["volume"] / df["volume_ma"]
+
+    if float(df["volume"].fillna(0).sum()) == 0.0:
+        df["volume_ratio"] = 1.0
+
+    last = df.iloc[-1]
+
+    # ================================================================
+    # QUALITY CHECKS FOR SWING TRADING
+    # ================================================================
+    quality_checks = {
+        "adx_strong": float(last["adx"]) >= 20,  # Lower threshold for daily
+        "time_ok": True,
+        "stoch_ok": 20 <= float(last["stoch_k"]) <= 80,  # Wider range for swing
+        "vix_ok": True,
+        "bb_confirm": is_bb_confirming(last),
+        "iv_trade_ok": False,
+        "vol_strong": True if float(df["volume"].fillna(0).sum()) == 0.0 else float(last["volume_ratio"]) > 1.2,  # Lower threshold
+        "sr_confirm": True,
+    }
+
+    quality_score = sum([1 for v in quality_checks.values() if v])
+
+    # ================================================================
+    # SWING TRADING BIAS & SIGNAL (EMA 50/200 crossover strategy)
+    # ================================================================
+    is_bullish = (
+        last["ema_50"] > last["ema_200"]
+        and last["ema_50_slope"] > 0
+        and float(last["rsi"]) > 45  # Slightly lower for swing
+    )
+
+    is_bearish = (
+        last["ema_50"] < last["ema_200"]
+        and last["ema_50_slope"] < 0
+        and float(last["rsi"]) < 55  # Slightly higher for swing
+    )
+
+    if is_bullish:
+        signal = "BULLISH"
+        bias = "BULLISH"
+        confidence = 65 + min(15, quality_score * 2)
+        reason = "Daily EMA 50/200 cross up + RSI favorable + ADX strong"
+    elif is_bearish:
+        signal = "BEARISH"
+        bias = "BEARISH"
+        confidence = 65 + min(15, quality_score * 2)
+        reason = "Daily EMA 50/200 cross down + RSI favorable + ADX strong"
+    else:
+        signal = "RANGE"
+        bias = "NEUTRAL"
+        confidence = 40
+        reason = "No clear daily trend or weak ADX"
+
+    # ================================================================
+    # TRADE READINESS SCORE
+    # ================================================================
+    trend_score = min(100, max(0, (float(last["adx"]) - 10) * 5))
+    momentum_score = abs(float(last["rsi"]) - 50) * 1.5
+    readiness_score = (quality_score * 10) + (trend_score * 0.4) + (momentum_score * 0.1)
+    readiness_score = int(np.nan_to_num(readiness_score, nan=0.0, posinf=0.0, neginf=0.0))
+    readiness_score = min(100, readiness_score)
+
+    iv_regime = "NORMAL"
+
+    return {
+        "signal": signal,
+        "confidence": min(100, float(confidence)),
+        "reason": reason,
+        "bias": bias,
+        "iv_regime": iv_regime,
+        "quality_checks": quality_checks,
+        "quality_score": quality_score,
+        "trade_readiness_score": readiness_score,
+        "indicators": {
+            "adx": round(float(last["adx"]), 2),
+            "rsi": round(float(last["rsi"]), 2),
+            "macd_hist": round(float(last["macd_hist"]), 4),
+            "stoch_k": round(float(last["stoch_k"]), 2),
+            "stoch_d": round(float(last["stoch_d"]), 2),
+            "sma_50": round(float(last["sma_50"]), 2),
+            "sma_200": round(float(last["sma_200"]), 2),
+            "ema_50": round(float(last["ema_50"]), 2),
+            "ema_200": round(float(last["ema_200"]), 2),
+            "bb_upper": round(float(last["bb_upper"]), 2),
+            "bb_middle": round(float(last["bb_middle"]), 2),
+            "bb_lower": round(float(last["bb_lower"]), 2),
+            "volatility_pct": round(float(last["volatility_pct"]), 4),
+            "volume_ratio": round(float(last["volume_ratio"]), 2),
+        },
+    }
+
+
+def ta_signal_daily_from_df(df: pd.DataFrame) -> Dict:
+    """Public wrapper for daily TA analysis from a dataframe."""
+    return _ta_signal_daily_from_df(df)
+
+
+def ta_signal_daily(db: Session, symbol: str) -> Dict:
+    """
+    DAILY timeframe technical analysis for swing trading.
+    Uses EMA 50/200 crossover strategy with wider stops.
+    """
+    symbol = symbol.upper().strip()
+    candles = (
+        db.query(CandleDaily)
+        .filter(CandleDaily.symbol == symbol)
+        .order_by(CandleDaily.date.desc())
+        .limit(250)
+        .all()
+    )
+
+    logger.info(
+        "TA DAILY DEBUG | symbol=%s | candles_found=%d",
+        symbol,
+        len(candles),
+    )
+
+    if len(candles) < 200:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": "Not enough daily candles",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+        }
+
+    df = pd.DataFrame(
+        [
+            {
+                "close": c.close,
+                "high": c.high,
+                "low": c.low,
+                "open": c.open,
+                "volume": c.volume,
+            }
+            for c in reversed(candles)
+        ]
+    )
+
+    result = _ta_signal_daily_from_df(df)
+
+    # Attach diagnostics
+    try:
+        last_date = candles[0].date if candles else None
+        result["diagnostics"] = {
+            "candle_count": len(candles),
+            "last_candle_date": last_date.isoformat() if last_date else None,
             "last_close": candles[0].close if candles else None,
         }
     except Exception:

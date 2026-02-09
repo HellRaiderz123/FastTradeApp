@@ -1,7 +1,8 @@
 import logging
+import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.db.session import SessionLocal
-from app.core.market.candles import fetch_15m_candles
+from app.core.market.candles import fetch_15m_candles, fetch_daily_candles
 from app.core.market.zerodha_historic_fetcher import (
     fetch_and_store_daily_vix,
     initialize_vix_historic_data,
@@ -42,6 +43,42 @@ def _update_daily_vix():
             logger.warning("⚠️ Daily VIX update partially failed")
     except Exception:
         logger.exception("❌ Daily VIX update failed")
+    finally:
+        db.close()
+
+
+def _get_daily_symbols() -> list[str]:
+    raw = os.getenv("STOCK_DAILY_SYMBOLS", "").strip()
+    if raw:
+        return [s.strip().upper() for s in raw.split(",") if s.strip()]
+
+    return [
+        "RELIANCE",
+        "TCS",
+        "INFY",
+        "HDFCBANK",
+        "ICICIBANK",
+        "SBIN",
+        "BHARTIARTL",
+        "KOTAKBANK",
+        "ITC",
+        "HINDUNILVR",
+    ]
+
+
+def _update_daily_candles():
+    """Update daily candles for swing trading."""
+    days = int(os.getenv("DAILY_CANDLES_DAYS", "900"))
+    symbols = _get_daily_symbols()
+    logger.info("⏱️ Running daily candle update | symbols=%d | days=%d", len(symbols), days)
+
+    db = SessionLocal()
+    try:
+        for symbol in symbols:
+            fetch_daily_candles(db, symbol, days=days)
+        logger.info("✅ Daily candles updated")
+    except Exception:
+        logger.exception("❌ Daily candles update failed")
     finally:
         db.close()
 
@@ -99,6 +136,27 @@ def start_vix_scheduler():
     logger.info("🟢 VIX daily scheduler started (3:45 PM IST)")
     # Also run immediately on startup to ensure data is fresh
     _update_daily_vix()
+
+
+def start_daily_candles_scheduler():
+    """Start daily candle update scheduler (runs after market close)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start daily candles scheduler: main scheduler not running")
+        return
+
+    scheduler.add_job(
+        func=_update_daily_candles,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=15,
+        minute=50,
+        id="daily_candles_job",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    logger.info("🟢 Daily candles scheduler started (3:50 PM IST)")
+    _update_daily_candles()
 
 
 def initialize_vix_data():

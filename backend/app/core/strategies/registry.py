@@ -138,11 +138,17 @@ def register_default_strategies():
             TrendFollowingStrategy,
         )
         
-        # Register strategy instances
+        # Register 15m timeframe strategies
         StrategyRegistry.register('stock_momentum_15m', MomentumStrategy())
         StrategyRegistry.register('stock_mean_reversion_15m', MeanReversionStrategy())
         StrategyRegistry.register('stock_trend_following_15m', TrendFollowingStrategy())
-        logger.info("✅ New stock strategies registered")
+        
+        # Register daily timeframe strategies (same classes, different registration)
+        StrategyRegistry.register('stock_momentum_daily', MomentumStrategy())
+        StrategyRegistry.register('stock_mean_reversion_daily', MeanReversionStrategy())
+        StrategyRegistry.register('stock_trend_following_daily', TrendFollowingStrategy())
+        
+        logger.info("✅ New stock strategies registered (15m + daily)")
     except Exception as e:
         logger.warning(f"⚠️ Could not register stock strategies: {e}")
 # Auto-register on import

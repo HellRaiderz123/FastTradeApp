@@ -1103,9 +1103,12 @@ const StrategyBuilder: React.FC = () => {
 
           {/* Expiry Date Dropdown */}
           <div className="space-y-2">
-            <label className="text-xs text-slate-300 flex items-center gap-1">
+            <label className="text-xs text-slate-300 flex items-center gap-2">
               <Calendar size={14} />
               Expiry Date
+              <span className="ml-auto px-2 py-0.5 bg-green-900 text-green-200 text-[10px] font-semibold rounded">
+                WEEKLY ONLY
+              </span>
             </label>
             <select
               value={selectedExpiry || ''}
@@ -1116,22 +1119,33 @@ const StrategyBuilder: React.FC = () => {
               {expiryDates.length === 0 ? (
                 <option value="">Loading expiries...</option>
               ) : (
-                expiryDates.map((expiry) => (
-                  <option key={expiry} value={expiry}>
-                    {new Date(expiry).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                    })}
-                    {' '}
-                    ({Math.ceil((new Date(expiry).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} days)
-                  </option>
-                ))
+                expiryDates.map((expiry) => {
+                  const expiryDate = new Date(expiry);
+                  const daysToExpiry = Math.ceil((expiryDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                  const weekday = expiryDate.toLocaleDateString('en-US', { weekday: 'short' });
+                  
+                  return (
+                    <option key={expiry} value={expiry}>
+                      {expiryDate.toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })}
+                      {' '}
+                      ({weekday}) - {daysToExpiry} day{daysToExpiry !== 1 ? 's' : ''}
+                    </option>
+                  );
+                })
               )}
             </select>
-            {/* Debug info */}
-            <div className="text-xs text-slate-500">
-              Expiries: {expiryDates.length} loaded | Selected: {selectedExpiry}
+            {/* Info Display */}
+            <div className="text-xs text-slate-400 flex items-center justify-between">
+              <span>{expiryDates.length} weekly expiries available</span>
+              {selectedExpiry && (
+                <span className="text-green-400">
+                  {daysToExpiry} DTE
+                </span>
+              )}
             </div>
           </div>
 

@@ -20,10 +20,13 @@ const Positions: React.FC = () => {
     try {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const wsUrl = `${proto}://${window.location.host}/api/ws/positions`;
+      console.log('[Positions] Connecting to WebSocket:', wsUrl);
+      
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        console.log('[Positions] ✅ WebSocket connected');
         // Once live is connected, polling is less important.
         if (pollRef.current) {
           window.clearInterval(pollRef.current);
@@ -34,8 +37,12 @@ const Positions: React.FC = () => {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg?.type !== 'positions_update') return;
+          if (msg?.type !== 'positions_update') {
+            console.debug('[Positions] Ignoring non-position message:', msg?.type);
+            return;
+          }
           const updates = Array.isArray(msg?.intents) ? msg.intents : [];
+          console.log('[Positions] 📊 Received update with', updates.length, 'intents');
 
           setLocalTrades((prev) => {
             const byId = new Map<string, any>();
@@ -51,22 +58,26 @@ const Positions: React.FC = () => {
             return Array.from(byId.values());
           });
         } catch (e) {
-          // ignore malformed messages
+          console.error('[Positions] WebSocket message parse error:', e);
         }
       };
 
       ws.onclose = () => {
+        console.log('[Positions] ⚠️  WebSocket disconnected');
         wsRef.current = null;
         // Restore polling if live stream drops
         if (!pollRef.current) {
+          console.log('[Positions] Falling back to polling (30s interval)');
           pollRef.current = window.setInterval(fetchPositions, 30000);
         }
       };
 
-      ws.onerror = () => {
+      ws.onerror = (error) => {
+        console.error('[Positions] ❌ WebSocket error:', error);
         // Let onclose restore polling
       };
     } catch (e) {
+      console.error('[Positions] Failed to create WebSocket:', e);
       // Keep polling only
     }
 

@@ -33,6 +33,7 @@ class StockSuggestionsRequest(BaseModel):
     min_confidence: int = 50  # Minimum confidence level
     quantity: int = 100  # Default quantity per trade
     capital: float = 100000.0  # Available capital
+    timeframe: str = "15m"  # Timeframe: "15m" (intraday) or "daily" (swing)
 
 
 def _compute_stock_score(result: Dict[str, Any]) -> float:
@@ -92,19 +93,29 @@ def get_stock_suggestions(
     generated_at = datetime.utcnow().isoformat() + "Z"
     suggestions: List[Dict[str, Any]] = []
     
+    # Determine strategy types based on timeframe
+    if request.timeframe == "daily":
+        strategy_type_filter = [
+            'stock_momentum_daily',
+            'stock_trend_following_daily',
+            'stock_mean_reversion_daily'
+        ]
+    else:  # Default to 15m
+        strategy_type_filter = [
+            'stock_momentum_15m',
+            'stock_trend_following_15m',
+            'stock_mean_reversion_15m',
+            'momentum',
+            'trend_following',
+            'mean_reversion'
+        ]
+    
     # Get all enabled stock strategies from database
     stock_strategies = (
         db.query(StrategyConfig)
         .filter(
             StrategyConfig.enabled == True,
-            StrategyConfig.strategy_type.in_([
-                'stock_momentum_15m',
-                'stock_trend_following_15m',
-                'stock_mean_reversion_15m',
-                'momentum',
-                'trend_following',
-                'mean_reversion'
-            ])
+            StrategyConfig.strategy_type.in_(strategy_type_filter)
         )
         .all()
     )
@@ -116,35 +127,80 @@ def get_stock_suggestions(
         # Run strategies directly without database entries
         from app.core.strategies.registry import StrategyRegistry
         from app.core.signals.base import Signal, SignalStrength, AssetType, MarketBias
-        from app.core.signals.ta_engine import ta_signal_15m_from_candles
+        from app.core.signals.ta_engine import ta_signal_15m_from_candles, ta_signal_daily_from_df
         from app.core.market.candles import fetch_15m_candles
-        from app.db.models_candles import Candle15m
+        from app.db.models_candles import Candle15m, CandleDaily
+        import pandas as pd
         import traceback
         
-        default_strategy_types = [
-            'stock_momentum_15m',
-            'stock_trend_following_15m',
-            'stock_mean_reversion_15m'
-        ]
+        # Determine which strategies to use based on timeframe
+        if request.timeframe == "daily":
+            default_strategy_types = [
+                'stock_momentum_daily',
+                'stock_trend_following_daily',
+                'stock_mean_reversion_daily'
+            ]
+        else:
+            default_strategy_types = [
+                'stock_momentum_15m',
+                'stock_trend_following_15m',
+                'stock_mean_reversion_15m'
+            ]
         
         # For each symbol, run default strategies
         for symbol in request.symbols:
-            # Get market data for the symbol from database ONCE per symbol
-            candle_records = (
-                db.query(Candle15m)
-                .filter(Candle15m.symbol == symbol)
-                .order_by(Candle15m.timestamp.desc())
-                .limit(300)
-                .all()
-            )
-
-            if not candle_records or len(candle_records) < 120:
-                # Auto-fetch candles if missing
-                try:
-                    fetch_15m_candles(db, symbol, days=30)
-                except Exception as exc:
-                    print(f"Candle fetch failed for {symbol}: {exc}")
-
+            # Fetch appropriate candles based on timeframe
+            if request.timeframe == "daily":
+                # Get daily candles
+                candle_records = (
+                    db.query(CandleDaily)
+                    .filter(CandleDaily.symbol == symbol)
+                    .order_by(CandleDaily.date.desc())
+                    .limit(250)
+                    .all()
+                )
+                min_candles = 200
+                
+                if not candle_records or len(candle_records) < min_candles:
+                    # Add no-trade suggestion for insufficient data
+                    suggestion = {
+                        "symbol": symbol,
+                        "strategy": "all",
+                        "strategy_name": "Technical Analysis (Daily)",
+                        "approved": False,
+                        "reason": f"Insufficient daily candle data ({len(candle_records) if candle_records else 0} candles, need {min_candles})",
+                        "score": 0,
+                        "current_price": candle_records[0].close if candle_records else None,
+                        "signal": "NO_TRADE",
+                        "entry_price": None,
+                        "stop_loss": None,
+                        "target": None,
+                        "confidence": 0,
+                        "indicators": {},
+                        "risk_reward_ratio": 0,
+                    }
+                    suggestions.append(suggestion)
+                    continue
+                
+                # Convert to DataFrame for daily analysis
+                df = pd.DataFrame(
+                    [
+                        {
+                            "close": c.close,
+                            "open": c.open,
+                            "high": c.high,
+                            "low": c.low,
+                            "volume": c.volume,
+                        }
+                        for c in reversed(candle_records)
+                    ]
+                )
+                
+                # Run daily TA analysis
+                ta_result = ta_signal_daily_from_df(df)
+                latest = {"close": candle_records[0].close}
+            else:
+                # Get 15m candles
                 candle_records = (
                     db.query(Candle15m)
                     .filter(Candle15m.symbol == symbol)
@@ -153,43 +209,58 @@ def get_stock_suggestions(
                     .all()
                 )
 
-            if not candle_records or len(candle_records) < 120:
-                # Add no-trade suggestion for insufficient data
-                suggestion = {
-                    "symbol": symbol,
-                    "strategy": "all",
-                    "strategy_name": "Technical Analysis",
-                    "approved": False,
-                    "reason": f"Insufficient candle data ({len(candle_records) if candle_records else 0} candles)",
-                    "score": 0,
-                    "current_price": candle_records[0].close if candle_records else None,
-                    "signal": "NO_TRADE",
-                    "entry_price": None,
-                    "stop_loss": None,
-                    "target": None,
-                    "confidence": 0,
-                    "indicators": {},
-                    "risk_reward_ratio": 0,
-                }
-                suggestions.append(suggestion)
-                continue
-            
-            # Convert to dict format (reverse to chronological order)
-            candles = [
-                {
-                    "close": c.close,
-                    "open": c.open,
-                    "high": c.high,
-                    "low": c.low,
-                    "volume": c.volume,
-                    "timestamp": c.timestamp
-                }
-                for c in reversed(candle_records)
-            ]
-            
-            # Run TA analysis ONCE per symbol to get complete signal
-            ta_result = ta_signal_15m_from_candles(candles)
-            latest = candles[-1]
+                if not candle_records or len(candle_records) < 120:
+                    # Auto-fetch candles if missing
+                    try:
+                        fetch_15m_candles(db, symbol, days=30)
+                    except Exception as exc:
+                        print(f"Candle fetch failed for {symbol}: {exc}")
+
+                    candle_records = (
+                        db.query(Candle15m)
+                        .filter(Candle15m.symbol == symbol)
+                        .order_by(Candle15m.timestamp.desc())
+                        .limit(300)
+                        .all()
+                    )
+
+                if not candle_records or len(candle_records) < 120:
+                    # Add no-trade suggestion for insufficient data
+                    suggestion = {
+                        "symbol": symbol,
+                        "strategy": "all",
+                        "strategy_name": "Technical Analysis (15m)",
+                        "approved": False,
+                        "reason": f"Insufficient candle data ({len(candle_records) if candle_records else 0} candles)",
+                        "score": 0,
+                        "current_price": candle_records[0].close if candle_records else None,
+                        "signal": "NO_TRADE",
+                        "entry_price": None,
+                        "stop_loss": None,
+                        "target": None,
+                        "confidence": 0,
+                        "indicators": {},
+                        "risk_reward_ratio": 0,
+                    }
+                    suggestions.append(suggestion)
+                    continue
+                
+                # Convert to dict format (reverse to chronological order)
+                candles = [
+                    {
+                        "close": c.close,
+                        "open": c.open,
+                        "high": c.high,
+                        "low": c.low,
+                        "volume": c.volume,
+                        "timestamp": c.timestamp
+                    }
+                    for c in reversed(candle_records)
+                ]
+                
+                # Run 15m TA analysis
+                ta_result = ta_signal_15m_from_candles(candles)
+                latest = candles[-1]
             
             # Create Signal object from TA result
             signal_strength_map = {
