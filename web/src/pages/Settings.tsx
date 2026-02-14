@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, Bell, Lock, Eye, EyeOff, CheckCircle, XCircle, Send } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Bell, Lock, Eye, EyeOff, CheckCircle, XCircle, Send, Brain, Zap } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
 import { settingsAPI } from '../lib/api';
 
@@ -63,11 +63,21 @@ const Settings: React.FC = () => {
   const [gmailMessage, setGmailMessage] = useState('');
   const [showGmailPassword, setShowGmailPassword] = useState(false);
 
+  // ML settings
+  const [mlSettings, setMlSettings] = useState({
+    enabled: false,
+    autoTrain: true,
+    minConfidence: 60,
+  });
+  const [mlSaving, setMlSaving] = useState(false);
+  const [mlMessage, setMlMessage] = useState('');
+
   useEffect(() => {
     console.log('Settings component mounted - loading Zerodha settings');
     loadZerodhaSettings();
     loadNotificationSettings();
     loadTradingSettings();
+    //loadMlSettings();
     // Refresh every 5 seconds to sync with backend
     const interval = setInterval(() => {
       //loadZerodhaSettings();
@@ -804,6 +814,80 @@ const Settings: React.FC = () => {
         </button>
         {saved && <p className="text-green-400 flex items-center">✓ Settings saved!</p>}
       </div>
+
+      {/* AI/ML Settings */}
+      <SettingsCard title="AI/ML Features">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 pb-4 border-b border-slate-700">
+            <Brain className="w-6 h-6 text-purple-400" />
+            <div className="flex-1">
+              <h3 className="font-semibold text-white">Machine Learning Signals</h3>
+              <p className="text-sm text-slate-400">Enhance stock suggestions with ML predictions</p>
+            </div>
+            <button
+              onClick={() => setMlSettings(prev => ({ ...prev, enabled: !prev.enabled }))}
+              aria-label="ML enabled toggle"
+              title="ML enabled toggle"
+              className={`relative inline-flex h-7 w-12 items-center rounded-full transition ${
+                mlSettings.enabled ? 'bg-purple-500' : 'bg-slate-700'
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 transform bg-white rounded-full transition ${
+                  mlSettings.enabled ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <SettingItem
+              label="Minimum Confidence (%)"
+              type="number"
+              value={mlSettings.minConfidence}
+              onChange={(val) => setMlSettings(prev => ({ ...prev, minConfidence: val }))}
+              min="50"
+              max="95"
+              step="5"
+            />
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-yellow-400" />
+                <label className="text-slate-300">Auto-Train Weekly</label>
+              </div>
+              <button
+                onClick={() => setMlSettings(prev => ({ ...prev, autoTrain: !prev.autoTrain }))}
+                aria-label="Auto-train toggle"
+                title="Auto-train toggle"
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+                  mlSettings.autoTrain ? 'bg-green-500' : 'bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform bg-white rounded-full transition ${
+                    mlSettings.autoTrain ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="p-3 bg-purple-900 bg-opacity-20 border border-purple-700 rounded text-sm text-purple-200">
+              <strong>💡 Info:</strong> ML model trains automatically every Sunday at 4 AM using accumulated daily candles. Requires 200+ candles per symbol.
+            </div>
+          </div>
+
+           
+
+          {mlMessage && (
+            <div className={`p-3 rounded-lg text-sm font-semibold ${
+              mlMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+            }`}>
+              {mlMessage}
+            </div>
+          )}
+        </div>
+      </SettingsCard>
 
       {/* Coming Soon */}
       <div className="card-glass p-6 opacity-50">

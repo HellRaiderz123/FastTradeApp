@@ -34,6 +34,7 @@ class StockSuggestionsRequest(BaseModel):
     quantity: int = 100  # Default quantity per trade
     capital: float = 100000.0  # Available capital
     timeframe: str = "15m"  # Timeframe: "15m" (intraday) or "daily" (swing)
+    use_ml: bool = False  # Whether to apply ML signal override
 
 
 def _compute_stock_score(result: Dict[str, Any]) -> float:
@@ -128,6 +129,8 @@ def get_stock_suggestions(
         from app.core.strategies.registry import StrategyRegistry
         from app.core.signals.base import Signal, SignalStrength, AssetType, MarketBias
         from app.core.signals.ta_engine import ta_signal_15m_from_candles, ta_signal_daily_from_df
+        from app.core.signals.signal_enricher import merge_signals
+        from app.core.signals.ml_engine import ml_stock_signal
         from app.core.market.candles import fetch_15m_candles
         from app.db.models_candles import Candle15m, CandleDaily
         import pandas as pd
@@ -198,7 +201,7 @@ def get_stock_suggestions(
                 
                 # Run daily TA analysis
                 ta_result = ta_signal_daily_from_df(df)
-                latest = {"close": candle_records[0].close}
+                latest = {"close": candle_records[0].close, "timestamp": candle_records[0].date}
             else:
                 # Get 15m candles
                 candle_records = (
@@ -261,6 +264,10 @@ def get_stock_suggestions(
                 # Run 15m TA analysis
                 ta_result = ta_signal_15m_from_candles(candles)
                 latest = candles[-1]
+
+            if request.use_ml:
+                ml = ml_stock_signal(db, symbol, timeframe=request.timeframe)
+                ta_result = merge_signals(ta_result, ml)
             
             # Create Signal object from TA result
             signal_strength_map = {

@@ -54,6 +54,7 @@ from app.core.market.scheduler import (
     start_daily_candles_scheduler,
     start_vix_scheduler,
     start_auto_exit_scheduler,
+    start_ml_training_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -99,7 +100,8 @@ async def lifespan(app: FastAPI):
         start_daily_candles_scheduler()
         start_vix_scheduler()
         start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
-        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring")
+        start_ml_training_scheduler()  # Weekly ML model training
+        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + ML training")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
     

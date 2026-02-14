@@ -140,12 +140,27 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
     try {
       const symbolsToAnalyze = selectedSymbols.length > 0 ? selectedSymbols : [symbol];
       
+      // Load ML settings from localStorage
+      let mlEnabled = false;
+      let minConfidence = 60;
+      try {
+        const mlSettings = localStorage.getItem('ml_settings');
+        if (mlSettings) {
+          const parsed = JSON.parse(mlSettings);
+          mlEnabled = parsed.enabled || false;
+          minConfidence = parsed.minConfidence || 60;
+        }
+      } catch (e) {
+        console.error('Error loading ML settings:', e);
+      }
+      
       const response = await stockSuggestionsAPI.get({
         symbols: symbolsToAnalyze,
         capital: 100000,
         quantity: 1,
-        min_confidence: 60,
-        timeframe: timeframeMode === 'swing' ? 'daily' : '15m'
+        min_confidence: minConfidence,
+        timeframe: timeframeMode === 'swing' ? 'daily' : '15m',
+        use_ml: mlEnabled
       });
       
       const data = response?.data;

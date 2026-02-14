@@ -96,6 +96,40 @@ def _auto_exit_check():
         db.close()
 
 
+def _train_ml_model():
+    """Train stock ML model on accumulated daily data (weekly job)."""
+    logger.info("⏱️ Running ML model training")
+    
+    db = SessionLocal()
+    try:
+        from app.core.ml.config import StockMLConfig
+        from app.core.ml.stock_model import train_stock_model
+        
+        config = StockMLConfig()
+        if not config.enabled:
+            logger.info("⏩ ML training skipped (STOCK_ML_ENABLED=false)")
+            return
+        
+        # Get symbols from environment (same as daily candles)
+        symbols = _get_daily_symbols()
+        if not symbols:
+            logger.warning("⚠️ No symbols configured for ML training")
+            return
+        
+        # Train on daily timeframe (better for swing trading ML)
+        metadata = train_stock_model(db, symbols, config)
+        
+        accuracy = metadata.get('accuracy', 'N/A')
+        n_samples = metadata.get('n_samples', 0)
+        logger.info(f"✅ ML model trained: {accuracy} accuracy, {n_samples} samples")
+    except ImportError:
+        logger.warning("⚠️ ML modules not available, skipping training")
+    except Exception:
+        logger.exception("❌ ML model training failed")
+    finally:
+        db.close()
+
+
 def start_candle_scheduler():
     if scheduler.running:
         logger.warning("⚠️ Candle scheduler already running")
@@ -199,6 +233,26 @@ def start_auto_exit_scheduler():
     )
     
     logger.info("🟢 Auto-exit scheduler started (every 10 seconds, market hours only)")
+
+
+def start_ml_training_scheduler():
+    """Start weekly ML model training (runs every Sunday at 4 AM IST)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start ML training scheduler: main scheduler not running")
+        return
+    
+    scheduler.add_job(
+        func=_train_ml_model,
+        trigger="cron",
+        day_of_week="sun",  # Sunday
+        hour=4,  # 4 AM IST
+        minute=0,
+        id="ml_training_job",
+        replace_existing=True,
+        max_instances=1,
+    )
+    
+    logger.info("🟢 ML training scheduler started (Sundays at 4 AM IST)")
 
 
 def stop_scheduler():
