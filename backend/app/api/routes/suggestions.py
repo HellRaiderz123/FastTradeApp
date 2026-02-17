@@ -85,34 +85,54 @@ def get_suggestions(request: SuggestionsRequest, db: Session = Depends(get_db)):
     suggestions: List[Dict[str, Any]] = []
 
     for underlying in request.underlyings:
-        payload = {
-            "underlying": underlying,
-            "interval": "15minute",
-            "use_ml": request.use_ml,
-            "min_confidence": request.min_confidence,
-            "risk_mode": request.risk_mode,
-            "lots": request.lots,
-            "capital": request.capital,
-        }
-
-        result = run_option_spread(db=db, payload=payload)
-        score = _compute_score(result)
-
-        suggestions.append(
-            {
+        try:
+            payload = {
                 "underlying": underlying,
-                "strategy": result.get("strategy") or "NO_TRADE",
-                "approved": bool(result.get("approved")),
-                "reason": str(result.get("reason") or ""),
-                "score": score,
-                "spot": result.get("spot"),
-                "atm": result.get("atm"),
-                "ticket": result.get("ticket"),
-                "risk_metrics": result.get("risk_metrics"),
-                "signal": result.get("signal") or {},
-                "context": result.get("context") or {},
+                "interval": "15minute",
+                "use_ml": request.use_ml,
+                "min_confidence": request.min_confidence,
+                "risk_mode": request.risk_mode,
+                "lots": request.lots,
+                "capital": request.capital,
             }
-        )
+
+            result = run_option_spread(db=db, payload=payload)
+            score = _compute_score(result)
+
+            suggestions.append(
+                {
+                    "underlying": underlying,
+                    "strategy": result.get("strategy") or "NO_TRADE",
+                    "approved": bool(result.get("approved")),
+                    "reason": str(result.get("reason") or ""),
+                    "score": score,
+                    "spot": result.get("spot"),
+                    "atm": result.get("atm"),
+                    "ticket": result.get("ticket"),
+                    "risk_metrics": result.get("risk_metrics"),
+                    "signal": result.get("signal") or {},
+                    "context": result.get("context") or {},
+                }
+            )
+        except Exception as e:
+            # Don't let one underlying failure crash the whole request
+            import logging
+            logging.getLogger(__name__).warning(f"Suggestion generation failed for {underlying}: {e}")
+            suggestions.append(
+                {
+                    "underlying": underlying,
+                    "strategy": "NO_TRADE",
+                    "approved": False,
+                    "reason": f"Error: {str(e)}",
+                    "score": 0.0,
+                    "spot": None,
+                    "atm": None,
+                    "ticket": None,
+                    "risk_metrics": None,
+                    "signal": {},
+                    "context": {},
+                }
+            )
 
     # Sort approved first, then by score
     suggestions.sort(key=lambda x: (x.get("approved") is True, float(x.get("score") or 0.0)), reverse=True)

@@ -14,6 +14,31 @@ router = APIRouter(prefix="/market", tags=["market"])
 kite_service = KiteConnectService()
 
 
+@router.get("/quotes/bulk")
+async def get_bulk_quotes_rest(symbols: str = ""):
+    """
+    REST endpoint for bulk quotes — used for initial page load so the
+    watchlist renders immediately without waiting for WebSocket.
+    
+    GET /market/quotes/bulk?symbols=RELIANCE,TCS,INFY
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    
+    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not symbol_list:
+        return {"success": False, "error": "No symbols", "data": {}}
+    
+    # Import the shared thread-pool helper from websocket_routes
+    from app.api.routes.websocket_routes import _fetch_bulk_quotes_sync, _quote_executor
+    
+    loop = asyncio.get_running_loop()
+    quotes_data = await loop.run_in_executor(
+        _quote_executor, _fetch_bulk_quotes_sync, symbol_list
+    )
+    return {"success": True, "data": quotes_data}
+
+
 def _find_option_tradingsymbol(*, underlying: str, expiry: str, strike: int, option_type: str) -> str | None:
     """Find NFO tradingsymbol for an option contract via instruments list."""
     try:

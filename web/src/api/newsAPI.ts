@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const NEWS_API = axios.create({
-  baseURL: 'http://localhost:8000/news',
+  baseURL: import.meta.env?.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/news` : '/api/news',
   timeout: 15000,
 });
 

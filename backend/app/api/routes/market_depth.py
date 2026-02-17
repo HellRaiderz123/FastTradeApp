@@ -17,24 +17,34 @@ kite_service = KiteConnectService()
 
 
 def generate_mock_market_depth(symbol: str, spot_price: float) -> Dict[str, Any]:
-    """Generate realistic mock market depth data"""
+    """Generate realistic mock market depth data when live data is unavailable"""
     
-    # Calculate bid/ask spread (0.05% - 0.2% of price)
-    spread_pct = random.uniform(0.0005, 0.002)
-    spread = spot_price * spread_pct
+    # Calculate tick size based on price (NSE tick rules)
+    if spot_price >= 500:
+        tick_size = 0.05
+    elif spot_price >= 100:
+        tick_size = 0.05
+    else:
+        tick_size = 0.05
+    
+    # Price step between levels (realistic: 1-3 ticks)
+    level_step = tick_size * random.randint(1, 3)
+    
+    # Calculate bid/ask spread (0.02% - 0.10% of price)
+    spread_pct = random.uniform(0.0002, 0.001)
+    spread = max(tick_size, round(spot_price * spread_pct / tick_size) * tick_size)
     
     mid_price = spot_price
-    best_bid = mid_price - (spread / 2)
-    best_ask = mid_price + (spread / 2)
+    best_bid = round(mid_price - (spread / 2), 2)
+    best_ask = round(mid_price + (spread / 2), 2)
     
     # Generate 5 levels of bids (descending prices)
     bids = []
-    current_bid = best_bid
     total_bid_qty = 0
     
     for i in range(5):
-        price = round(current_bid - (i * 0.5), 2)
-        quantity = random.randint(50, 500) * 100  # Lots of 100
+        price = round(best_bid - (i * level_step), 2)
+        quantity = random.randint(50, 500) * 100
         orders = random.randint(5, 25)
         
         bids.append({
@@ -43,15 +53,13 @@ def generate_mock_market_depth(symbol: str, spot_price: float) -> Dict[str, Any]
             "orders": orders,
         })
         total_bid_qty += quantity
-        current_bid = price
     
     # Generate 5 levels of asks (ascending prices)
     asks = []
-    current_ask = best_ask
     total_ask_qty = 0
     
     for i in range(5):
-        price = round(current_ask + (i * 0.5), 2)
+        price = round(best_ask + (i * level_step), 2)
         quantity = random.randint(50, 500) * 100
         orders = random.randint(5, 25)
         
@@ -61,7 +69,6 @@ def generate_mock_market_depth(symbol: str, spot_price: float) -> Dict[str, Any]
             "orders": orders,
         })
         total_ask_qty += quantity
-        current_ask = price
     
     # Calculate cumulative quantities for depth visualization
     cumulative_bid_qty = 0
@@ -135,18 +142,18 @@ async def get_market_depth(symbol: str):
     try:
         symbol = symbol.upper().strip()
         
-        # Try to get real quote data
-        spot_price = 2650.0  # Default
+        # Try to get real quote data with depth
+        spot_price = None
         
         if kite_service.kite:
             try:
                 quote = kite_service.get_full_quote(symbol)
-                if quote and "last_price" in quote:
+                if quote and "last_price" in quote and quote["last_price"] is not None:
                     spot_price = float(quote["last_price"])
                     
                     # If Zerodha provides depth data, use it
-                    if "depth" in quote:
-                        depth_data = quote["depth"]
+                    depth_data = quote.get("depth")
+                    if depth_data:
                         
                         # Transform Zerodha depth format to our format
                         bids = []
@@ -202,12 +209,19 @@ async def get_market_depth(symbol: str):
                                 "total_ask_orders": sum(a["orders"] for a in asks),
                                 "imbalance": round(imbalance, 2),
                                 "imbalance_direction": "bullish" if imbalance > 5 else "bearish" if imbalance < -5 else "neutral",
+                                "data_source": "live",
                             }
             except Exception as e:
                 logger.warning(f"Failed to fetch real depth for {symbol}: {e}")
         
-        # Fall back to mock data
-        return generate_mock_market_depth(symbol, spot_price)
+        # Fall back to mock data (use LTP if available, otherwise a reasonable default)
+        if spot_price is None:
+            spot_price = 1000.0  # Generic fallback
+            logger.info(f"Using default spot price for {symbol} mock depth (market may be closed)")
+        
+        mock_depth = generate_mock_market_depth(symbol, spot_price)
+        mock_depth["data_source"] = "simulated"
+        return mock_depth
     
     except Exception as e:
         logger.error(f"Market depth error: {str(e)}", exc_info=True)

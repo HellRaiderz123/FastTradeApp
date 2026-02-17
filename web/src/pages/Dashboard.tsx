@@ -318,7 +318,7 @@ const TradeRow: React.FC<TradeRowProps> = ({ trade }) => (
   <div className="flex justify-between items-center p-3 bg-slate-900/50 rounded-lg">
     <div>
       <p className="font-medium text-white">{trade.strategy}</p>  
-      <p className="text-xs text-slate-400">{trade.underlying}</p><span>{trade.created_at.substring(0, 10)}</span>
+      <p className="text-xs text-slate-400">{trade.underlying}</p><span>{trade.created_at?.substring(0, 10) || ''}</span>
     </div>
     <div className="text-right">
       <p className={`font-bold ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>

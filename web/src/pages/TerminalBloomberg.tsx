@@ -25,8 +25,9 @@ import StockDetailModal from '../components/StockDetailModal';
 import AlertManager from '../components/AlertManager';
 import AlertList from '../components/AlertList';
 import ComparisonChart from '../components/ComparisonChart';
+import MarketDepthViewer from '../components/MarketDepthViewer';
 import { useRealtimeQuotes } from '../hooks/useRealtimeQuotes';
-import { marketAPI, alertsAPI } from '../lib/api';
+import { marketAPI, alertsAPI, mlAPI } from '../lib/api';
 import { 
   marketDashboardAPI,
   swingScannerAPI,
@@ -71,12 +72,33 @@ const Terminal: React.FC = () => {
   const [showAlertList, setShowAlertList] = useState(false);
   const [alertRefreshTrigger, setAlertRefreshTrigger] = useState(0);
   
-  // Watchlist - Universe aware
+  // ML Predictions
+  const [mlPredictions, setMlPredictions] = useState<Record<string, {
+    signal: string; confidence: number; bias: string; reason: string;
+  }>>({});
+  const [mlModelStatus, setMlModelStatus] = useState<string>('unknown');
+  
+  // Watchlist - Universe aware (top stocks by weight for real-time WS streaming)
   const universeWatchlist: Record<string, string[]> = {
-    'NIFTY50': ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN'],
-    'BANKNIFTY': ['HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK', 'INDUSINDBK'],
-    'FINNIFTY': ['HDFCBANK', 'BAJFINANCE', 'BAJAJFINSV', 'HDFCLIFE', 'SBILIFE', 'ICICIGI'],
-    'NIFTY_IT': ['TCS', 'INFY', 'WIPRO', 'HCLTECH', 'TECHM', 'LTIM']
+    'NIFTY50': [
+      'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
+      'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'BAJFINANCE',
+      'KOTAKBANK', 'LT', 'AXISBANK', 'TITAN', 'SUNPHARMA',
+    ],
+    'BANKNIFTY': [
+      'HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK',
+      'INDUSINDBK', 'BANDHANBNK', 'FEDERALBNK', 'IDFCFIRSTB', 'PNB',
+      'BANKBARODA', 'AUBANK',
+    ],
+    'FINNIFTY': [
+      'HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK',
+      'BAJFINANCE', 'BAJAJFINSV', 'HDFCLIFE', 'SBILIFE', 'ICICIGI',
+      'BAJAJHLDNG', 'PFC', 'RECLTD', 'MUTHOOTFIN', 'CHOLAFIN',
+    ],
+    'NIFTY_IT': [
+      'TCS', 'INFY', 'WIPRO', 'HCLTECH', 'TECHM',
+      'LTIM', 'COFORGE', 'PERSISTENT', 'MPHASIS',
+    ],
   };
   
   // Memoize watchlist symbols to prevent unnecessary WebSocket reconnections
@@ -84,7 +106,7 @@ const Terminal: React.FC = () => {
     () => universeWatchlist[universe] || ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN'],
     [universe]
   );
-  const { quotes, loading: quotesLoading, connected } = useRealtimeQuotes(watchlistSymbols, true);
+  const { quotes, loading: quotesLoading, connected: quotesConnected } = useRealtimeQuotes(watchlistSymbols, true);
 
   useEffect(() => {
     const currentQuote = quotes[selectedSymbol];
@@ -124,6 +146,22 @@ const Terminal: React.FC = () => {
         const highImpactEvents = calendarData.events.filter(e => e.impact === 'high').slice(0, 4);
         console.log('📅 High-impact events for today:', highImpactEvents);
         setTodayEvents(highImpactEvents);
+
+        // ML predictions for watchlist symbols
+        try {
+          const mlMetrics = await mlAPI.getMetrics();
+          setMlModelStatus(mlMetrics.data?.model_status || 'not_trained');
+          
+          if (mlMetrics.data?.model_status === 'ready') {
+            const wlSymbols = universeWatchlist[universe] || [];
+            const mlRes = await mlAPI.predictBulk(wlSymbols);
+            if (mlRes.data?.predictions) {
+              setMlPredictions(mlRes.data.predictions);
+            }
+          }
+        } catch (mlErr) {
+          console.warn('ML predictions unavailable:', mlErr);
+        }
       } catch (error) {
         console.error('❌ Failed to fetch market data:', error);
       }
@@ -327,8 +365,8 @@ const Terminal: React.FC = () => {
           <div className="flex items-center gap-3">
             {/* Connection Status */}
             <div className="flex items-center gap-2 px-3 py-2 rounded-full bg-slate-900/70 border border-slate-700/50">
-              <Activity size={14} className={connected ? 'text-emerald-400' : 'text-orange-400'} />
-              <span className="text-xs text-slate-300">{connected ? 'Live' : 'Connecting...'}</span>
+              <Activity size={14} className={quotesConnected ? 'text-emerald-400' : 'text-orange-400'} />
+              <span className="text-xs text-slate-300">{quotesConnected ? 'Live' : 'Connecting...'}</span>
             </div>
             
             {/* Session */}
@@ -379,7 +417,7 @@ const Terminal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            {(['1m', '5m', '15m', '1h', '1d'] as const).map((tf) => (
+            {(['1m', '5m', '15m', '30m', '1h', '1d'] as const).map((tf) => (
               <button
                 key={tf}
                 onClick={() => setTimeframe(tf)}
@@ -451,10 +489,30 @@ const Terminal: React.FC = () => {
         <div className="flex flex-col gap-4">
           {/* Technical Chart Panel with Indicators */}
           <div className="h-[650px]">
+            {/* ML Signal Badge for selected symbol */}
+            {mlModelStatus === 'ready' && mlPredictions[selectedSymbol] && mlPredictions[selectedSymbol].signal !== 'NO_TRADE' && (
+              <div className="mb-2 flex items-center gap-2">
+                <span className={`text-xs font-bold px-3 py-1 rounded-lg ${
+                  mlPredictions[selectedSymbol].signal === 'BULLISH'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                }`}>
+                  ML: {mlPredictions[selectedSymbol].signal} ({mlPredictions[selectedSymbol].confidence}%)
+                </span>
+                <span className="text-xs text-slate-500">{mlPredictions[selectedSymbol].reason}</span>
+              </div>
+            )}
             <ErrorBoundary>
               <TechnicalChart symbol={selectedSymbol} timeframe={timeframe} height={630} />
             </ErrorBoundary>
           </div>
+
+          {/* Market Depth for selected symbol */}
+          <ErrorBoundary>
+            <div className="terminal-panel rounded-2xl p-5">
+              <MarketDepthViewer symbol={selectedSymbol} />
+            </div>
+          </ErrorBoundary>
 
           {/* Swing Trade Opportunities */}
           <ErrorBoundary>
@@ -727,7 +785,12 @@ const Terminal: React.FC = () => {
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Live Watchlist</p>
                   <h2 className="terminal-title text-xl text-white">Blue Chips</h2>
                 </div>
-                {quotesLoading && <Activity size={14} className="text-blue-400 animate-pulse" />}
+                <div className="flex items-center gap-2">
+                  {!quotesConnected && !quotesLoading && (
+                    <span className="text-xs text-yellow-400">Reconnecting...</span>
+                  )}
+                  {quotesLoading && <Activity size={14} className="text-blue-400 animate-pulse" />}
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -735,15 +798,15 @@ const Terminal: React.FC = () => {
                   const quote = quotes[symbol];
                   if (!quote) {
                     return (
-                      <div key={symbol} className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 animate-pulse">
+                      <div key={symbol} className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3">
                         <div className="flex items-center justify-between">
                           <div>
-                            <div className="h-4 bg-slate-700/50 rounded w-20 mb-2"></div>
-                            <div className="h-3 bg-slate-700/50 rounded w-16"></div>
+                            <div className="text-sm font-semibold text-white">{symbol}</div>
+                            <div className="text-xs text-slate-500">Loading...</div>
                           </div>
                           <div className="text-right">
-                            <div className="h-5 bg-slate-700/50 rounded w-24 mb-1"></div>
-                            <div className="h-3 bg-slate-700/50 rounded w-16"></div>
+                            <div className="h-5 bg-slate-700/50 rounded w-24 mb-1 animate-pulse"></div>
+                            <div className="h-3 bg-slate-700/50 rounded w-16 animate-pulse"></div>
                           </div>
                         </div>
                       </div>
@@ -752,6 +815,7 @@ const Terminal: React.FC = () => {
 
                   return (
                     <div
+                      key={symbol}
                       className="bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3 hover:bg-slate-800/60 transition group"
                     >
                       <div className="flex items-center justify-between">
@@ -845,6 +909,81 @@ const Terminal: React.FC = () => {
                   View All Alerts
                 </button>
               </div>
+            </div>
+          </ErrorBoundary>
+
+          {/* ML Predictions Panel */}
+          <ErrorBoundary>
+            <div className="terminal-panel rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">ML Engine</p>
+                  <h2 className="terminal-title text-xl text-white">AI Signals</h2>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`inline-block w-2 h-2 rounded-full ${
+                    mlModelStatus === 'ready' ? 'bg-emerald-400' :
+                    mlModelStatus === 'training' ? 'bg-yellow-400 animate-pulse' : 'bg-slate-500'
+                  }`} />
+                  <span className="text-xs text-slate-400 capitalize">{mlModelStatus === 'not_trained' ? 'Not Trained' : mlModelStatus}</span>
+                </div>
+              </div>
+
+              {mlModelStatus === 'ready' && Object.keys(mlPredictions).length > 0 ? (
+                <div className="space-y-2">
+                  {Object.entries(mlPredictions)
+                    .filter(([, p]) => p.signal !== 'NO_TRADE')
+                    .sort((a, b) => b[1].confidence - a[1].confidence)
+                    .slice(0, 8)
+                    .map(([symbol, pred]) => (
+                      <div
+                        key={symbol}
+                        onClick={() => setSelectedSymbol(symbol)}
+                        className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-900/60 border border-slate-700/30 hover:bg-slate-800/60 cursor-pointer transition"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                            pred.signal === 'BULLISH'
+                              ? 'bg-emerald-500/20 text-emerald-300'
+                              : pred.signal === 'BEARISH'
+                              ? 'bg-red-500/20 text-red-300'
+                              : 'bg-slate-500/20 text-slate-300'
+                          }`}>
+                            {pred.signal === 'BULLISH' ? '▲' : pred.signal === 'BEARISH' ? '▼' : '─'} {pred.signal}
+                          </span>
+                          <span className="text-sm text-white font-medium">{symbol}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 rounded-full bg-slate-700 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${
+                                pred.confidence >= 70 ? 'bg-emerald-400' :
+                                pred.confidence >= 55 ? 'bg-yellow-400' : 'bg-slate-400'
+                              }`}
+                              style={{ width: `${pred.confidence}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-slate-400 min-w-[32px] text-right">{pred.confidence}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  {Object.values(mlPredictions).every(p => p.signal === 'NO_TRADE') && (
+                    <p className="text-xs text-slate-500 text-center py-2">No actionable signals at this time</p>
+                  )}
+                </div>
+              ) : mlModelStatus === 'not_trained' || mlModelStatus === 'unknown' ? (
+                <div className="text-center py-4">
+                  <p className="text-sm text-slate-400 mb-2">ML model not yet trained</p>
+                  <a
+                    href="/ml"
+                    className="text-xs text-blue-400 hover:text-blue-300 transition"
+                  >
+                    Go to ML Center → Backfill data & Train
+                  </a>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 text-center py-2">Loading predictions...</p>
+              )}
             </div>
           </ErrorBoundary>
 

@@ -59,10 +59,6 @@ def format_zerodha_expiry(expiry: date) -> str:
     day = expiry.day          # Day as 1-31 (no zero padding)
     return f"{year}{month}{day}"
 
-from datetime import date, timedelta
-
-
-from datetime import date, timedelta
 
 # NSE weekly expiry mapping
 WEEKLY_EXPIRY_WEEKDAY = {

@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pydantic import BaseModel
+from app.core.utils.time import now_ist
 
 
 class AssetType(str, Enum):
@@ -147,7 +148,7 @@ class SignalFactory:
         signal = Signal(
             asset_type=asset_type,
             symbol=symbol,
-            timestamp=datetime.utcnow(),
+            timestamp=now_ist(),
             signal=signal_strength,
             confidence=min(100, max(0, confidence)),  # Clamp 0-100
             bias=bias,

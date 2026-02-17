@@ -278,11 +278,12 @@ def get_strategies_for_conditions(
             
         # Check if strategy matches conditions
         bias_match = config.bias == "NEUTRAL" or config.bias == bias
+        market_match = config.market_condition == market_mode or market_mode == "ANY"
         iv_match = config.iv_regime == "ANY" or config.iv_regime == iv_regime
         quality_match = quality_score >= config.min_quality_score
         confidence_match = confidence >= config.min_confidence
         
-        if bias_match and iv_match and quality_match and confidence_match:
+        if bias_match and market_match and iv_match and quality_match and confidence_match:
             matching.append((strategy_type, config))
     
     return matching

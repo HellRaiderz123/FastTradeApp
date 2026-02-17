@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Menu, X, TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain } from 'lucide-react';
+import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
 import { Wallet } from 'lucide-react';
 

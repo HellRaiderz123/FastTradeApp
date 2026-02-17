@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const DEPTH_API = axios.create({
-  baseURL: 'http://localhost:8000/market-depth',
+  baseURL: import.meta.env?.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/market-depth` : '/api/market-depth',
   timeout: 15000,
 });
 
@@ -28,6 +28,7 @@ export interface MarketDepth {
   total_ask_orders: number;
   imbalance: number;
   imbalance_direction: 'bullish' | 'bearish' | 'neutral';
+  data_source?: 'live' | 'simulated';
 }
 
 export interface DepthSnapshot {

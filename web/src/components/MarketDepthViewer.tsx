@@ -107,6 +107,15 @@ const MarketDepthViewer: React.FC<MarketDepthViewerProps> = ({
             <div className="flex items-center gap-2">
               <BarChart2 className="w-5 h-5 text-blue-400" />
               <h3 className="text-lg font-semibold text-gray-200">{symbol} Order Book</h3>
+              {depth.data_source === 'simulated' ? (
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-yellow-500/20 text-yellow-300 border border-yellow-500/40">
+                  SIMULATED
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-300 border border-green-500/40">
+                  LIVE
+                </span>
+              )}
             </div>
             <div className="text-xs text-gray-500 mt-1">
               Last update: {lastUpdate.toLocaleTimeString()}

@@ -10,6 +10,28 @@ const api = axios.create({
   },
 });
 
+// ── Global Error Interceptor ───────────────────────────────────────────────
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response) {
+      const status = error.response.status;
+      if (status === 503) {
+        console.error('⚠️ Service unavailable (503) — backend may be overloaded or Zerodha API is down');
+      } else if (status === 401) {
+        console.error('🔒 Unauthorized (401) — authentication required');
+      } else if (status >= 500) {
+        console.error(`❌ Server error (${status}) on ${error.config?.url}`);
+      }
+    } else if (error.code === 'ECONNABORTED') {
+      console.error('⏱️ Request timed out:', error.config?.url);
+    } else if (!error.response) {
+      console.error('🌐 Network error — cannot reach backend:', error.message);
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Account APIs
 export const accountAPI = {
   getProfile: () =>
@@ -305,6 +327,21 @@ export const settingsAPI = {
 
   saveMLSettings: (data: { enabled: boolean; confidence_threshold: number; auto_train_enabled: boolean; retraining_frequency: string }) =>
     api.post('/settings/ml', data),
+};
+
+// ML APIs
+export const mlAPI = {
+  getMetrics: () => api.get('/ml/metrics'),
+  train: () => api.post('/ml/train'),
+  trainStock: (symbol: string) => api.post(`/ml/train-stock/${symbol}`),
+  backfill: () => api.post('/ml/backfill'),
+  getBackfillStatus: () => api.get('/ml/backfill-status'),
+  getDataSummary: () => api.get('/ml/data-summary'),
+  getModelInfo: () => api.get('/ml/model-info'),
+  getPerformance: () => api.get('/ml/performance'),
+  getTrainingHistory: () => api.get('/ml/training-history'),
+  predict: (symbol: string) => api.get(`/ml/predict/${symbol}`),
+  predictBulk: (symbols: string[]) => api.post('/ml/predict-bulk', { symbols }),
 };
 
 // Finance APIs

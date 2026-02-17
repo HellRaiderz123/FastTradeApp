@@ -50,6 +50,7 @@ from app.api.routes import timeframe_suggestions
 from app.api.routes import peer_comparison
 from app.api.routes import safety
 from app.api.routes import ml
+from app.api.routes import candles
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
@@ -102,7 +103,8 @@ async def lifespan(app: FastAPI):
         start_daily_candles_scheduler()
         start_vix_scheduler()
         start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
-        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring")
+        start_expiry_exit_scheduler()  # Auto-exit options near expiry
+        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
     
@@ -250,5 +252,6 @@ app.include_router(stock_news.router)
 app.include_router(timeframe_suggestions.router)
 app.include_router(peer_comparison.router)
 app.include_router(safety.router)
+app.include_router(candles.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

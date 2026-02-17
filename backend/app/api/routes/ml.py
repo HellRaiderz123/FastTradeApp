@@ -4,6 +4,7 @@ Endpoints for training, metrics, backfill, and managing ML models
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
@@ -394,6 +395,74 @@ async def get_model_performance() -> Dict[str, Any]:
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading performance: {str(e)}")
+
+
+@router.get("/predict/{symbol}")
+async def predict_symbol(symbol: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """
+    Get ML prediction for a single symbol.
+    Returns signal (BULLISH / BEARISH / NO_TRADE), confidence, and bias.
+    """
+    from app.core.signals.ml_engine import ml_stock_signal
+    
+    try:
+        result = ml_stock_signal(db, symbol.upper())
+        return {
+            "symbol": symbol.upper(),
+            "signal": result.get("signal", "NO_TRADE"),
+            "confidence": result.get("confidence", 0),
+            "bias": result.get("bias", "NEUTRAL"),
+            "reason": result.get("reason", ""),
+            "indicators": result.get("indicators", {}),
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "symbol": symbol.upper(),
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "bias": "NEUTRAL",
+            "reason": f"Prediction error: {str(e)}",
+            "indicators": {},
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
+class BulkPredictRequest(BaseModel):
+    symbols: list[str]
+
+
+@router.post("/predict-bulk")
+async def predict_bulk(request: BulkPredictRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """
+    Get ML predictions for multiple symbols at once.
+    """
+    from app.core.signals.ml_engine import ml_stock_signal
+    
+    predictions = {}
+    for symbol in request.symbols[:30]:  # Cap at 30 symbols
+        sym = symbol.upper()
+        try:
+            result = ml_stock_signal(db, sym)
+            predictions[sym] = {
+                "signal": result.get("signal", "NO_TRADE"),
+                "confidence": result.get("confidence", 0),
+                "bias": result.get("bias", "NEUTRAL"),
+                "reason": result.get("reason", ""),
+            }
+        except Exception as e:
+            predictions[sym] = {
+                "signal": "NO_TRADE",
+                "confidence": 0,
+                "bias": "NEUTRAL",
+                "reason": f"Error: {str(e)}",
+            }
+    
+    return {
+        "predictions": predictions,
+        "count": len(predictions),
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 @router.get("/training-history")

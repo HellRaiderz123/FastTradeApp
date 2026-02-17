@@ -321,7 +321,7 @@ class AlertRule(Base):
     is_recurring = Column(Boolean, default=True)  # Trigger multiple times or once?
     
     # Notification Channels
-    notify_via = Column(JSON, default={})  # {"email": true, "sms": true, "push": true, "webhook": false}
+    notify_via = Column(JSON, default=dict)  # {"email": true, "sms": true, "push": true, "webhook": false}
     
     # Execution
     action_on_trigger = Column(String, nullable=True)  # NOTIFY, AUTO_TRADE, WEBHOOK, etc.

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from app.core.signals.base import Signal, AssetType
+from app.core.utils.time import now_ist
 
 
 class StrategyType(str, Enum):
@@ -92,7 +93,7 @@ class StrategyResult(BaseModel):
     signal: Optional[Dict] = None
     context: Dict[str, Any] = {}
     
-    timestamp: datetime = datetime.utcnow()
+    timestamp: datetime = None  # Will use IST on creation
 
 
 class BaseStrategy(ABC):
@@ -232,7 +233,7 @@ class BaseStrategy(ABC):
             trade_readiness_score=signal.trade_readiness_score,
             signal=signal.dict(exclude_unset=True),
             context=signal.context,
-            timestamp=datetime.utcnow(),
+            timestamp=now_ist(),
         )
     
     def __repr__(self) -> str:

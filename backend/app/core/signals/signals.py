@@ -172,12 +172,19 @@ def generate_signal_multi_asset(
 
 
 def _map_signal_strength(signal_str: str) -> SignalStrength:
-    """Map string signal to SignalStrength enum"""
+    """Map string signal to SignalStrength enum.
+    
+    Handles both canonical (BUY/SELL) and TA engine (BULLISH/BEARISH/RANGE) formats.
+    """
     mapping = {
         "BUY": SignalStrength.BUY,
         "SELL": SignalStrength.SELL,
         "HOLD": SignalStrength.HOLD,
         "NO_TRADE": SignalStrength.NO_TRADE,
+        # TA engine returns these — map them correctly
+        "BULLISH": SignalStrength.BUY,
+        "BEARISH": SignalStrength.SELL,
+        "RANGE": SignalStrength.HOLD,
     }
     return mapping.get(signal_str, SignalStrength.NO_TRADE)
 

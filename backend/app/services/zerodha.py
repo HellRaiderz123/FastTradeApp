@@ -194,6 +194,12 @@ class KiteConnectService:
                 "buy_quantity": quote_data.get("buy_quantity", 0),
                 "sell_quantity": quote_data.get("sell_quantity", 0),
                 "timestamp": quote_data.get("timestamp"),
+                "depth": quote_data.get("depth"),  # Order book: {buy: [...], sell: [...]}
+                "oi": quote_data.get("oi", 0),
+                "lower_circuit_limit": quote_data.get("lower_circuit_limit"),
+                "upper_circuit_limit": quote_data.get("upper_circuit_limit"),
+                "last_quantity": quote_data.get("last_quantity", 0),
+                "average_price": quote_data.get("average_price", 0),
             }
             
             # Cache the result

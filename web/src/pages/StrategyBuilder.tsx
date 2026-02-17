@@ -418,8 +418,7 @@ const StrategyBuilder: React.FC = () => {
 
   // Add new leg
   const addLeg = async () => {
-    // Round ATM to nearest 100 for NIFTY strikes
-    const atmStrike = Math.round(atm / 50) * 50;
+    const atmStrike = Math.round(atm / strikeStep) * strikeStep;
     
     const newLeg: OptionLeg = {
       id: Date.now().toString(),
@@ -463,7 +462,7 @@ const StrategyBuilder: React.FC = () => {
         
         // When switching to RELATIVE mode, calculate offset from current strike
         if (field === 'strike_type' && value === 'RELATIVE') {
-          const atmStrike = Math.round(atm / 50) * 50;
+          const atmStrike = Math.round(atm / strikeStep) * strikeStep;
           const offset = leg.strike - atmStrike;
           updated = { ...updated, strike_offset: offset };
         }
@@ -765,7 +764,7 @@ const StrategyBuilder: React.FC = () => {
     return testSpots.map(testSpot => {
       // Find closest data points for interpolation
       let pnl = 0;
-      const dataPoints = payoffData.sort((a, b) => a.spot - b.spot);
+      const dataPoints = [...payoffData].sort((a, b) => a.spot - b.spot);
       
       const idx = dataPoints.findIndex(p => p.spot >= testSpot);
       if (idx === -1) {

@@ -15,7 +15,9 @@ INDEX_TOKENS = {
     "NIFTY": 256265,
     "BANKNIFTY": 260105,
     "FINNIFTY": 257801,
-    "NIFTYVIX": 264969,   # India VIX (Zerodha)
+    "NIFTY_IT": 259849,    # NIFTY IT index (NSE token)
+    "NIFTYIT": 259849,     # Alias
+    "NIFTYVIX": 264969,    # India VIX (Zerodha)
 }
 
 

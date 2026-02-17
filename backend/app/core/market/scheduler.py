@@ -24,7 +24,14 @@ def _update():
         fetch_15m_candles(db, "NIFTY")
         fetch_15m_candles(db, "BANKNIFTY")
         fetch_15m_candles(db, "FINNIFTY")
-        logger.info("✅ 15m candles updated")
+        # Also fetch Nifty IT sector stocks for IT-specific strategies
+        nifty_it_symbols = ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS"]
+        for sym in nifty_it_symbols:
+            try:
+                fetch_15m_candles(db, sym)
+            except Exception as e:
+                logger.warning(f"\u26a0\ufe0f Skip IT candle {sym}: {e}")
+        logger.info("\u2705 15m candles updated (indices + NIFTY_IT)")
     except Exception:
         logger.exception("❌ Candle update failed")
     finally:

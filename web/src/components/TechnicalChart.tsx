@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   ComposedChart,
   Line,
@@ -53,12 +53,26 @@ const TechnicalChart: React.FC<TechnicalChartProps> = ({
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [priceChange, setPriceChange] = useState<number>(0);
   
-  // Indicator toggles
-  const [showBB, setShowBB] = useState(true);
-  const [showRSI, setShowRSI] = useState(true);
-  const [showMACD, setShowMACD] = useState(true);
-  const [showSMA, setShowSMA] = useState(false);
-  const [showEMA, setShowEMA] = useState(false);
+  // Indicator toggles — persist in localStorage
+  const loadToggle = (key: string, fallback: boolean) => {
+    try {
+      const v = localStorage.getItem(`chart_${key}`);
+      return v !== null ? v === 'true' : fallback;
+    } catch { return fallback; }
+  };
+  const [showBB, setShowBB] = useState(() => loadToggle('showBB', false));
+  const [showRSI, setShowRSI] = useState(() => loadToggle('showRSI', false));
+  const [showMACD, setShowMACD] = useState(() => loadToggle('showMACD', false));
+  const [showSMA, setShowSMA] = useState(() => loadToggle('showSMA', false));
+  const [showEMA, setShowEMA] = useState(() => loadToggle('showEMA', false));
+
+  // Persist toggles to localStorage
+  useEffect(() => {
+    const toggles = { showBB, showRSI, showMACD, showSMA, showEMA };
+    Object.entries(toggles).forEach(([k, v]) => {
+      try { localStorage.setItem(`chart_${k}`, String(v)); } catch {}
+    });
+  }, [showBB, showRSI, showMACD, showSMA, showEMA]);
 
   const getInterval = (tf: string): string => {
     const mapping: { [key: string]: string } = {
@@ -215,7 +229,17 @@ const TechnicalChart: React.FC<TechnicalChartProps> = ({
     }
   }, [symbol, timeframe]);
 
-  const priceHeight = showRSI && showMACD ? height * 0.5 : showRSI || showMACD ? height * 0.65 : height;
+  // Dynamically compute heights so sub-charts never overflow
+  const subChartCount = (showRSI ? 1 : 0) + (showMACD ? 1 : 0);
+  const headerReserve = 90; // header + toggle buttons
+  const subChartHeight = 90; // each sub-chart
+  const gapReserve = subChartCount * 8; // gap between charts
+  const priceHeight = Math.max(180, height - headerReserve - subChartCount * subChartHeight - gapReserve);
+
+  // Compute volume domain so bars stay in the bottom 15% of the price pane
+  const maxVolume = chartData.length > 0
+    ? Math.max(...chartData.map(d => d.volume || 0))
+    : 1;
 
   return (
     <div className="terminal-panel rounded-2xl p-5 flex flex-col h-full">
@@ -290,7 +314,7 @@ const TechnicalChart: React.FC<TechnicalChartProps> = ({
       </div>
 
       {/* Charts Container */}
-      <div className="flex-1 relative flex flex-col gap-3">
+      <div className="flex-1 relative flex flex-col gap-2 overflow-hidden">
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50 rounded-lg backdrop-blur-sm z-10">
             <div className="flex items-center gap-2 text-slate-300">
@@ -311,70 +335,78 @@ const TechnicalChart: React.FC<TechnicalChartProps> = ({
         {!loading && !error && chartData.length > 0 && (
           <>
             {/* Main Price Chart with Volume */}
-            <div className="flex-1">
+            <div style={{ height: `${priceHeight}px` }}>
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+                <ComposedChart data={chartData} margin={{ top: 5, right: 50, left: 0, bottom: 5 }}>
                   <defs>
                     <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} />
                       <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.1)" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.08)" vertical={false} />
                   <XAxis
                     dataKey="time"
-                    stroke="#64748b"
+                    stroke="#475569"
                     style={{ fontSize: '10px' }}
-                    tick={{ fill: '#64748b' }}
+                    tick={{ fill: '#475569' }}
+                    tickLine={false}
+                    interval="preserveStartEnd"
                   />
                   <YAxis
                     yAxisId="price"
                     orientation="right"
-                    stroke="#64748b"
+                    stroke="#475569"
                     style={{ fontSize: '11px' }}
-                    tick={{ fill: '#64748b' }}
+                    tick={{ fill: '#94a3b8' }}
                     domain={['auto', 'auto']}
+                    tickLine={false}
+                    axisLine={false}
                   />
+                  {/* Hidden volume axis — bars capped at 15% of chart height */}
                   <YAxis
                     yAxisId="volume"
                     orientation="left"
-                    stroke="#64748b"
-                    style={{ fontSize: '10px' }}
-                    tick={{ fill: '#64748b' }}
-                    domain={[0, 'auto']}
-                    width={40}
+                    hide
+                    domain={[0, maxVolume * 6]}
                   />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: 'rgba(15, 23, 42, 0.98)',
-                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                      border: '1px solid rgba(59, 130, 246, 0.2)',
                       borderRadius: '8px',
                       padding: '8px 12px',
+                      fontSize: '12px',
                     }}
-                    labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
+                    labelStyle={{ color: '#94a3b8', marginBottom: '4px', fontSize: '11px' }}
+                    formatter={(value: any, name: string) => {
+                      if (name === 'volume') return [Number(value).toLocaleString(), 'Vol'];
+                      if (typeof value === 'number') return [`₹${value.toFixed(2)}`, name];
+                      return [value, name];
+                    }}
                   />
                   
-                  {/* Volume Bars */}
+                  {/* Volume Bars — subtle, bottom of chart */}
                   <Bar
                     yAxisId="volume"
                     dataKey="volume"
-                    fill="#3b82f6"
-                    opacity={0.25}
-                    radius={[2, 2, 0, 0]}
+                    fill="#334155"
+                    opacity={0.5}
+                    radius={[1, 1, 0, 0]}
                   />
                   
                   {/* Bollinger Bands */}
                   {showBB && (
                     <>
-                      <Line yAxisId="price" type="monotone" dataKey="bb_upper" stroke="#a855f7" strokeWidth={1} dot={false} strokeDasharray="3 3" />
-                      <Line yAxisId="price" type="monotone" dataKey="bb_middle" stroke="#a855f7" strokeWidth={1} dot={false} opacity={0.5} />
-                      <Line yAxisId="price" type="monotone" dataKey="bb_lower" stroke="#a855f7" strokeWidth={1} dot={false} strokeDasharray="3 3" />
+                      <Line yAxisId="price" type="monotone" dataKey="bb_upper" stroke="#a855f7" strokeWidth={1} dot={false} strokeDasharray="4 3" opacity={0.6} />
+                      <Line yAxisId="price" type="monotone" dataKey="bb_middle" stroke="#a855f7" strokeWidth={1} dot={false} opacity={0.3} strokeDasharray="2 4" />
+                      <Line yAxisId="price" type="monotone" dataKey="bb_lower" stroke="#a855f7" strokeWidth={1} dot={false} strokeDasharray="4 3" opacity={0.6} />
                     </>
                   )}
                   
                   {/* SMA */}
                   {showSMA && (
-                    <Line yAxisId="price" type="monotone" dataKey="sma_20" stroke="#f97316" strokeWidth={2} dot={false} />
+                    <Line yAxisId="price" type="monotone" dataKey="sma_20" stroke="#f97316" strokeWidth={1.5} dot={false} />
                   )}
                   
                   {/* EMA */}
@@ -391,7 +423,7 @@ const TechnicalChart: React.FC<TechnicalChartProps> = ({
                     type="monotone"
                     dataKey="price"
                     stroke="#3b82f6"
-                    strokeWidth={2.5}
+                    strokeWidth={2}
                     fill="url(#priceGradient)"
                     dot={false}
                   />
@@ -401,37 +433,38 @@ const TechnicalChart: React.FC<TechnicalChartProps> = ({
 
             {/* RSI Chart */}
             {showRSI && (
-              <div style={{ height: '120px' }}>
+              <div style={{ height: `${subChartHeight}px`, flexShrink: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.1)" vertical={false} />
+                  <ComposedChart data={chartData} margin={{ top: 5, right: 50, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.06)" vertical={false} />
                     <XAxis dataKey="time" hide />
                     <YAxis
                       domain={[0, 100]}
-                      ticks={[30, 50, 70]}
-                      stroke="#64748b"
+                      ticks={[30, 70]}
+                      stroke="#475569"
                       style={{ fontSize: '10px' }}
                       tick={{ fill: '#64748b' }}
-                      width={40}
+                      width={30}
+                      tickLine={false}
+                      axisLine={false}
                     />
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: 'rgba(15, 23, 42, 0.98)',
-                        border: '1px solid rgba(6, 182, 212, 0.3)',
+                        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                        border: '1px solid rgba(6, 182, 212, 0.2)',
                         borderRadius: '8px',
                         padding: '6px 10px',
+                        fontSize: '11px',
                       }}
+                      formatter={(value: any) => [Number(value).toFixed(1), 'RSI']}
                     />
-                    <ReferenceLine y={70} stroke="#ef4444" strokeDasharray="3 3" strokeWidth={1} />
-                    <ReferenceLine y={50} stroke="#64748b" strokeDasharray="2 2" strokeWidth={1} opacity={0.3} />
-                    <ReferenceLine y={30} stroke="#10b981" strokeDasharray="3 3" strokeWidth={1} />
-                    <Area
+                    <ReferenceLine y={70} stroke="#ef4444" strokeDasharray="4 3" strokeWidth={1} opacity={0.5} />
+                    <ReferenceLine y={30} stroke="#10b981" strokeDasharray="4 3" strokeWidth={1} opacity={0.5} />
+                    <Line
                       type="monotone"
                       dataKey="rsi"
                       stroke="#06b6d4"
-                      fill="#06b6d4"
-                      fillOpacity={0.2}
-                      strokeWidth={2}
+                      strokeWidth={1.5}
                       dot={false}
                     />
                   </ComposedChart>
@@ -441,34 +474,38 @@ const TechnicalChart: React.FC<TechnicalChartProps> = ({
 
             {/* MACD Chart */}
             {showMACD && (
-              <div style={{ height: '120px' }}>
+              <div style={{ height: `${subChartHeight}px`, flexShrink: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={chartData} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.1)" vertical={false} />
+                  <ComposedChart data={chartData} margin={{ top: 5, right: 50, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148, 163, 184, 0.06)" vertical={false} />
                     <XAxis dataKey="time" hide />
                     <YAxis
-                      stroke="#64748b"
+                      stroke="#475569"
                       style={{ fontSize: '10px' }}
                       tick={{ fill: '#64748b' }}
-                      width={40}
+                      width={30}
+                      tickLine={false}
+                      axisLine={false}
                     />
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: 'rgba(15, 23, 42, 0.98)',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                        border: '1px solid rgba(16, 185, 129, 0.2)',
                         borderRadius: '8px',
                         padding: '6px 10px',
+                        fontSize: '11px',
                       }}
+                      formatter={(value: any, name: string) => [Number(value).toFixed(3), name]}
                     />
-                    <ReferenceLine y={0} stroke="#64748b" strokeWidth={1} />
+                    <ReferenceLine y={0} stroke="#475569" strokeWidth={1} opacity={0.4} />
                     <Bar
                       dataKey="macd_histogram"
                       fill="#10b981"
-                      opacity={0.6}
-                      radius={[2, 2, 2, 2]}
+                      opacity={0.4}
+                      radius={[1, 1, 1, 1]}
                     />
-                    <Line type="monotone" dataKey="macd" stroke="#10b981" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="macd_signal" stroke="#ef4444" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="macd" stroke="#10b981" strokeWidth={1.5} dot={false} />
+                    <Line type="monotone" dataKey="macd_signal" stroke="#ef4444" strokeWidth={1.5} dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>

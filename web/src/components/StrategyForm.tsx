@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Plus, Trash2 } from 'lucide-react';
-import { strategyAPI } from '../lib/api';
+import { X, Save, Plus, Trash2, Calendar } from 'lucide-react';
+import { strategyAPI, marketAPI } from '../lib/api';
 
 interface Leg {
   id?: string;
@@ -35,6 +35,7 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
     trailing_sl_pct: 0,
     entry_time: '09:20',
     exit_time: '15:20',
+    expiry: '',
   };
   const [formData, setFormData] = useState({
     name: initialData?.name || '',
@@ -63,6 +64,42 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [expiryDates, setExpiryDates] = useState<string[]>([]);
+
+  // Fetch expiry dates when underlying changes
+  useEffect(() => {
+    const fetchExpiries = async () => {
+      try {
+        const resp = await marketAPI.getAvailableExpiries(formData.underlying);
+        const data = resp?.data || resp;
+        if (data?.expiries && Array.isArray(data.expiries) && data.expiries.length > 0) {
+          setExpiryDates(data.expiries);
+          if (!formData.parameters.expiry) {
+            setFormData(prev => ({
+              ...prev,
+              parameters: { ...prev.parameters, expiry: data.expiries[0] },
+            }));
+          }
+        } else {
+          // Fallback expiries
+          const today = new Date();
+          const fallback = Array.from({ length: 4 }, (_, i) =>
+            new Date(today.getTime() + (i + 1) * 7 * 86400000).toISOString().split('T')[0]
+          );
+          setExpiryDates(fallback);
+          if (!formData.parameters.expiry) {
+            setFormData(prev => ({
+              ...prev,
+              parameters: { ...prev.parameters, expiry: fallback[0] },
+            }));
+          }
+        }
+      } catch {
+        // Fallback silently
+      }
+    };
+    fetchExpiries();
+  }, [formData.underlying]);
 
   const addLeg = () => {
     setLegs([
@@ -157,6 +194,7 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
     { value: 'NIFTY', label: 'NIFTY50' },
     { value: 'BANKNIFTY', label: 'BANKNIFTY' },
     { value: 'FINNIFTY', label: 'FINNIFTY' },
+    { value: 'NIFTY_IT', label: 'NIFTY IT' },
   ];
   const riskModes = ['CONSERVATIVE', 'BALANCED', 'AGGRESSIVE'];
 
@@ -252,7 +290,15 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
                 }
                 className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
-                <option value="option_spread_15m">Option Spread 15m</option>
+                <optgroup label="Option Strategies">
+                  <option value="option_spread_15m">Option Spread 15m</option>
+                  <option value="option_spread_custom">Option Spread Custom</option>
+                </optgroup>
+                <optgroup label="Stock Strategies">
+                  <option value="stock_momentum_15m">Stock Momentum 15m</option>
+                  <option value="stock_trend_following_15m">Stock Trend Following 15m</option>
+                  <option value="stock_mean_reversion_15m">Stock Mean Reversion 15m</option>
+                </optgroup>
               </select>
             </div>
           </div>
@@ -488,6 +534,47 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
+
+              {/* Expiry Date */}
+              <div className="col-span-2">
+                <label htmlFor="strategy-expiry" className="block text-sm font-medium mb-1 text-slate-200">
+                  <span className="flex items-center gap-2">
+                    <Calendar size={14} />
+                    Expiry Date
+                    <span className="ml-auto px-2 py-0.5 bg-green-900 text-green-200 text-[10px] font-semibold rounded">WEEKLY</span>
+                  </span>
+                </label>
+                <select
+                  id="strategy-expiry"
+                  aria-label="Expiry date"
+                  value={formData.parameters.expiry || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      parameters: {
+                        ...formData.parameters,
+                        expiry: e.target.value,
+                      },
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  {expiryDates.length === 0 ? (
+                    <option value="">Loading expiries...</option>
+                  ) : (
+                    expiryDates.map((expiry) => {
+                      const d = new Date(expiry);
+                      const dte = Math.max(0, Math.ceil((d.getTime() - Date.now()) / 86400000));
+                      return (
+                        <option key={expiry} value={expiry}>
+                          {d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          {' '}({d.toLocaleDateString('en-US', { weekday: 'short' })}) - {dte} day{dte !== 1 ? 's' : ''}
+                        </option>
+                      );
+                    })
+                  )}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -624,7 +711,7 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
                           {leg.type}
                         </span>
                         {' '}{leg.quantity}x {leg.strike} {leg.option_type}
-                        {leg.premium > 0 && ` @ ₹${leg.premium.toFixed(2)}`}
+                        {(leg.premium ?? 0) > 0 && ` @ ₹${(leg.premium ?? 0).toFixed(2)}`}
                       </div>
                     </div>
                   </div>

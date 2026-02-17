@@ -15,7 +15,7 @@ import {
   Database,
   Download
 } from 'lucide-react';
-import { settingsAPI } from '../lib/api';
+import { settingsAPI, mlAPI } from '../lib/api';
 
 interface MLMetrics {
   accuracy: number | null;
@@ -91,9 +91,9 @@ const MLCenter: React.FC = () => {
     if (!isBackfilling) return;
     const poll = setInterval(async () => {
       try {
-        const res = await fetch('http://localhost:8000/ml/backfill-status');
-        if (res.ok) {
-          const data = await res.json();
+        const res = await mlAPI.getBackfillStatus();
+        const data = res.data;
+        if (data) {
           setBackfillStatus(data);
           if (!data.running) {
             setIsBackfilling(false);
@@ -109,9 +109,9 @@ const MLCenter: React.FC = () => {
 
   const loadDataSummary = async () => {
     try {
-      const res = await fetch('http://localhost:8000/ml/data-summary');
-      if (res.ok) {
-        const data = await res.json();
+      const res = await mlAPI.getDataSummary();
+      const data = res.data;
+      if (data) {
         setDataSummary({
           total_symbols: data.total_symbols,
           total_candles: data.total_candles,
@@ -126,12 +126,9 @@ const MLCenter: React.FC = () => {
   const startBackfill = async () => {
     try {
       setIsBackfilling(true);
-      const res = await fetch('http://localhost:8000/ml/backfill', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const res = await mlAPI.backfill();
+      const data = res.data;
+      if (data) {
         setBackfillStatus({
           running: true,
           progress: 0,
@@ -151,11 +148,9 @@ const MLCenter: React.FC = () => {
   const loadMLMetrics = async () => {
     try {
       setRefreshing(true);
-      const response = await fetch('http://localhost:8000/ml/metrics', {
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (response.ok) {
-        const data = await response.json();
+      const response = await mlAPI.getMetrics();
+      const data = response.data;
+      if (data) {
         setMetrics({
           accuracy: data.accuracy,
           precision: data.precision,
@@ -216,22 +211,16 @@ const MLCenter: React.FC = () => {
       setIsTraining(true);
       setTrainingLog('Initiating ML model training...\n');
 
-      const response = await fetch('http://localhost:8000/ml/train', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
+      const response = await mlAPI.train();
+      const data = response.data;
+      if (data) {
         setTrainingLog(prev => prev + `✓ Training completed\n${JSON.stringify(data, null, 2)}`);
         loadMLMetrics();
-      } else {
-        const error = await response.json();
-        setTrainingLog(prev => prev + `✗ Error: ${error.detail || 'Unknown error'}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error training model:', error);
-      setTrainingLog(prev => prev + `✗ Network error: ${error}`);
+      const detail = error?.response?.data?.detail || error?.message || 'Unknown error';
+      setTrainingLog(prev => prev + `✗ Error: ${detail}`);
     } finally {
       setIsTraining(false);
     }

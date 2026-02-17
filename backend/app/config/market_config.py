@@ -115,13 +115,47 @@ SCANNER_STRATEGIES = {
         "ideal_for": TradingStyle.SWING,
         "timeframe": "3-7 days",
         "risk_level": "Medium"
-    }
+    },
+    # ── 15-Minute Intraday Strategies ──────────────────────────────────────
+    "it_sector_momentum_15m": {
+        "name": "IT Sector Momentum (15m)",
+        "description": "Momentum breakout on NIFTY IT stocks using 15-min candles",
+        "criteria": "ADX > 25, RSI 50-70, EMA20 > EMA50, Volume > 1.3x avg",
+        "ideal_for": TradingStyle.INTRADAY,
+        "timeframe": "15 minutes",
+        "risk_level": "Medium",
+        "universe": "NIFTY_IT",
+        "min_adx": 25,
+        "min_rsi": 50,
+        "max_rsi": 70,
+        "volume_threshold": 1.3,
+    },
+    "nifty50_mean_reversion_15m": {
+        "name": "NIFTY 50 Mean Reversion (15m)",
+        "description": "Mean reversion on oversold/overbought NIFTY 50 stocks",
+        "criteria": "RSI < 30 or RSI > 70, Bollinger Band touch, Volume spike",
+        "ideal_for": TradingStyle.INTRADAY,
+        "timeframe": "15 minutes",
+        "risk_level": "Medium-High",
+        "universe": "NIFTY50",
+        "volume_threshold": 1.5,
+    },
+    "index_option_scalp_15m": {
+        "name": "Index Option Scalp (15m)",
+        "description": "Quick option spreads on NIFTY/BANKNIFTY using 15-min TA signals",
+        "criteria": "ADX > 20, Clear EMA crossover, RSI confirming trend",
+        "ideal_for": TradingStyle.INTRADAY,
+        "timeframe": "15 minutes",
+        "risk_level": "High",
+        "universe": "NIFTY50",
+        "min_adx": 20,
+    },
 }
 
 # Sector Classifications
 SECTOR_CLASSIFICATION = {
     "Banking & Finance": ["HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "INDUSINDBK", "BAJFINANCE", "BAJAJFINSV"],
-    "IT": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM"],
+    "IT": ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS"],
     "Auto": ["MARUTI", "TATAMOTORS", "EICHERMOT", "HEROMOTOCO", "BAJAJ-AUTO", "M&M"],
     "Pharma": ["SUNPHARMA", "DRREDDY", "APOLLOHOSP", "DIVISLAB", "CIPLA"],
     "Energy": ["RELIANCE", "ONGC", "NTPC", "POWERGRID", "BPCL", "COALINDIA"],

@@ -63,12 +63,14 @@ export const StrategyManager: React.FC = () => {
     'NIFTY',
     'BANKNIFTY',
     'FINNIFTY',
+    'NIFTY_IT',
   ]);
 
   const underlyingLabels: Record<string, string> = {
     NIFTY: 'NIFTY50',
     BANKNIFTY: 'BANKNIFTY',
     FINNIFTY: 'FINNIFTY',
+    NIFTY_IT: 'NIFTY IT',
   };
 
   // Load strategies on mount
@@ -130,6 +132,10 @@ export const StrategyManager: React.FC = () => {
         lots: 2,
         risk_mode: 'Conservative',
         min_confidence: 75,
+        spot: suggestion.spot || 0,
+        atm: suggestion.atm || 0,
+        ticket: suggestion.ticket || null,
+        risk_metrics: suggestion.risk_metrics || null,
       };
 
       const response = await strategyAPI.createFromSuggestion(payload);
@@ -328,7 +334,7 @@ export const StrategyManager: React.FC = () => {
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          {['NIFTY', 'BANKNIFTY', 'FINNIFTY'].map((u) => {
+          {['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'NIFTY_IT'].map((u) => {
             const active = suggestionUnderlyings.includes(u);
             return (
               <button
@@ -529,8 +535,8 @@ export const StrategyManager: React.FC = () => {
                   <span
                     className={`px-2 py-0.5 rounded text-xs font-medium ${
                       strategy.enabled
-                        ? 'bg-green-100 text-green-700'
-                        : 'bg-gray-100 text-gray-700'
+                        ? 'bg-green-900/50 text-green-300'
+                        : 'bg-slate-700 text-slate-400'
                     }`}
                   >
                     {strategy.enabled ? 'Enabled' : 'Disabled'}
@@ -539,9 +545,9 @@ export const StrategyManager: React.FC = () => {
               </div>
 
               {/* Parameters Preview */}
-              <div className="bg-gray-50 rounded p-2 text-xs">
-                <div className="font-semibold mb-1">Parameters:</div>
-                <div className="space-y-0.5 text-gray-600">
+              <div className="bg-slate-900 rounded p-2 text-xs">
+                <div className="font-semibold mb-1 text-slate-300">Parameters:</div>
+                <div className="space-y-0.5 text-slate-400">
                   {Object.entries(strategy.parameters).slice(0, 3).map(([key, value]) => (
                     <div key={key}>
                       {key}: {typeof value === 'object' ? JSON.stringify(value) : String(value)}
@@ -567,8 +573,8 @@ export const StrategyManager: React.FC = () => {
                   aria-label={strategy.enabled ? 'Disable strategy' : 'Enable strategy'}
                   className={`flex items-center justify-center px-3 py-2 rounded text-sm ${
                     strategy.enabled
-                      ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
-                      : 'bg-green-100 text-green-700 hover:bg-green-200'
+                      ? 'bg-yellow-900/40 text-yellow-300 hover:bg-yellow-900/60'
+                      : 'bg-green-900/40 text-green-300 hover:bg-green-900/60'
                   }`}
                 >
                   {strategy.enabled ? <Pause size={14} /> : <Play size={14} />}
@@ -581,8 +587,8 @@ export const StrategyManager: React.FC = () => {
                   aria-label="Edit strategy"
                   className={`flex items-center justify-center px-3 py-2 rounded text-sm ${
                     strategy.enabled
-                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                      : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                      ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                      : 'bg-blue-900/40 text-blue-300 hover:bg-blue-900/60'
                   }`}
                 >
                   <Edit2 size={14} />
@@ -592,7 +598,7 @@ export const StrategyManager: React.FC = () => {
                   onClick={() => handleDelete(strategy.id)}
                   title="Delete strategy"
                   aria-label="Delete strategy"
-                  className="flex items-center justify-center px-3 py-2 bg-red-100 text-red-700 rounded hover:bg-red-200"
+                  className="flex items-center justify-center px-3 py-2 bg-red-900/40 text-red-300 rounded hover:bg-red-900/60"
                 >
                   <Trash2 size={14} />
                 </button>
