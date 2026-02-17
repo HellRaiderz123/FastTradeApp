@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 import os
+import json
 import logging
 from pathlib import Path
 from typing import Dict
@@ -491,4 +492,43 @@ def send_test_email(subject: str = "FastTrade Test", body: str = "This is a test
         return {"status": "success", "message": "Test email sent"}
     except Exception as e:
         logger.error(f"Error sending test email: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+# ============ ML Settings ============
+
+@router.get("/ml")
+def get_ml_settings():
+    """Get ML settings from localStorage-like storage"""
+    try:
+        settings_file = Path("data/ml_settings.json")
+        if settings_file.exists():
+            with open(settings_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        
+        # Default settings
+        return {
+            "enabled": True,
+            "confidence_threshold": 0.65,
+            "auto_train_enabled": False,
+            "retraining_frequency": "weekly"
+        }
+    except Exception as e:
+        logger.error(f"Error loading ML settings: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/ml")
+def save_ml_settings(data: dict):
+    """Save ML settings"""
+    try:
+        settings_dir = Path("data")
+        settings_dir.mkdir(parents=True, exist_ok=True)
+        
+        settings_file = settings_dir / "ml_settings.json"
+        with open(settings_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        
+        return {"status": "success", "message": "ML settings saved"}
+    except Exception as e:
+        logger.error(f"Error saving ML settings: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))

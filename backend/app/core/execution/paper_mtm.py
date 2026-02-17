@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 import os
 from typing import cast
 from app.core.market.ltp import get_ltp
@@ -10,24 +10,56 @@ from app.core.broker.zerodha.client import get_kite_client
 from app.core.execution.paper import PaperExecutionAdapter
 from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_mode
+from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 
 EXECUTION_MODE = os.getenv("EXECUTION_MODE")  # legacy; do not rely on this at runtime
 
-def calculate_spread_mtm(ticket: dict, entry_credit: float) -> float:
+def calculate_spread_mtm(
+    ticket: dict,
+    entry_credit: float,
+    underlying: str = "NIFTY",
+    expiry: date | None = None,
+) -> float:
     """
     MTM = entry_credit - current_cost_to_close
-    """
 
+    FIX: Previously built symbols as f'{strike}{type}' (e.g. "26000CE") which is
+    not a valid Zerodha symbol. get_ltp() expects full NSE symbols like
+    "NIFTY2601026000CE". All MTM values were silently 0 or wrong.
+
+    Now uses build_zerodha_option_symbol() — same builder used by the execution
+    adapter — so LTP lookups return real prices.
+    """
     symbols = []
-    for leg in ticket["legs"]:
-        symbols.append(f'{leg["strike"]}{leg["type"]}')
+    sym_map = {}  # maps leg index → full symbol
+
+    for i, leg in enumerate(ticket["legs"]):
+        # Use pre-stored symbol if available (set during execution)
+        sym = leg.get("symbol")
+        if not sym and expiry is not None:
+            sym = build_zerodha_option_symbol(
+                underlying=underlying,
+                expiry=expiry,
+                strike=int(leg["strike"]),
+                option_type=str(leg["type"]),
+            )
+        if sym:
+            symbols.append(sym)
+            sym_map[i] = sym
+
+    if not symbols:
+        return 0.0
 
     ltp = get_ltp(symbols)
 
     current_cost = 0.0
-    for leg in ticket["legs"]:
-        sym = f'{leg["strike"]}{leg["type"]}'
-        price = ltp[sym]
+    for i, leg in enumerate(ticket["legs"]):
+        sym = sym_map.get(i)
+        if not sym:
+            continue
+        price = ltp.get(sym)
+        if price is None:
+            continue
 
         if leg["side"] == "SELL":
             current_cost += price

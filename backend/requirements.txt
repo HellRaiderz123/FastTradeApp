@@ -56,4 +56,4 @@ psutil==5.9.8
 websockets==12.0
 
 
-APScheduler
+APScheduler==3.10.4

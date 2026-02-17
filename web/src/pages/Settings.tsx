@@ -77,7 +77,7 @@ const Settings: React.FC = () => {
     loadZerodhaSettings();
     loadNotificationSettings();
     loadTradingSettings();
-    //loadMlSettings();
+    loadMlSettings();
     // Refresh every 5 seconds to sync with backend
     const interval = setInterval(() => {
       //loadZerodhaSettings();
@@ -144,6 +144,31 @@ const Settings: React.FC = () => {
       });
     } catch (error) {
       console.error('Error loading notification settings:', error);
+    }
+  };
+
+  const loadMlSettings = () => {
+    try {
+      const stored = localStorage.getItem('ml_settings');
+      if (stored) {
+        setMlSettings(JSON.parse(stored));
+      }
+    } catch (error) {
+      console.error('Error loading ML settings:', error);
+    }
+  };
+
+  const saveMlSettings = async () => {
+    try {
+      setMlSaving(true);
+      localStorage.setItem('ml_settings', JSON.stringify(mlSettings));
+      setMlMessage('✓ ML settings saved');
+      setTimeout(() => setMlMessage(''), 3000);
+    } catch (error) {
+      console.error('Error saving ML settings:', error);
+      setMlMessage('Error saving ML settings');
+    } finally {
+      setMlSaving(false);
     }
   };
 
@@ -877,7 +902,14 @@ const Settings: React.FC = () => {
             </div>
           </div>
 
-           
+          <button
+            onClick={saveMlSettings}
+            disabled={mlSaving}
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+          >
+            <Save className="w-4 h-4" />
+            {mlSaving ? 'Saving...' : 'Save ML Settings'}
+          </button>
 
           {mlMessage && (
             <div className={`p-3 rounded-lg text-sm font-semibold ${

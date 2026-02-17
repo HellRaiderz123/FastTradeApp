@@ -17,6 +17,7 @@ import { systemAPI } from './lib/api';
 import { useTradeStore } from './lib/store';
 import FinanceTracker from './pages/FinanceTracker';
 import Calendar from './pages/Calendar';
+import MLCenter from './pages/MLCenter';
 
 // Simple Error Boundary to avoid white screen and show errors
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }>{
@@ -81,6 +82,7 @@ function App() {
                 <Route path="/screener" element={<Screener />} />
                 <Route path="/heatmap" element={<Heatmap />} />
                 <Route path="/options" element={<OptionsChain />} />
+                <Route path="/ml" element={<MLCenter />} />
                 <Route path="/strategies" element={<Strategies />} />
                 <Route path="/strategies/builder" element={<StrategyBuilder />} />
                 <Route path="/backtest" element={<Backtest />} />

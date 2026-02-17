@@ -1,8 +1,3 @@
-// Position APIs
-export const positionsAPI = {
-  updateTPSL: (intentId: string, { tp, sl, trailing_sl }: { tp?: number; sl?: number; trailing_sl?: number }) =>
-    api.patch(`/intent/${intentId}/update_tp_sl`, { tp, sl, trailing_sl }),
-};
 import axios from 'axios';
 
 // Default to Vite dev proxy (/api). Override via VITE_API_BASE if needed.
@@ -303,6 +298,13 @@ export const settingsAPI = {
 
   sendTestEmail: (subject?: string, body?: string) =>
     api.post('/settings/notifications/gmail/test', null, { params: { subject, body } }),
+
+  // ML Settings
+  getMLSettings: () =>
+    api.get('/settings/ml'),
+
+  saveMLSettings: (data: { enabled: boolean; confidence_threshold: number; auto_train_enabled: boolean; retraining_frequency: string }) =>
+    api.post('/settings/ml', data),
 };
 
 // Finance APIs
@@ -342,3 +344,11 @@ export const financeAPI = {
 };
 
 export default api;
+
+// FIX: positionsAPI was previously declared BEFORE the `api` axios instance was
+// created, causing a ReferenceError (Temporal Dead Zone) at runtime whenever
+// updateTPSL was called. Moved here so `api` is guaranteed to exist.
+export const positionsAPI = {
+  updateTPSL: (intentId: string, { tp, sl, trailing_sl }: { tp?: number; sl?: number; trailing_sl?: number }) =>
+    api.patch(`/intent/${intentId}/update_tp_sl`, { tp, sl, trailing_sl }),
+};

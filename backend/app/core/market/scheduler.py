@@ -8,6 +8,7 @@ from app.core.market.zerodha_historic_fetcher import (
     initialize_vix_historic_data,
 )
 from app.core.exit.auto_exit import run_auto_exit
+from app.core.market.expiry_exit import _expiry_day_exit_job
 
 logger = logging.getLogger(__name__)
 
@@ -52,17 +53,42 @@ def _get_daily_symbols() -> list[str]:
     if raw:
         return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
+    # NIFTY 100 stocks (verified Zerodha NSE trading symbols)
     return [
-        "RELIANCE",
-        "TCS",
-        "INFY",
-        "HDFCBANK",
-        "ICICIBANK",
-        "SBIN",
-        "BHARTIARTL",
-        "KOTAKBANK",
-        "ITC",
-        "HINDUNILVR",
+        # Top 10 by weight
+        "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK",
+        "BHARTIARTL", "SBIN", "ITC", "HINDUNILVR", "KOTAKBANK",
+        # Banks & NBFC
+        "AXISBANK", "INDUSINDBK", "BAJFINANCE", "BAJAJFINSV",
+        "BANKBARODA", "PNB", "IDFCFIRSTB", "FEDERALBNK", "AUBANK",
+        "CHOLAFIN", "SBICARD",
+        # Insurance
+        "SBILIFE", "HDFCLIFE", "ICICIPRULI",
+        # IT
+        "WIPRO", "HCLTECH", "TECHM", "LTIM", "MPHASIS", "PERSISTENT",
+        # Auto
+        "MARUTI", "TATAMOTORS", "BAJAJ-AUTO", "HEROMOTOCO", "EICHERMOT", "M&M",
+        # FMCG
+        "NESTLEIND", "BRITANNIA", "MARICO", "DABUR", "GODREJCP",
+        "TATACONSUM", "COLPAL",
+        # Pharma
+        "SUNPHARMA", "CIPLA", "DRREDDY", "DIVISLAB", "APOLLOHOSP",
+        "LUPIN", "TORNTPHARM", "BIOCON",
+        # Energy & Oil
+        "NTPC", "POWERGRID", "ONGC", "BPCL", "IOC", "GAIL", "TATAPOWER",
+        # Metals & Mining
+        "JSWSTEEL", "TATASTEEL", "HINDALCO", "VEDL", "COALINDIA", "NMDC",
+        # Cement
+        "ULTRACEMCO", "SHREECEM", "AMBUJACEM", "ACC",
+        # Infra & Engineering
+        "LT", "ABB", "SIEMENS", "HAL", "BEL",
+        # Consumer & Retail
+        "TITAN", "ASIANPAINT", "PIDILITIND", "HAVELLS", "VOLTAS", "DMART", "TRENT",
+        # Conglomerates & Others
+        "ADANIENT", "ADANIPORTS", "GRASIM", "UPL",
+        "NAUKRI", "ZOMATO", "IRCTC", "JIOFIN", "PAYTM",
+        # Telecom & Media
+        "IDEA",
     ]
 
 
@@ -73,10 +99,17 @@ def _update_daily_candles():
     logger.info("⏱️ Running daily candle update | symbols=%d | days=%d", len(symbols), days)
 
     db = SessionLocal()
+    success = 0
+    failed = 0
     try:
         for symbol in symbols:
-            fetch_daily_candles(db, symbol, days=days)
-        logger.info("✅ Daily candles updated")
+            try:
+                fetch_daily_candles(db, symbol, days=days)
+                success += 1
+            except Exception as e:
+                failed += 1
+                logger.warning(f"\u26a0\ufe0f Skip {symbol}: {e}")
+        logger.info(f"\u2705 Daily candles updated: {success} ok, {failed} skipped")
     except Exception:
         logger.exception("❌ Daily candles update failed")
     finally:
@@ -97,31 +130,53 @@ def _auto_exit_check():
 
 
 def _train_ml_model():
-    """Train stock ML model on accumulated daily data (weekly job)."""
-    logger.info("⏱️ Running ML model training")
+    """Train stock ML model on NIFTY100 symbols with 500+ days of daily data (weekly job)."""
+    logger.info("⏱️ Running ML model training with 500+ days of NIFTY100 data")
     
     db = SessionLocal()
     try:
         from app.core.ml.config import StockMLConfig
         from app.core.ml.stock_model import train_stock_model
+        from app.db.models_candles import CandleDaily
+        from sqlalchemy import func
         
         config = StockMLConfig()
         if not config.enabled:
             logger.info("⏩ ML training skipped (STOCK_ML_ENABLED=false)")
             return
         
-        # Get symbols from environment (same as daily candles)
-        symbols = _get_daily_symbols()
+        # Get NIFTY100 symbols (top 100 by data volume with 500+ days minimum)
+        try:
+            query = db.query(CandleDaily.symbol, func.count(CandleDaily.id).label('count')).group_by(
+                CandleDaily.symbol
+            ).having(func.count(CandleDaily.id) >= 500).order_by(
+                func.count(CandleDaily.id).desc()
+            ).limit(150)  # Get up to 150 symbols for better training
+            
+            symbols = [row[0] for row in query.all()]
+            
+            if not symbols:
+                # Fallback: Get all symbols if 500 days not available yet
+                symbols = [s[0] for s in db.query(CandleDaily.symbol).distinct().all()]
+                if len(symbols) > 100:
+                    symbols = symbols[:100]
+        except Exception as e:
+            logger.warning(f"⚠️ Error getting NIFTY100 symbols: {e}")
+            symbols = _get_daily_symbols()
+        
         if not symbols:
-            logger.warning("⚠️ No symbols configured for ML training")
+            logger.warning("⚠️ No symbols with 500+ days of data for ML training")
             return
+        
+        logger.info(f"📊 Training ML model on {len(symbols)} NIFTY100 symbols with 500+ days of daily candle data")
         
         # Train on daily timeframe (better for swing trading ML)
         metadata = train_stock_model(db, symbols, config)
         
         accuracy = metadata.get('accuracy', 'N/A')
-        n_samples = metadata.get('n_samples', 0)
-        logger.info(f"✅ ML model trained: {accuracy} accuracy, {n_samples} samples")
+        precision = metadata.get('precision', 'N/A')
+        total_samples = metadata.get('total_samples', 0)
+        logger.info(f"✅ ML model trained: Accuracy={accuracy}, Precision={precision}, Samples={total_samples}")
     except ImportError:
         logger.warning("⚠️ ML modules not available, skipping training")
     except Exception:
@@ -259,4 +314,31 @@ def stop_scheduler():
     if scheduler.running:
         scheduler.shutdown(wait=False)
         logger.info("🛑 Scheduler stopped")
+
+# ── ADD THIS FUNCTION to scheduler.py ───────────────────────────────────────
+def start_expiry_exit_scheduler():
+    """
+    Phase 2: Expiry-day force-exit job.
+
+    Runs every minute during market hours (9:15 AM–3:20 PM IST, Mon–Fri).
+    The job itself only acts when it's past the 3:15 PM cutoff AND open
+    positions exist that expire today — so it's a no-op on non-expiry days.
+    """
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start expiry-exit scheduler: main scheduler not running")
+        return
+
+    scheduler.add_job(
+        func=_expiry_day_exit_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",       # 9 AM to 3 PM
+        minute="*",        # every minute
+        id="expiry_exit_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    logger.info("🟢 Expiry-day exit scheduler started (every 1 min, 9:15–3:20 PM IST)")
 

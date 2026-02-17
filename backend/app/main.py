@@ -48,13 +48,15 @@ from app.api.routes import alerts
 from app.api.routes import stock_news
 from app.api.routes import timeframe_suggestions
 from app.api.routes import peer_comparison
+from app.api.routes import safety
+from app.api.routes import ml
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
     start_daily_candles_scheduler,
     start_vix_scheduler,
     start_auto_exit_scheduler,
-    start_ml_training_scheduler,
+    start_expiry_exit_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -72,10 +74,10 @@ setup_logging(log_level=log_level, json_logs=json_logs)
 
 logger = logging.getLogger(__name__)
 
-# Debug: Show loaded environment variables
+# Safe env check — log presence only, never log key length or content
 newsdata_key = os.getenv("NEWSDATA_API_KEY", "")
 zerodha_key = os.getenv("ZERODHA_API_KEY", "")
-logger.info(f"📝 Environment loaded: NEWSDATA_API_KEY={bool(newsdata_key)} (len={len(newsdata_key) if newsdata_key else 0}), ZERODHA_API_KEY={bool(zerodha_key)}")
+logger.info(f"📝 Environment loaded: NEWSDATA_API_KEY={'✅' if newsdata_key else '❌ MISSING'}, ZERODHA_API_KEY={'✅' if zerodha_key else '❌ MISSING'}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -100,12 +102,16 @@ async def lifespan(app: FastAPI):
         start_daily_candles_scheduler()
         start_vix_scheduler()
         start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
-        start_ml_training_scheduler()  # Weekly ML model training
-        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + ML training")
+        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
     
     # Start WebSocket background tasks
+    # FIX: Initialize to None before try block — prevents NameError on shutdown
+    # if task creation fails mid-way.
+    mtm_task = None
+    health_task = None
+    db = None
     try:
         from app.services.websocket import periodic_mtm_updates, periodic_system_health
         from app.db.session import SessionLocal
@@ -126,13 +132,18 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 App shutting down")
     stop_scheduler()
     
-    # Cancel background tasks
-    try:
+    # Cancel background tasks (guard against None if startup failed)
+    if mtm_task:
         mtm_task.cancel()
+    if health_task:
         health_task.cancel()
+    if mtm_task or health_task:
         logger.info("✅ Background tasks cancelled")
-    except:
-        pass
+
+    # FIX: Always close the DB session opened at startup
+    if db:
+        db.close()
+        logger.info("✅ Startup DB session closed")
 
 
 app = FastAPI(
@@ -222,6 +233,7 @@ app.include_router(paper_mtm_router)
 app.include_router(exit_router)
 app.include_router(auto_exit_router)
 app.include_router(system_router)
+app.include_router(ml.router)
 #  Phase 5 Features
 app.include_router(notifications.router)
 app.include_router(websocket_routes.router)
@@ -237,5 +249,6 @@ app.include_router(config_routes.router)
 app.include_router(stock_news.router)
 app.include_router(timeframe_suggestions.router)
 app.include_router(peer_comparison.router)
+app.include_router(safety.router)
 
 logger.info(" All routers registered (including Phase 5 features)")
