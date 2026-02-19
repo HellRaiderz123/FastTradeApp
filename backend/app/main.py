@@ -51,6 +51,7 @@ from app.api.routes import peer_comparison
 from app.api.routes import safety
 from app.api.routes import ml
 from app.api.routes import candles
+from app.api.routes import zerodha_broker
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
@@ -253,5 +254,6 @@ app.include_router(timeframe_suggestions.router)
 app.include_router(peer_comparison.router)
 app.include_router(safety.router)
 app.include_router(candles.router)
+app.include_router(zerodha_broker.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

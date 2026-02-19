@@ -146,6 +146,10 @@ def create_strategy_from_suggestion(
     if request.risk_metrics and isinstance(request.risk_metrics, dict):
         parameters["risk_metrics"] = request.risk_metrics
     
+    # Extract expiry from ticket if available (needed for execution)
+    if request.ticket and isinstance(request.ticket, dict) and "expiry" in request.ticket:
+        parameters["expiry"] = request.ticket["expiry"]
+    
     # Create the description
     description = f"Auto-created from suggestion: {request.reason} (Confidence: {request.confidence:.1f}%)"
     

@@ -362,6 +362,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "SELL",
@@ -397,6 +398,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "SELL",
@@ -454,6 +456,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "SELL",
@@ -489,6 +492,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "BUY",
@@ -524,6 +528,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "SELL",
@@ -559,6 +564,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "BUY",
@@ -594,6 +600,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "BUY",
@@ -641,6 +648,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "SELL",
@@ -687,6 +695,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
+            "expiry": str(expiry),  # Add expiry for strategy creation
             "legs": [
                 {
                     "side": "SELL",
@@ -736,6 +745,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # =====================================================
     # 8️⃣ FINAL RESPONSE
     # =====================================================
+    # Add expiry to context so intent creation can access it
+    ctx["expiry"] = expiry
+    
     result = {
         "strategy": strategy_mode,
         "approved": True,
@@ -747,6 +759,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         "spot": spot,
         "atm": atm,
         "strike_meta": strikes["meta"],
+        "expiry": expiry,  # Include at top level for easy access
     }
 
     run = _log_strategy_run(result, payload["underlying"])

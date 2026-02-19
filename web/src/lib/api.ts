@@ -377,7 +377,86 @@ export const financeAPI = {
     api.delete('/finance/transactions'),
 
   deleteTransaction: (transactionId: number) =>
-  api.delete(`/finance/transactions/${transactionId}`),
+    api.delete(`/finance/transactions/${transactionId}`),
+
+  // ========== RECURRING TRANSACTIONS ==========
+  createRecurringTransaction: (payload: any) =>
+    api.post('/finance/recurring', payload),
+
+  getRecurringTransactions: () =>
+    api.get('/finance/recurring'),
+
+  updateRecurringTransaction: (recurringId: number, isActive: boolean) =>
+    api.patch(`/finance/recurring/${recurringId}`, { is_active: isActive }),
+
+  deleteRecurringTransaction: (recurringId: number) =>
+    api.delete(`/finance/recurring/${recurringId}`),
+
+  // ========== BUDGETS ==========
+  createBudget: (payload: any) =>
+    api.post('/finance/budgets', payload),
+
+  getBudgets: (month?: string) =>
+    api.get('/finance/budgets', { params: { month } }),
+
+  getBudgetStatus: (category: string, month?: string) =>
+    api.get(`/finance/budgets/status/${category}`, { params: { month } }),
+
+  deleteBudget: (budgetId: number) =>
+    api.delete(`/finance/budgets/${budgetId}`),
+
+  // ========== SAVINGS GOALS ==========
+  createSavingsGoal: (payload: any) =>
+    api.post('/finance/goals', payload),
+
+  getSavingsGoals: () =>
+    api.get('/finance/goals'),
+
+  updateSavingsGoalAmount: (goalId: number, amount: number) =>
+    api.patch(`/finance/goals/${goalId}`, { amount }),
+
+  deleteSavingsGoal: (goalId: number) =>
+    api.delete(`/finance/goals/${goalId}`),
+
+  // ========== BILL REMINDERS ==========
+  createBillReminder: (payload: any) =>
+    api.post('/finance/bills', payload),
+
+  getBillReminders: () =>
+    api.get('/finance/bills'),
+
+  markBillPaid: (billId: number) =>
+    api.patch(`/finance/bills/${billId}/pay`),
+
+  deleteBillReminder: (billId: number) =>
+    api.delete(`/finance/bills/${billId}`),
+
+  // ========== EXPENSE FORECASTING ==========
+  generateForecast: (category: string, monthsBack?: number) =>
+    api.post(`/finance/forecast/${category}`, { months_back: monthsBack || 3 }),
+
+  getExpenseForecasts: (month?: string) =>
+    api.get('/finance/forecast', { params: { month } }),
+
+  // ========== CURRENCY EXCHANGE ==========
+  setExchangeRate: (fromCurrency: string, toCurrency: string, rate: number) =>
+    api.post(`/finance/currency/${fromCurrency}/${toCurrency}/${rate}`),
+
+  getExchangeRate: (fromCurrency: string, toCurrency: string) =>
+    api.get(`/finance/currency/${fromCurrency}/${toCurrency}`),
+
+  getAllExchangeRates: () =>
+    api.get('/finance/currency'),
+
+  // ========== ZERODHA POSITIONS SECTION ==========
+  getZerodhaPositions: () =>
+    api.get('/zerodha/positions'),
+
+  getZerodhaOrders: () =>
+    api.get('/zerodha/orders'),
+
+  getZerodhaHoldings: () =>
+    api.get('/zerodha/holdings'),
 };
 
 export default api;

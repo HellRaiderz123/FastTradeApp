@@ -125,6 +125,16 @@ def create_intent(
     expiry = None
     if run.context and isinstance(run.context, dict):
         expiry = run.context.get("expiry")
+    
+    # If expiry not in context, try to get current weekly expiry as fallback
+    if not expiry:
+        from app.core.market.expiry import get_current_weekly_expiry
+        try:
+            expiry = get_current_weekly_expiry(run.underlying)
+            logger.info(f"📅 Expiry not in context, using current weekly expiry: {expiry} for {run.underlying}")
+        except Exception as e:
+            logger.warning(f"⚠️  Could not determine expiry for {run.underlying}: {e}")
+            # Let execution adapter handle missing expiry
 
     # Extract trailing_sl_pct from strategy configuration (if available)
     # Note: StrategyRun doesn't have strategy_config relationship, so we safely default to None

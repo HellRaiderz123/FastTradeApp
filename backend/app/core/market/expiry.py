@@ -78,6 +78,8 @@ def get_current_weekly_expiry(underlying: str) -> date:
     - FINNIFTY: Tuesday
     - BANKNIFTY: Wednesday
     - MIDCPNIFTY: Monday
+    
+    Note: Always returns at least the nearest expiry, even if it's monthly.
     """
     today = date.today()
     weekday_today = today.weekday()  # Monday=0
@@ -88,14 +90,29 @@ def get_current_weekly_expiry(underlying: str) -> date:
 
     days_ahead = (expiry_weekday - weekday_today) % 7
     
-    # If today is the expiry day, skip to next week
+    # If today is the expiry day, check if market has closed
     if days_ahead == 0:
-        days_ahead = 7
+        from datetime import datetime, timezone
+        try:
+            from zoneinfo import ZoneInfo
+            ist_tz = ZoneInfo("Asia/Kolkata")
+        except:
+            ist_tz = timezone(timedelta(hours=5, minutes=30))
+        
+        now_ist = datetime.now(ist_tz)
+        market_close_time = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+        
+        if now_ist >= market_close_time:
+            # Market closed, skip to next week
+            days_ahead = 7
+        # else: days_ahead stays 0, meaning today is still valid
     
     expiry = today + timedelta(days=days_ahead)
     
-    # Skip monthly expiry (last occurrence of weekday in month) and get next weekly
-    if _is_last_weekday_of_month(expiry):
+    # If the calculated expiry is monthly (last occurrence of weekday in month),
+    # check if we can skip to the next weekly expiry
+    if _is_last_weekday_of_month(expiry) and days_ahead > 0:
+        # Only skip monthly if it's not today's expiry
         expiry = expiry + timedelta(days=7)
     
     return expiry

@@ -12,9 +12,58 @@ from app.core.broker.zerodha.client import get_kite_client
 from app.core.utils.time import now_ist
 from app.db.models_intent import ExecutionIntent
 from app.db.session import SessionLocal
+from app.services.zerodha_ticker import get_cached_ltp as get_ticker_ltp
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["WebSocket"])
+
+
+def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) -> float:
+    """
+    Get MTM using adapter, preferring live ticker cache for Zerodha positions.
+    Falls back to REST API if ticker cache unavailable.
+    """
+    if not is_zerodha:
+        # For paper, always use adapter MTM
+        return adapter.mtm(intent)
+    
+    # For Zerodha, try to use live ticker cache for faster updates
+    try:
+        ticket = intent.ticket or {}
+        
+        pnl_per_unit = 0.0
+        all_cached = True
+        
+        for leg in ticket.get("legs", []):
+            symbol = leg.get("symbol")
+            if not symbol:
+                all_cached = False
+                break
+            
+            # Try ticker cache first
+            current_price = get_ticker_ltp(symbol)
+            if current_price is None:
+                all_cached = False
+                break
+            
+            entry_price = leg.get("price")
+            if entry_price is None:
+                all_cached = False
+                break
+            
+            leg_qty = int(leg.get("qty", 1))
+            sign = 1.0 if leg["side"] == "SELL" else -1.0
+            pnl_per_unit += (float(entry_price) - float(current_price)) * sign * leg_qty
+        
+        if all_cached:
+            # All prices available from ticker cache: use them
+            logger.debug(f"📡 Using live ticker cache for {intent.intent_id}")
+            return round(pnl_per_unit, 2)
+    except Exception as e:
+        logger.debug(f"⚠️  Ticker cache lookup failed for {intent.intent_id}: {e}")
+    
+    # Fallback to adapter MTM (REST API)
+    return adapter.mtm(intent)
 
 
 @router.websocket("/ws/positions")
@@ -62,24 +111,21 @@ async def ws_positions(websocket: WebSocket):
                     if not is_open:
                         continue
 
-                    # Support both PAPER and ZERODHA_DRY_RUN modes
+                    # Support PAPER, ZERODHA_DRY_RUN, ZERODHA_LIVE, and ZERODHA_LIVE_DIRECT modes
                     mode = None
                     if isinstance(intent.execution_result, dict):
                         mode = intent.execution_result.get("mode")
                     
-                    # Skip only ZERODHA_LIVE mode for safety
-                    if mode and str(mode).upper() == "ZERODHA_LIVE":
-                        logger.debug(f"⏭️  Skipping ZERODHA_LIVE intent {intent.intent_id}")
-                        continue
-
                     # Use appropriate adapter based on mode
-                    if mode and "ZERODHA" in str(mode).upper() and zerodha_adapter:
+                    is_zerodha_mode = mode and "ZERODHA" in str(mode).upper()
+                    if is_zerodha_mode and zerodha_adapter:
                         adapter = zerodha_adapter
                     else:
                         adapter = paper_adapter
 
                     try:
-                        mtm = adapter.mtm(intent)
+                        # For Zerodha, prefer live ticker cache; fallback to REST API
+                        mtm = _try_get_mtm_with_ticker_cache(adapter, intent, is_zerodha_mode)
                         setattr(intent, "pnl", mtm)
                         setattr(intent, "unrealized_pnl", mtm)
                         setattr(intent, "last_mtm_at", now_ist())
@@ -91,7 +137,7 @@ async def ws_positions(websocket: WebSocket):
 
                     # Backfill margin for Zerodha modes if missing
                     try:
-                        if mode and "ZERODHA" in str(mode).upper() and zerodha_adapter:
+                        if is_zerodha_mode and zerodha_adapter:
                             mr = getattr(intent, "margin_required", None)
                             if (mr is None) or (float(mr or 0) <= 0):
                                 computed_mr = zerodha_adapter.calculate_margin_required(intent)

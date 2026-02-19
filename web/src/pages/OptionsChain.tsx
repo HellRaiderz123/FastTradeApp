@@ -286,7 +286,7 @@ const OptionsChain: React.FC = () => {
                         </span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">{strike.call?.iv.toFixed(1)}%</span>
+                        <span className="text-slate-300 text-xs">{strike.call?.iv ? strike.call.iv.toFixed(1) : '—'}%</span>
                       </td>
                       {showGreeks && (
                         <>
@@ -294,21 +294,21 @@ const OptionsChain: React.FC = () => {
                             className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}
                           >
                             <span className={`text-xs font-medium ${getDeltaColor(strike.call?.delta || 0)}`}>
-                              {strike.call?.delta.toFixed(2)}
+                              {strike.call?.delta ? strike.call.delta.toFixed(2) : '—'}
                             </span>
                           </td>
                           <td
                             className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}
                           >
                             <span className="text-slate-300 text-xs">
-                              {strike.call?.theta.toFixed(2)}
+                              {strike.call?.theta ? strike.call.theta.toFixed(2) : '—'}
                             </span>
                           </td>
                         </>
                       )}
                       <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
                         <span className="text-white font-medium">
-                          {strike.call?.ltp.toFixed(2)}
+                          {strike.call?.ltp ? strike.call.ltp.toFixed(2) : '—'}
                         </span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
@@ -320,7 +320,7 @@ const OptionsChain: React.FC = () => {
                           }`}
                         >
                           {(strike.call?.change_percent || 0) >= 0 ? '+' : ''}
-                          {strike.call?.change_percent.toFixed(1)}%
+                          {strike.call?.change_percent ? strike.call.change_percent.toFixed(1) : '—'}%
                         </span>
                       </td>
 
@@ -342,12 +342,12 @@ const OptionsChain: React.FC = () => {
                           }`}
                         >
                           {(strike.put?.change_percent || 0) >= 0 ? '+' : ''}
-                          {strike.put?.change_percent.toFixed(1)}%
+                          {strike.put?.change_percent ? strike.put.change_percent.toFixed(1) : '—'}%
                         </span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
                         <span className="text-white font-medium">
-                          {strike.put?.ltp.toFixed(2)}
+                          {strike.put?.ltp ? strike.put.ltp.toFixed(2) : '—'}
                         </span>
                       </td>
                       {showGreeks && (
@@ -356,20 +356,20 @@ const OptionsChain: React.FC = () => {
                             className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}
                           >
                             <span className={`text-xs font-medium ${getDeltaColor(Math.abs(strike.put?.delta || 0))}`}>
-                              {strike.put?.delta.toFixed(2)}
+                              {strike.put?.delta ? strike.put.delta.toFixed(2) : '—'}
                             </span>
                           </td>
                           <td
                             className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}
                           >
                             <span className="text-slate-300 text-xs">
-                              {strike.put?.theta.toFixed(2)}
+                              {strike.put?.theta ? strike.put.theta.toFixed(2) : '—'}
                             </span>
                           </td>
                         </>
                       )}
                       <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">{strike.put?.iv.toFixed(1)}%</span>
+                        <span className="text-slate-300 text-xs">{strike.put?.iv ? strike.put.iv.toFixed(1) : '—'}%</span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
                         <span className="text-slate-300 text-xs">

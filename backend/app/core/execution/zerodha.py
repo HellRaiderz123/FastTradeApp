@@ -5,6 +5,7 @@ from datetime import date
 from app.core.market.ltp import get_ltp
 from app.core.utils.time import now_ist
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
+from app.services.zerodha_ticker import subscribe_symbols as subscribe_to_ticker
 
 
 def _parse_expiry(expiry_str: str | None) -> date | None:
@@ -43,6 +44,16 @@ class ZerodhaExecutionAdapter:
         
         # Calculate margin requirement using Zerodha order_margins API
         margin_required = self._calculate_margin_requirement(orders)
+
+        # Subscribe symbols to live ticker WebSocket for MTM updates
+        try:
+            symbols = [leg.get("symbol") for leg in intent.ticket.get("legs", []) if leg.get("symbol")]
+            if symbols:
+                subscribe_to_ticker(symbols)
+        except Exception as e:
+            # Non-blocking: if subscription fails, execution still proceeds
+            import logging
+            logging.getLogger(__name__).warning(f"⚠️  Failed to subscribe to ticker: {e}")
 
         if self.dry_run:
             return {
@@ -194,7 +205,6 @@ class ZerodhaExecutionAdapter:
         """
 
         ticket = intent.ticket
-        qty = ticket["lot_size"] * ticket["lots"]
 
         symbols = [leg.get("symbol") for leg in ticket.get("legs", []) if leg.get("symbol")]
         if not symbols:
@@ -206,7 +216,7 @@ class ZerodhaExecutionAdapter:
         has_leg_prices = all(leg.get("price") is not None for leg in ticket["legs"])
         
         if has_leg_prices:
-            # Use per-leg calculation
+            # Use per-leg calculation with actual leg quantities
             pnl = 0.0
             for leg in ticket["legs"]:
                 sym = leg.get("symbol")
@@ -217,11 +227,12 @@ class ZerodhaExecutionAdapter:
                 if entry is None:
                     continue
                 entry_f = float(entry)
+                leg_qty = int(leg.get("qty", 1))
 
                 if leg["side"] == "SELL":
-                    pnl += (entry_f - ltp) * qty
+                    pnl += (entry_f - ltp) * leg_qty
                 else:
-                    pnl += (ltp - entry_f) * qty
+                    pnl += (ltp - entry_f) * leg_qty
         else:
             # Use entry_credit method (credit spread calculation)
             entry_credit = getattr(intent, "entry_credit", None) or 0.0
@@ -233,11 +244,12 @@ class ZerodhaExecutionAdapter:
                 if not sym:
                     continue
                 ltp = float(ltp_map.get(sym) or 0.0)
+                leg_qty = int(leg.get("qty", 1))
                 
                 if leg["side"] == "SELL":
-                    cost_to_close += ltp * qty
+                    cost_to_close += ltp * leg_qty
                 else:
-                    cost_to_close -= ltp * qty
+                    cost_to_close -= ltp * leg_qty
             
             # PnL = entry_credit - cost_to_close
             pnl = entry_credit - cost_to_close
@@ -246,7 +258,6 @@ class ZerodhaExecutionAdapter:
 
     def _estimate_entry_credit_and_store_leg_prices(self, intent) -> float:
         ticket = intent.ticket
-        qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 
         # Parse expiry string to date object
         expiry_date = _parse_expiry(intent.expiry)
@@ -270,36 +281,36 @@ class ZerodhaExecutionAdapter:
 
         ltp = get_ltp(symbols)
 
-        entry_credit_per_unit = 0.0
+        entry_credit_total = 0.0
         for leg in ticket.get("legs", []):
             sym = leg.get("symbol")
             px = float(ltp.get(sym) or 0.0)
             leg["price"] = px
+            leg_qty = int(leg.get("qty", 1))
             if leg.get("side") == "SELL":
-                entry_credit_per_unit += px
+                entry_credit_total += px * leg_qty
             else:
-                entry_credit_per_unit -= px
+                entry_credit_total -= px * leg_qty
 
-        return round(entry_credit_per_unit * qty, 2)
+        return round(entry_credit_total, 2)
 
     def _estimate_exit_cost_and_pnl(self, intent) -> tuple[float, float]:
         ticket = intent.ticket
-        qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
         symbols = [leg.get("symbol") for leg in ticket.get("legs", []) if leg.get("symbol")]
         ltp = get_ltp(symbols)
 
-        exit_cost_per_unit = 0.0
+        exit_cost_total = 0.0
         for leg in ticket.get("legs", []):
             sym = leg.get("symbol")
             if not sym:
                 continue
             px = float(ltp.get(sym) or 0.0)
+            leg_qty = int(leg.get("qty", 1))
             if leg.get("side") == "SELL":
-                exit_cost_per_unit += px
+                exit_cost_total += px * leg_qty
             else:
-                exit_cost_per_unit -= px
+                exit_cost_total -= px * leg_qty
 
-        exit_cost_total = float(exit_cost_per_unit) * float(qty)
         entry_credit_total = float(getattr(intent, "entry_credit", 0.0) or 0.0)
         final_pnl = round(entry_credit_total - exit_cost_total, 2)
         return float(final_pnl), round(exit_cost_total, 2)

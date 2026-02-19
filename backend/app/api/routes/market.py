@@ -162,27 +162,60 @@ async def get_available_expiries(symbol: str = "NIFTY", weekly_only: bool = True
         expiry_weekday = WEEKLY_EXPIRY_WEEKDAY.get(symbol_key, 1)  # Default Tuesday
 
         def next_weekday(date, weekday):
-            """Find next target weekday from given date (0=Mon..6=Sun)."""
+            """Find next target weekday from given date (0=Mon..6=Sun).
+            
+            If today is the target weekday:
+            - Before 3:30 PM IST: Return today (expiry still valid)
+            - After 3:30 PM IST: Return next week's date
+            """
             days_until = (weekday - date.weekday()) % 7
+            
             if days_until == 0:
-                days_until = 7
+                # Today is the target weekday - check if market has closed
+                from zoneinfo import ZoneInfo
+                try:
+                    ist_tz = ZoneInfo("Asia/Kolkata")
+                except:
+                    from datetime import timezone
+                    ist_tz = timezone(timedelta(hours=5, minutes=30))
+                
+                now_ist = datetime.now(ist_tz)
+                market_close_time = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+                
+                if now_ist < market_close_time:
+                    # Market still open, include today's expiry
+                    return date
+                else:
+                    # Market closed, jump to next week
+                    days_until = 7
+            
             return date + timedelta(days=days_until)
 
         # Generate expiries (next 15 to ensure we get enough after filtering)
         current_date = today
+        first_expiry_added = False
+        
         for _ in range(15):
             current_date = next_weekday(current_date, expiry_weekday)
             
-            # Filter out monthly expiries if weekly_only is True
+            # ALWAYS include the first (nearest) expiry, even if it's monthly
+            # This ensures users always see the current/nearest expiry date
+            if not first_expiry_added:
+                expiries.append(current_date.strftime("%Y-%m-%d"))
+                first_expiry_added = True
+                current_date = current_date + timedelta(days=1)
+                continue
+            
+            # For subsequent expiries, filter out monthly if weekly_only is True
             if weekly_only and _is_last_weekday_of_month(current_date):
-                # Skip monthly expiry
+                # Skip monthly expiry (but we already have the first one)
                 current_date = current_date + timedelta(days=1)
                 continue
             
             expiries.append(current_date.strftime("%Y-%m-%d"))
             current_date = current_date + timedelta(days=1)
             
-            # Stop when we have enough weekly expiries
+            # Stop when we have enough expiries
             if len(expiries) >= 8:
                 break
         
@@ -211,12 +244,17 @@ async def get_available_expiries(symbol: str = "NIFTY", weekly_only: bool = True
             
             fallback = []
             current = today
+            first_added = False
             for _ in range(10):
                 current = next_weekday(current, expiry_weekday)
-                if not _is_last_weekday_of_month(current):
+                # Always include first expiry even if monthly
+                if not first_added:
                     fallback.append(current.strftime("%Y-%m-%d"))
-                    if len(fallback) >= 5:
-                        break
+                    first_added = True
+                elif not _is_last_weekday_of_month(current):
+                    fallback.append(current.strftime("%Y-%m-%d"))
+                if len(fallback) >= 5:
+                    break
                 current = current + timedelta(days=1)
             
             if fallback:

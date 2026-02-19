@@ -13,12 +13,18 @@ interface JournalEntry {
   pnl: number;
   pnl_percent: number;
   status: string;
+  execution_mode?: string;
+  execution_result?: any; // Preserve execution result for deduplication logic
 }
+
+type PnLFilter = 'all' | 'profit' | 'loss';
+type ExecutionTypeFilter = 'all' | 'paper' | 'zerodha_dry' | 'zerodha_live';
 
 const Journal: React.FC = () => {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all');
+  const [pnlFilter, setPnlFilter] = useState<PnLFilter>('all');
+  const [executionTypeFilter, setExecutionTypeFilter] = useState<ExecutionTypeFilter>('all');
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -34,6 +40,8 @@ const Journal: React.FC = () => {
         const pnl = Number(item?.pnl ?? 0) || 0;
         const exitPrice = entryPrice ? entryPrice - pnl : null;
         const pnlPercent = entryPrice !== 0 ? (pnl / entryPrice) * 100 : 0;
+        const execution_result = item?.execution_result || {};
+        const execution_mode = (execution_result && execution_result.mode) || 'UNKNOWN';
         return {
           id: item?.id ?? item?.intent_id ?? Math.random(),
           strategy: item?.strategy || 'Unknown',
@@ -45,9 +53,14 @@ const Journal: React.FC = () => {
           pnl,
           pnl_percent: pnlPercent,
           status: item?.status || 'UNKNOWN',
+          execution_mode,
+          execution_result, // Preserve for deduplication
         };
       });
-      setEntries(mapped);
+      
+      // Deduplicate ZERODHA_LIVE entries: keep only the most recent record per strategy/underlying combo
+      const deduplicated = deduplicateZerodhaLive(mapped);
+      setEntries(deduplicated);
     } catch (error) {
       console.error('Failed to fetch journal:', error);
     } finally {
@@ -55,35 +68,136 @@ const Journal: React.FC = () => {
     }
   };
 
+  const deduplicateZerodhaLive = (entries: JournalEntry[]): JournalEntry[] => {
+    const zerodhaLiveMap = new Map<string, JournalEntry>();
+    const nonZerodhaLive: JournalEntry[] = [];
+
+    entries.forEach((entry) => {
+      const mode = entry.execution_mode || '';
+      const isZerodhaLive = mode === 'ZERODHA_LIVE' || mode === 'ZERODHA_LIVE_DIRECT';
+      
+      if (isZerodhaLive) {
+        const key = `${entry.strategy}|${entry.underlying}`;
+        const existing = zerodhaLiveMap.get(key);
+        
+        if (!existing) {
+          zerodhaLiveMap.set(key, entry);
+        } else {
+          // Prefer app-executed (source !== 'zerodha_api_sync') over synced from API
+          const existingSource = existing.execution_result?.source || '';
+          const currentSource = entry.execution_result?.source || '';
+          const existingIsSynced = existingSource === 'zerodha_api_sync';
+          const currentIsSynced = currentSource === 'zerodha_api_sync';
+          
+          if (currentIsSynced && !existingIsSynced) {
+            // Keep existing (app-executed) over synced
+            return;
+          } else if (!currentIsSynced && existingIsSynced) {
+            // Replace with app-executed (current)
+            zerodhaLiveMap.set(key, entry);
+          } else {
+            // Both same type: keep most recent
+            if (new Date(entry.created_at) > new Date(existing.created_at)) {
+              zerodhaLiveMap.set(key, entry);
+            }
+          }
+        }
+      } else {
+        nonZerodhaLive.push(entry);
+      }
+    });
+
+    // Combine dedup'ed Zerodha live + all non-live entries
+    return [...Array.from(zerodhaLiveMap.values()), ...nonZerodhaLive];
+  };
+
+  const getExecutionTypeFromMode = (mode?: string): ExecutionTypeFilter => {
+    if (!mode) return 'paper';
+    if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'zerodha_live';
+    if (mode.includes('ZERODHA_LIVE')) return 'zerodha_live';
+    if (mode.includes('ZERODHA')) return 'zerodha_dry';
+    return 'paper';
+  };
+
   const filteredEntries = entries.filter((entry) => {
-    if (filter === 'profit') return entry.pnl > 0;
-    if (filter === 'loss') return entry.pnl < 0;
+    // Apply P&L filter
+    if (pnlFilter === 'profit' && entry.pnl <= 0) return false;
+    if (pnlFilter === 'loss' && entry.pnl >= 0) return false;
+
+    // Apply execution type filter
+    if (executionTypeFilter !== 'all') {
+      const entryType = getExecutionTypeFromMode(entry.execution_mode);
+      if (entryType !== executionTypeFilter) return false;
+    }
+
     return true;
   });
 
+  // Calculate stats based on FILTERED entries (not all entries)
   const stats = {
+    totalTrades: filteredEntries.length,
+    wins: filteredEntries.filter((e) => e.pnl > 0).length,
+    losses: filteredEntries.filter((e) => e.pnl < 0).length,
+    totalPnL: filteredEntries.reduce((sum, e) => sum + e.pnl, 0),
+    avgWin: filteredEntries.filter((e) => e.pnl > 0).length > 0
+      ? filteredEntries.filter((e) => e.pnl > 0).reduce((sum, e) => sum + e.pnl, 0) /
+      filteredEntries.filter((e) => e.pnl > 0).length
+      : 0,
+    avgLoss: filteredEntries.filter((e) => e.pnl < 0).length > 0
+      ? filteredEntries.filter((e) => e.pnl < 0).reduce((sum, e) => sum + e.pnl, 0) /
+      filteredEntries.filter((e) => e.pnl < 0).length
+      : 0,
+  };
+
+  // Show all-time stats for reference
+  const allTimeStats = {
     totalTrades: entries.length,
     wins: entries.filter((e) => e.pnl > 0).length,
     losses: entries.filter((e) => e.pnl < 0).length,
     totalPnL: entries.reduce((sum, e) => sum + e.pnl, 0),
-    avgWin: entries.filter((e) => e.pnl > 0).length > 0
-      ? entries.filter((e) => e.pnl > 0).reduce((sum, e) => sum + e.pnl, 0) /
-      entries.filter((e) => e.pnl > 0).length
-      : 0,
-    avgLoss: entries.filter((e) => e.pnl < 0).length > 0
-      ? entries.filter((e) => e.pnl < 0).reduce((sum, e) => sum + e.pnl, 0) /
-      entries.filter((e) => e.pnl < 0).length
-      : 0,
   };
+
+  // Check if filters are active
+  const hasActiveFilters = pnlFilter !== 'all' || executionTypeFilter !== 'all';
 
   return (
     <div className="space-y-6">
+      {/* Filter Status Indicator */}
+      {hasActiveFilters && (
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+          <p className="text-sm text-blue-300">
+            🔍 <span className="font-semibold">Filters Active:</span> Showing {filteredEntries.length} of {entries.length} trades
+            {pnlFilter !== 'all' && <span className="ml-2">• P&L: {pnlFilter}</span>}
+            {executionTypeFilter !== 'all' && <span className="ml-2">• Type: {executionTypeFilter.replace('_', ' ')}</span>}
+          </p>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard label="Total Trades" value={stats.totalTrades.toString()} />
-        <StatCard label="Wins" value={stats.wins.toString()} subtext={`Avg: ₹${Math.round(stats.avgWin)}`} color="green" />
-        <StatCard label="Losses" value={stats.losses.toString()} subtext={`Avg: ₹${Math.round(stats.avgLoss)}`} color="red" />
-        <StatCard label="Total P&L" value={`₹${stats.totalPnL.toLocaleString()}`} color={stats.totalPnL >= 0 ? 'green' : 'red'} />
+        <StatCard 
+          label="Total Trades" 
+          value={stats.totalTrades.toString()} 
+          subtext={hasActiveFilters ? `of ${allTimeStats.totalTrades} total` : undefined}
+        />
+        <StatCard 
+          label="Wins" 
+          value={stats.wins.toString()} 
+          subtext={`Avg: ₹${Math.round(stats.avgWin)}`} 
+          color="green" 
+        />
+        <StatCard 
+          label="Losses" 
+          value={stats.losses.toString()} 
+          subtext={`Avg: ₹${Math.round(stats.avgLoss)}`} 
+          color="red" 
+        />
+        <StatCard 
+          label="Total P&L" 
+          value={`₹${stats.totalPnL.toLocaleString()}`} 
+          subtext={hasActiveFilters ? `(All-time: ₹${allTimeStats.totalPnL.toLocaleString()})` : undefined}
+          color={stats.totalPnL >= 0 ? 'green' : 'red'} 
+        />
       </div>
 
       {/* Journal */}
@@ -96,21 +210,59 @@ const Journal: React.FC = () => {
           </button>
         </div>
 
-        {/* Filter */}
-        <div className="flex gap-2 mb-6">
-          {['all', 'profit', 'loss'].map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-4 py-2 rounded-lg font-medium transition ${
-                filter === f
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-slate-900 text-slate-400 hover:text-white'
-              }`}
-            >
-              {f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
+        {/* Filters */}
+        <div className="space-y-4 mb-6">
+          {/* P&L Filter */}
+          <div>
+            <p className="text-xs text-slate-400 mb-2 font-semibold">P&L Filter</p>
+            <div className="flex gap-2">
+              {(['all', 'profit', 'loss'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setPnlFilter(f)}
+                  className={`px-4 py-2 rounded-lg font-medium transition ${
+                    pnlFilter === f
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-slate-900 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {f.charAt(0).toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Execution Type Filter */}
+          <div>
+            <p className="text-xs text-slate-400 mb-2 font-semibold">Execution Type</p>
+            <div className="flex flex-wrap gap-2">
+              {(['all', 'paper', 'zerodha_dry', 'zerodha_live'] as const).map((f) => {
+                const labels = {
+                  all: 'All',
+                  paper: 'Paper',
+                  zerodha_dry: 'Zerodha DRY',
+                  zerodha_live: 'Zerodha LIVE',
+                };
+                return (
+                  <button
+                    key={f}
+                    onClick={() => setExecutionTypeFilter(f)}
+                    className={`px-4 py-2 rounded-lg font-medium transition ${
+                      executionTypeFilter === f
+                        ? f === 'zerodha_live'
+                          ? 'bg-red-500 text-white'
+                          : f === 'zerodha_dry'
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-blue-500 text-white'
+                        : 'bg-slate-900 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {labels[f]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         {/* Entries */}
@@ -134,8 +286,14 @@ const Journal: React.FC = () => {
 
       {/* Analysis */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <AnalysisCard title="Win Rate" value={`${((stats.wins / stats.totalTrades) * 100).toFixed(1)}%`} />
-        <AnalysisCard title="Profit Factor" value={Math.abs(stats.avgWin / stats.avgLoss).toFixed(2)} />
+        <AnalysisCard 
+          title="Win Rate" 
+          value={`${stats.totalTrades > 0 ? ((stats.wins / stats.totalTrades) * 100).toFixed(1) : '0'}%`} 
+        />
+        <AnalysisCard 
+          title="Profit Factor" 
+          value={stats.avgLoss !== 0 ? Math.abs(stats.avgWin / stats.avgLoss).toFixed(2) : 'N/A'} 
+        />
       </div>
     </div>
   );
@@ -167,6 +325,23 @@ interface JournalEntryRowProps {
   onToggle: () => void;
 }
 
+const getModeLabel = (mode?: string) => {
+  if (!mode) return 'Unknown';
+  if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'Executed Direct on Zerodha';
+  if (mode.includes('ZERODHA_LIVE')) return 'Executed as Zerodha LIVE RUN';
+  if (mode.includes('ZERODHA_DRY_RUN')) return 'Executed as DRY RUN (Zerodha)';
+  if (mode.includes('PAPER')) return 'Executed as DRY RUN (Paper)';
+  return 'Executed as DRY RUN';
+};
+
+const getModeColor = (mode?: string) => {
+  if (!mode) return 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+  if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'bg-purple-500/20 text-purple-300 border-purple-500/30';
+  if (mode.includes('ZERODHA_LIVE')) return 'bg-red-500/20 text-red-300 border-red-500/30';
+  if (mode.includes('ZERODHA')) return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+  return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+};
+
 const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onToggle }) => {
   const isProfitable = entry.pnl >= 0;
 
@@ -179,7 +354,12 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
         <div className="flex items-center gap-4 flex-1 text-left">
           <div>
             <p className="font-semibold text-white">{entry.strategy}</p>
-            <p className="text-xs text-slate-400">{entry.underlying}</p>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-xs text-slate-400">{entry.underlying}</p>
+              <span className={`inline-block px-2 py-0.5 rounded text-xs border ${getModeColor(entry.execution_mode)}`}>
+                {getModeLabel(entry.execution_mode)}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -207,11 +387,12 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
       </button>
 
       {expanded && (
-        <div className="bg-slate-950/50 p-4 border-t border-slate-700 grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-slate-950/50 p-4 border-t border-slate-700 grid grid-cols-2 md:grid-cols-5 gap-4">
           <DetailItem label="Entry Price" value={entry.entry_price ? `₹${entry.entry_price.toLocaleString()}` : 'N/A'} />
           <DetailItem label="Exit Price" value={entry.exit_price !== null && entry.exit_price !== undefined ? `₹${entry.exit_price.toLocaleString()}` : 'N/A'} />
           <DetailItem label="Return %" value={`${entry.pnl_percent.toFixed(2)}%`} color={isProfitable ? 'green' : 'red'} />
           <DetailItem label="Status" value={entry.status} />
+          <DetailItem label="Execution Mode" value={getModeLabel(entry.execution_mode)} />
         </div>
       )}
     </div>

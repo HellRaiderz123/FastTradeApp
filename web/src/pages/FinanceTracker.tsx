@@ -5,6 +5,11 @@ import FinanceDashboard from "../components/FinanceDashboard";
 import TransactionsTable from "../components/TransactionsTable";
 import { financeAPI } from "../lib/api";
 import AddTransactionModal from "../components/AddTransactionModal";
+import RecurringTransactionsWidget from "../components/RecurringTransactionsWidget";
+import BudgetWidget from "../components/BudgetWidget";
+import SavingsGoalsWidget from "../components/SavingsGoalsWidget";
+import BillRemindersWidget from "../components/BillRemindersWidget";
+import ExpenseForecastWidget from "../components/ExpenseForecastWidget";
 
 // ---------------- Types ----------------
 export interface Transaction {
@@ -229,6 +234,26 @@ export default function FinanceTracker() {
 
       {/* Dashboard */}
       <FinanceDashboard transactions={filteredTransactions} />
+
+      {/* Enhanced Features Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Recurring Transactions */}
+        <RecurringTransactionsWidget />
+
+        {/* Budgets */}
+        <BudgetWidget />
+
+        {/* Savings Goals */}
+        <SavingsGoalsWidget />
+
+        {/* Bill Reminders */}
+        <BillRemindersWidget />
+      </div>
+
+      {/* Expense Forecast & Trends */}
+      <div className="lg:col-span-2">
+        <ExpenseForecastWidget />
+      </div>
 
       {/* Transactions */}
       <TransactionsTable
