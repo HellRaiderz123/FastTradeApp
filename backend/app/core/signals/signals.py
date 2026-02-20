@@ -199,6 +199,45 @@ def _map_market_bias(bias_str: str) -> MarketBias:
     return mapping.get(bias_str, MarketBias.NEUTRAL)
 
 
+def generate_signal_from_candles(
+    candles: list[dict],
+    india_vix: Optional[float] = 15.0,
+    vix_rank: Optional[float] = 50.0,
+    iv_regime: Optional[str] = "NORMAL",
+) -> Dict:
+    """DB-free signal generation for backtests.
+
+    Uses in-memory candles instead of querying the database.
+    ~100x faster than generate_signal() because it skips:
+    - DB writes (save candles)
+    - DB reads (query 300 candles back)
+    - VIX API calls (uses provided values)
+    """
+    from app.core.signals.ta_engine import ta_signal_15m_from_candles
+
+    ta_sig = ta_signal_15m_from_candles(candles)
+
+    # Determine IV regime if not provided
+    if iv_regime is None and india_vix is not None:
+        iv_regime = determine_iv_regime(india_vix=india_vix, vix_rank=vix_rank)
+    if iv_regime is None:
+        iv_regime = "NORMAL"
+
+    ta_sig = enrich_signal_with_iv(
+        ta_sig,
+        india_vix=india_vix,
+        vix_rank=vix_rank,
+        iv_regime=iv_regime,
+    )
+    ta_sig.setdefault("context", {})
+    ta_sig["context"].update({
+        "india_vix": india_vix,
+        "vix_rank": vix_rank,
+        "iv_regime": iv_regime,
+    })
+    return ta_sig
+
+
 def generate_signal(
     db: Session,
     symbol: str,

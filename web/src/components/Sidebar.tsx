@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain } from 'lucide-react';
+import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain, Bot } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
 import { Wallet } from 'lucide-react';
 
@@ -47,6 +47,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     { path: '/strategies', icon: Zap, label: 'Strategies' },
     { path: '/backtest', icon: LineChart, label: 'Backtest' },
     { path: '/positions', icon: Briefcase, label: 'Positions' },
+    { path: '/auto-trader', icon: Bot, label: 'Auto Trader' },
     { path: '/journal', icon: BookOpen, label: 'Journal' },
     { path: '/finance', icon: Wallet, label: 'Finance' },
     { path: '/settings', icon: Settings, label: 'Settings' },

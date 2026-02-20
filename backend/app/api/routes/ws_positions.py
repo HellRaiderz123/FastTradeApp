@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -13,9 +14,15 @@ from app.core.utils.time import now_ist
 from app.db.models_intent import ExecutionIntent
 from app.db.session import SessionLocal
 from app.services.zerodha_ticker import get_cached_ltp as get_ticker_ltp
+from app.core.exit.broker_reconcile import reconcile_broker_positions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["WebSocket"])
+
+# Smart suggestion refresh interval (seconds) — TA is expensive, don't run every tick
+_SMART_SUGGESTION_INTERVAL = 60
+# Broker reconciliation interval (seconds) — detect positions closed on Zerodha
+_BROKER_RECONCILE_INTERVAL = 30
 
 
 def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) -> float:
@@ -30,7 +37,9 @@ def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) 
     # For Zerodha, try to use live ticker cache for faster updates
     try:
         ticket = intent.ticket or {}
-        
+        # Compute correct quantity: prefer leg-level qty, fallback to ticket-level lots × lot_size
+        ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
+
         pnl_per_unit = 0.0
         all_cached = True
         
@@ -51,7 +60,7 @@ def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) 
                 all_cached = False
                 break
             
-            leg_qty = int(leg.get("qty", 1))
+            leg_qty = int(leg.get("qty", 0)) or ticket_qty
             sign = 1.0 if leg["side"] == "SELL" else -1.0
             pnl_per_unit += (float(entry_price) - float(current_price)) * sign * leg_qty
         
@@ -74,6 +83,11 @@ async def ws_positions(websocket: WebSocket):
     # Initialize adapters
     paper_adapter = PaperExecutionAdapter()
     zerodha_adapter = None
+    
+    # Smart suggestion cache (refreshed every _SMART_SUGGESTION_INTERVAL seconds)
+    _suggestion_cache: Dict[str, Any] = {}
+    _suggestion_last_refresh: float = 0.0
+    _broker_reconcile_last: float = 0.0
     
     try:
         kite = get_kite_client()
@@ -177,12 +191,108 @@ async def ws_positions(websocket: WebSocket):
                             "ticket": ticket,  # Include full ticket with legs
                             "legs_metrics": legs_metrics,
                             "mode": mode,  # Include execution mode
+                            "smart_suggestion": _suggestion_cache.get(intent.intent_id),
                         }
                     )
 
                 if changed:
                     db.commit()
-                
+
+                # ── Broker reconciliation (detect positions closed on Zerodha) ──
+                now_reconcile = time.time()
+                if now_reconcile - _broker_reconcile_last >= _BROKER_RECONCILE_INTERVAL and zerodha_adapter:
+                    try:
+                        closed_ids = reconcile_broker_positions(db, force=True)
+                        if closed_ids:
+                            logger.info(f"🔄 WS reconcile: {len(closed_ids)} positions closed at broker")
+                            # Remove closed positions from the update list
+                            updates = [u for u in updates if u["intent_id"] not in closed_ids]
+                    except Exception as e:
+                        logger.debug(f"⚠️  Broker reconcile in WS loop failed: {e}")
+                    _broker_reconcile_last = now_reconcile
+
+                # ── Smart Suggestion refresh (throttled) ──────────
+                now_ts = time.time()
+                if now_ts - _suggestion_last_refresh >= _SMART_SUGGESTION_INTERVAL and updates:
+                    try:
+                        from app.core.position_advisor import advise_position
+                        from app.core.spreads import detect_spreads
+
+                        # A) App-originated positions with known strategy
+                        for u in updates:
+                            strat = u.get("strategy", "")
+                            if strat in ("DIRECT_ZERODHA", "CUSTOM", ""):
+                                continue
+                            advice = advise_position(
+                                strategy=strat,
+                                underlying=u.get("underlying", ""),
+                                db=db,
+                                pnl=float(u.get("pnl", 0) or 0),
+                                entry_credit=float(u.get("entry_credit", 0) or 0),
+                            )
+                            _suggestion_cache[u["intent_id"]] = advice
+                            u["smart_suggestion"] = advice
+
+                        # B) Zerodha-synced positions — detect spreads first
+                        _SPREAD_TO_STRATEGY = {
+                            "BULL_PUT_SPREAD": "BULL_PUT",
+                            "BULL_CALL_SPREAD": "BULL_CALL",
+                            "BEAR_CALL_SPREAD": "BEAR_CALL",
+                            "BEAR_PUT_SPREAD": "BEAR_PUT",
+                            "IRON_CONDOR": "IRON_CONDOR",
+                            "SHORT_STRADDLE": "SHORT_STRADDLE",
+                            "LONG_STRADDLE": "LONG_STRADDLE",
+                            "SHORT_STRANGLE": "SHORT_STRANGLE",
+                            "LONG_STRANGLE": "LONG_STRANGLE",
+                            "BUTTERFLY_CALL": "BUTTERFLY_SPREAD",
+                            "BUTTERFLY_PUT": "BUTTERFLY_SPREAD",
+                            "RATIO_CALL_BACKSPREAD": "CALL_RATIO_BACKSPREAD",
+                            "RATIO_PUT_BACKSPREAD": "PUT_RATIO_BACKSPREAD",
+                        }
+                        zerodha_updates = [u for u in updates if u.get("strategy", "") in ("DIRECT_ZERODHA", "CUSTOM")]
+                        if zerodha_updates:
+                            # Build intent dicts for spread detector
+                            z_dicts = []
+                            for intent in intents:
+                                if (intent.strategy or "") not in ("DIRECT_ZERODHA", "CUSTOM"):
+                                    continue
+                                z_dicts.append({
+                                    "intent_id": intent.intent_id,
+                                    "strategy": intent.strategy,
+                                    "underlying": intent.underlying,
+                                    "expiry": intent.expiry,
+                                    "ticket": intent.ticket or {},
+                                    "pnl": intent.pnl,
+                                    "unrealized_pnl": intent.unrealized_pnl,
+                                    "entry_credit": intent.entry_credit,
+                                })
+                            grouped = detect_spreads(z_dicts)
+                            for spread in grouped.spreads:
+                                strategy_name = _SPREAD_TO_STRATEGY.get(spread.spread_type, "")
+                                underlying = spread.underlying or ""
+                                if not strategy_name or not underlying:
+                                    continue
+                                combined_pnl = sum(float(leg.pnl or 0) for leg in spread.legs)
+                                combined_credit = sum(float(leg.entry_credit or 0) for leg in spread.legs)
+                                advice = advise_position(
+                                    strategy=strategy_name,
+                                    underlying=underlying,
+                                    db=db,
+                                    pnl=combined_pnl,
+                                    entry_credit=combined_credit,
+                                )
+                                for leg in spread.legs:
+                                    _suggestion_cache[leg.intent_id] = advice
+                                # Also update the WS updates in-place
+                                for u in zerodha_updates:
+                                    if u["intent_id"] in _suggestion_cache:
+                                        u["smart_suggestion"] = _suggestion_cache[u["intent_id"]]
+
+                        _suggestion_last_refresh = now_ts
+                        logger.info(f"🧠 Smart suggestions refreshed for {len(updates)} positions")
+                    except Exception as e:
+                        logger.warning(f"⚠️  Smart suggestion refresh failed: {e}")
+
                 logger.debug(f"📤 Sending {len(updates)} position updates")
 
             finally:

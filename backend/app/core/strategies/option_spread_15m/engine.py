@@ -2,7 +2,7 @@ from app.db.session import SessionLocal
 from app.db.repository import save_strategy_run
 from app.db.models import StrategyRun
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
-from app.core.market.expiry import get_current_weekly_expiry
+from app.core.market.expiry import get_current_weekly_expiry, get_next_weekly_expiry_from_kite
 from sqlalchemy.orm import Session
 
 from app.core.signals.signals import generate_signal
@@ -350,7 +350,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # =====================================================
     # 7️⃣ BUILD TICKET (PAPER)
     # =====================================================
-    expiry = get_current_weekly_expiry(underlying)
+    expiry = get_next_weekly_expiry_from_kite(underlying)
     lots = int(payload.get("lots", 1))
 
     # ============================
@@ -783,17 +783,23 @@ class OptionSpread15m:
             context: {
                 underlying: str,
                 parameters: Dict,
-                config_id: int (optional)
+                config_id: int (optional),
+                candle_history: List[Dict] (optional, for backtest)
             }
         
         Returns:
             Strategy execution result
         """
+        candle = context.get("candle") or {}
+        spot = candle.get("close") if isinstance(candle, dict) else None
+        candle_history = context.get("candle_history")
+
+        # Fast path for backtests: use in-memory candle history (no DB)
+        if candle_history and spot is not None:
+            return self._run_backtest_fast(context, candle_history, spot)
+
         db = SessionLocal()
         try:
-            candle = context.get("candle") or {}
-            spot = candle.get("close") if isinstance(candle, dict) else None
-
             underlying = context.get("backtest_symbol") or context.get("underlying")
 
             payload = {
@@ -812,4 +818,36 @@ class OptionSpread15m:
         
         finally:
             db.close()
+
+    def _run_backtest_fast(self, context: Dict[str, Any], candle_history: list, spot: float) -> Dict[str, Any]:
+        """In-memory backtest signal generation — no DB needed, ~100x faster."""
+        from app.core.signals.signals import generate_signal_from_candles
+
+        sig = generate_signal_from_candles(
+            candles=candle_history,
+            india_vix=15.0,
+            vix_rank=50.0,
+            iv_regime="NORMAL",
+        )
+        confidence = float(sig.get("confidence", 0.0))
+        ctx = build_market_context(sig)
+
+        min_confidence = context.get("parameters", {}).get("min_confidence", 75)
+        strategy_mode, strategy_reason = decide_strategy(
+            sig=sig,
+            ctx=ctx,
+            confidence=confidence,
+            min_confidence=min_confidence,
+        )
+
+        return {
+            "strategy": strategy_mode,
+            "approved": strategy_mode != "NO_TRADE",
+            "reason": f"BACKTEST_FAST: {strategy_reason}",
+            "signal": sig,
+            "context": ctx,
+            "spot": spot,
+            "confidence": confidence,
+            "quality_score": sig.get("quality_score", 0),
+        }
 

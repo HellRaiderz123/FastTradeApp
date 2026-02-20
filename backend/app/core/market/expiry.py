@@ -1,6 +1,10 @@
 from datetime import date, timedelta
+import logging
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
 
 def get_next_valid_expiry(instruments: pd.DataFrame, underlying: str):
     today = pd.Timestamp.today().date()
@@ -19,6 +23,57 @@ def get_next_valid_expiry(instruments: pd.DataFrame, underlying: str):
     future_expiries = expiries[expiries >= today]
 
     return future_expiries.iloc[0] if not future_expiries.empty else None
+
+
+def get_next_weekly_expiry_from_kite(underlying: str = "NIFTY", skip_monthly: bool = True) -> date:
+    """
+    Get the next valid expiry from Kite instruments data.
+    This is the CORRECT way — uses actual Zerodha instrument list 
+    which accounts for holidays and exchange-adjusted expiry dates.
+
+    Falls back to naive weekday calculation if Kite data is unavailable.
+    """
+    try:
+        from app.core.broker.zerodha.instruments import load_instruments
+        instruments = load_instruments("NFO")
+        today = date.today()
+
+        expiries = (
+            instruments[
+                (instruments["name"] == underlying)
+                & (instruments["segment"] == "NFO-OPT")
+            ]["expiry"]
+            .dropna()
+            .drop_duplicates()
+            .sort_values()
+        )
+        expiries = pd.to_datetime(expiries).dt.date
+        future_expiries = sorted(e for e in expiries if e >= today)
+
+        if not future_expiries:
+            logger.warning("No future expiries found from Kite for %s, falling back to naive calc", underlying)
+            return get_current_weekly_expiry(underlying)
+
+        if skip_monthly and len(future_expiries) >= 2:
+            # Skip the nearest if it's today (already expiring)
+            first = future_expiries[0]
+            if first == today:
+                first = future_expiries[1] if len(future_expiries) > 1 else first
+
+            # If nearest expiry is monthly (last weekday of month), use the next one
+            if _is_last_weekday_of_month(first) and len(future_expiries) > 1:
+                second = future_expiries[1]
+                if second != first:
+                    logger.info("Skipping monthly expiry %s, using weekly %s", first, second)
+                    return second
+
+            return first
+
+        return future_expiries[0]
+
+    except Exception as e:
+        logger.warning("Failed to load Kite expiries for %s: %s — using naive calc", underlying, e)
+        return get_current_weekly_expiry(underlying)
 
 def get_next_weekly_expiry(today: date | None = None) -> date:
     """
@@ -44,20 +99,19 @@ def format_zerodha_expiry(expiry: date) -> str:
     Format expiry date for Zerodha symbol construction.
     
     Monthly: 2026-01-29 → 26JAN
-    Weekly:  2026-02-10 → 26210  (YY + M + D, no zero-padding on month/day)
-    Weekly:  2026-02-17 → 26217  
-    Weekly:  2026-12-03 → 261203 (YY + M + D)
+    Weekly:  2026-02-10 → 26210  (YY + M + DD)
+    Weekly:  2026-03-02 → 26302  (YY + M + DD, day zero-padded)
+    Weekly:  2026-12-03 → 261203 (YY + MM + DD)
     """
     if _is_last_weekday_of_month(expiry):
         # Monthly format: YYMMMM (e.g., 26JAN)
         return expiry.strftime("%y%b").upper()
     
-    # Weekly format: YYMD where single-digit month/day have NO zero padding
-    # Feb 10, 2026 → 26 + 2 + 10 → 26210 (not 260210)
+    # Weekly format: YY + M (no padding) + DD (zero-padded)
     year = expiry.year % 100  # Last 2 digits of year
     month = expiry.month      # Month as 1-12 (no zero padding)
-    day = expiry.day          # Day as 1-31 (no zero padding)
-    return f"{year}{month}{day}"
+    day = expiry.day          # Day as 1-31 (zero-padded to 2 digits)
+    return f"{year}{month}{day:02d}"
 
 
 # NSE weekly expiry mapping

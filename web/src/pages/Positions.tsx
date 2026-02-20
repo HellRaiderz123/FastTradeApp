@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TrendingUp, TrendingDown, X } from 'lucide-react';
-import { exitAPI, journalAPI } from '../lib/api';
+import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle } from 'lucide-react';
+import { exitAPI, journalAPI, smartSuggestionsAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 import ZerodhaPositionsWidget from '../components/ZerodhaPositionsWidget';
+import SpreadGrouping from '../components/SpreadGrouping';
 
 const Positions: React.FC = () => {
   const { trades, setTrades } = useTradeStore();
@@ -11,8 +12,28 @@ const Positions: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const pollRef = useRef<number | null>(null);
 
+  const [spreadData, setSpreadData] = useState<any>(null);
+  // Smart suggestions state (keyed by intent_id)
+  const [smartSuggestions, setSmartSuggestions] = useState<Record<string, any>>({});
+
+  // Fetch smart suggestions via REST (fallback when WS doesn't have them yet)
+  const fetchSmartSuggestions = async () => {
+    try {
+      const res = await smartSuggestionsAPI.get();
+      const data = res?.data;
+      if (data?.suggestions) {
+        setSmartSuggestions(data.suggestions);
+      }
+    } catch (e) {
+      console.debug('[Positions] Smart suggestions fetch failed:', e);
+    }
+  };
+
   useEffect(() => {
     fetchPositions();
+    // Fetch smart suggestions on mount and every 60s
+    fetchSmartSuggestions();
+    const smartPoll = window.setInterval(fetchSmartSuggestions, 60000);
 
     // Poll as a fallback (e.g., if WS is blocked)
     pollRef.current = window.setInterval(fetchPositions, 30000);
@@ -44,6 +65,17 @@ const Positions: React.FC = () => {
           }
           const updates = Array.isArray(msg?.intents) ? msg.intents : [];
           console.log('[Positions] 📊 Received update with', updates.length, 'intents');
+
+          // Merge WS smart suggestions into state
+          const wsSuggestions: Record<string, any> = {};
+          for (const u of updates) {
+            if (u?.smart_suggestion && u?.intent_id) {
+              wsSuggestions[u.intent_id] = u.smart_suggestion;
+            }
+          }
+          if (Object.keys(wsSuggestions).length > 0) {
+            setSmartSuggestions((prev) => ({ ...prev, ...wsSuggestions }));
+          }
 
           setLocalTrades((prev) => {
             const byId = new Map<string, any>();
@@ -87,6 +119,7 @@ const Positions: React.FC = () => {
       pollRef.current = null;
       if (wsRef.current) wsRef.current.close();
       wsRef.current = null;
+      window.clearInterval(smartPoll);
     };
   }, []);
 
@@ -131,8 +164,31 @@ const Positions: React.FC = () => {
   const totalPnL = openPositions.reduce((sum, t) => sum + (t.pnl || 0), 0);
   const totalPnLPercent = openPositions.length > 0 ? (totalPnL / 100000) * 100 : 0;
 
+  // Smart suggestion summary counts
+  const allSuggestions = openPositions.map(
+    (t) => t.smart_suggestion || smartSuggestions[t.intent_id]
+  ).filter(Boolean);
+  const criticalAlerts = allSuggestions.filter((s: any) => s.severity === 'HIGH').length;
+  const warnings = allSuggestions.filter((s: any) => s.severity === 'MEDIUM').length;
+  const watchCount = allSuggestions.filter((s: any) => s.action === 'WATCH').length;
+
   return (
     <div className="space-y-6">
+      {/* Smart Alerts Banner */}
+      {criticalAlerts > 0 && (
+        <div className="bg-red-500/10 border border-red-500/40 rounded-lg p-4 flex items-center gap-3 animate-pulse">
+          <AlertTriangle className="w-6 h-6 text-red-400 flex-shrink-0" />
+          <div>
+            <p className="text-red-300 font-semibold">
+              {criticalAlerts} position{criticalAlerts > 1 ? 's' : ''} conflict{criticalAlerts === 1 ? 's' : ''} with current TA signal
+            </p>
+            <p className="text-red-400/70 text-xs mt-0.5">
+              The market has shifted against your open position{criticalAlerts > 1 ? 's' : ''}. Review the suggestions below.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Summary */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <SummaryCard
@@ -175,35 +231,95 @@ const Positions: React.FC = () => {
                 trade={trade}
                 onClose={() => handleClosePosition(String(trade.intent_id || ''))}
                 loading={loading}
+                smartSuggestion={
+                  trade.smart_suggestion ||
+                  smartSuggestions[trade.intent_id] ||
+                  null
+                }
               />
             ))}
           </div>
         )}
       </div>
 
+      {/* Spread Grouping & Smart Analysis */}
+      {openPositions.length > 0 && (
+        <div>
+          <h2 className="text-2xl font-bold mb-6 text-white">🎯 Spread Intelligence</h2>
+          <SpreadGrouping limit={50} onRefresh={fetchPositions} onDataLoaded={setSpreadData} />
+        </div>
+      )}
+
       {/* Risk Metrics */}
       <div className="card-glass p-6">
         <h3 className="text-lg font-semibold mb-4 text-white">📊 Risk Metrics</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <RiskMetric 
-            label="Portfolio Heat" 
-            value={`${Math.abs(totalPnL).toLocaleString()}`}
-            subtext={`${totalPnLPercent > 0 ? '+' : ''}${totalPnLPercent.toFixed(2)}%`}
-            status={totalPnL <= 0 ? 'good' : totalPnL <= 5000 ? 'warning' : 'danger'} 
-          />
-          <RiskMetric 
-            label="Winning Positions" 
-            value={`${openPositions.filter(t => (t.pnl || 0) > 0).length}/${openPositions.length}`}
-            subtext={openPositions.length > 0 ? `${Math.round((openPositions.filter(t => (t.pnl || 0) > 0).length / openPositions.length) * 100)}% Win Ratio` : 'N/A'}
-            status={openPositions.length > 0 && (openPositions.filter(t => (t.pnl || 0) > 0).length / openPositions.length) >= 0.5 ? 'good' : 'warning'} 
-          />
-          <RiskMetric 
-            label="Largest Loss" 
-            value={`₹${Math.abs(Math.min(0, ...openPositions.map((t) => t.pnl || 0))).toLocaleString()}`}
-            subtext={`Max Risk: ${(Math.abs(Math.min(0, ...openPositions.map((t) => t.pnl || 0))) / 100000 * 100).toFixed(2)}%`}
-            status={Math.abs(Math.min(0, ...openPositions.map((t) => t.pnl || 0))) <= 2000 ? 'good' : 'warning'} 
-          />
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {(() => {
+            // Compute spread-aware risk metrics
+            const spreads = spreadData?.spreads || [];
+            const totalMaxProfit = spreads.reduce((s: number, sp: any) => s + (sp.max_profit || 0), 0);
+            const totalMaxLoss = spreads.reduce((s: number, sp: any) => s + (sp.max_loss || 0), 0);
+            const nakedCount = (spreadData?.naked_positions || []).length;
+            const incompleteCount = (spreadData?.incomplete_spreads || []).length;
+            const currentPnL = totalPnL;
+
+            // % of max profit captured so far
+            const profitCapture = totalMaxProfit > 0 ? (currentPnL / totalMaxProfit) * 100 : 0;
+            // % of max loss used
+            const riskUsed = totalMaxLoss > 0 ? (Math.abs(Math.min(0, currentPnL)) / totalMaxLoss) * 100 : 0;
+            // Reward:Risk ratio
+            const rrRatio = totalMaxLoss > 0 ? totalMaxProfit / totalMaxLoss : 0;
+            // Win rate
+            const winCount = openPositions.filter(t => (t.pnl || 0) > 0).length;
+            const winRate = openPositions.length > 0 ? Math.round((winCount / openPositions.length) * 100) : 0;
+
+            return (
+              <>
+                <RiskMetric
+                  label="Current P&L"
+                  value={`₹${Math.abs(currentPnL).toLocaleString()}`}
+                  subtext={currentPnL >= 0 ? `+${profitCapture.toFixed(1)}% of max profit` : `${riskUsed.toFixed(1)}% of max loss used`}
+                  status={currentPnL >= 0 ? 'good' : riskUsed <= 30 ? 'warning' : 'danger'}
+                />
+                <RiskMetric
+                  label="Max Possible Loss"
+                  value={totalMaxLoss > 0 ? `₹${totalMaxLoss.toLocaleString()}` : nakedCount > 0 ? 'Unlimited' : '-'}
+                  subtext={totalMaxLoss > 0 ? `Max Profit: ₹${totalMaxProfit.toLocaleString()}` : nakedCount > 0 ? `${nakedCount} naked position(s)` : 'No open derivatives'}
+                  status={nakedCount > 0 ? 'danger' : totalMaxLoss <= 15000 ? 'good' : 'warning'}
+                />
+                <RiskMetric
+                  label="Reward : Risk"
+                  value={rrRatio > 0 ? `1:${(1 / rrRatio).toFixed(2)}` : '-'}
+                  subtext={spreads.length > 0 ? `${spreads.length} spread(s) grouped` : incompleteCount > 0 ? `${incompleteCount} incomplete` : 'No spreads'}
+                  status={rrRatio >= 0.3 ? 'good' : rrRatio > 0 ? 'warning' : 'danger'}
+                />
+                <RiskMetric
+                  label="Win Rate"
+                  value={`${winCount}/${openPositions.length}`}
+                  subtext={openPositions.length > 0 ? `${winRate}% Win Ratio` : 'N/A'}
+                  status={winRate >= 50 ? 'good' : 'warning'}
+                />
+              </>
+            );
+          })()}
         </div>
+
+        {/* Breakeven Levels */}
+        {spreadData?.spreads?.some((s: any) => s.breakeven_points?.length > 0) && (
+          <div className="mt-4 pt-4 border-t border-slate-700">
+            <p className="text-xs text-slate-400 mb-2">Breakeven Levels</p>
+            <div className="flex flex-wrap gap-3">
+              {spreadData.spreads.filter((s: any) => s.breakeven_points?.length > 0).map((s: any, i: number) => (
+                <div key={i} className="bg-slate-800/50 px-3 py-1.5 rounded border border-slate-700">
+                  <span className="text-xs text-slate-400">{s.underlying} {s.spread_type.replace(/_/g, ' ')}: </span>
+                  <span className="text-sm font-semibold text-blue-400">
+                    {s.breakeven_points.map((b: number) => b.toFixed(1)).join(' / ')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Zerodha Positions */}
@@ -240,6 +356,7 @@ interface PositionCardProps {
   trade: any;
   onClose: () => void;
   loading: boolean;
+  smartSuggestion?: any;
 }
 
 // Hedge Position Modal Component
@@ -560,8 +677,157 @@ const ShareStrategyModal: React.FC<{ trade: any; onClose: () => void }> = ({ tra
   );
 };
 
-const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) => {
+// ──────────── Smart Suggestion Banner ────────────
+interface SmartSuggestionBannerProps {
+  suggestion: any;
+  onDismiss: () => void;
+  onClose: () => void;    // close position
+  onHedge: () => void;    // open hedge modal
+}
+
+const SmartSuggestionBanner: React.FC<SmartSuggestionBannerProps> = ({
+  suggestion,
+  onDismiss,
+  onClose,
+  onHedge,
+}) => {
+  const [expanded, setExpanded] = React.useState(false);
+
+  const action = suggestion?.action || 'HOLD';
+  const severity = suggestion?.severity || 'LOW';
+  const reason = suggestion?.reason || '';
+  const details = suggestion?.details || '';
+  const currentBias = suggestion?.current_signal_bias || '?';
+  const currentStrategy = suggestion?.current_strategy_name || '?';
+  const confidence = suggestion?.current_confidence || 0;
+  const marketMode = suggestion?.current_market_mode || '?';
+  const ivRegime = suggestion?.current_iv_regime || '?';
+
+  // Color scheme based on severity
+  const colorMap: Record<string, { bg: string; border: string; text: string; icon: string; badge: string }> = {
+    HIGH: {
+      bg: 'bg-red-500/10',
+      border: 'border-red-500/40',
+      text: 'text-red-300',
+      icon: 'text-red-400',
+      badge: 'bg-red-500/20 text-red-300 border-red-500/40',
+    },
+    MEDIUM: {
+      bg: 'bg-amber-500/10',
+      border: 'border-amber-500/40',
+      text: 'text-amber-300',
+      icon: 'text-amber-400',
+      badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+    },
+    LOW: {
+      bg: 'bg-blue-500/10',
+      border: 'border-blue-500/30',
+      text: 'text-blue-300',
+      icon: 'text-blue-400',
+      badge: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+    },
+  };
+
+  const colors = colorMap[severity] || colorMap.LOW;
+
+  // Icon based on action
+  const ActionIcon = {
+    CONSIDER_EXIT: AlertTriangle,
+    HEDGE_SUGGESTED: Shield,
+    WATCH: Eye,
+    HOLD: CheckCircle,
+  }[action] || Eye;
+
+  // Action label
+  const actionLabel = {
+    CONSIDER_EXIT: 'Consider Exiting',
+    HEDGE_SUGGESTED: 'Hedge Suggested',
+    WATCH: 'Watch Closely',
+    HOLD: 'Hold',
+  }[action] || action;
+
+  return (
+    <div className={`${colors.bg} border ${colors.border} rounded-lg p-3 mb-2`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 flex-1">
+          <ActionIcon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${colors.icon}`} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-xs font-bold px-2 py-0.5 rounded border ${colors.badge}`}>
+                🧠 {actionLabel}
+              </span>
+              <span className="text-xs text-slate-400">
+                TA now: <span className={`font-semibold ${
+                  currentBias === 'BULLISH' ? 'text-green-400' :
+                  currentBias === 'BEARISH' ? 'text-red-400' : 'text-slate-300'
+                }`}>{currentBias}</span> • {confidence}% conf
+              </span>
+            </div>
+            <p className={`text-xs mt-1 ${colors.text}`}>{reason}</p>
+
+            {expanded && (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs text-slate-400 leading-relaxed">{details}</p>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                    Now suggests: {currentStrategy}
+                  </span>
+                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                    Market: {marketMode}
+                  </span>
+                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                    IV: {ivRegime}
+                  </span>
+                </div>
+
+                {/* Quick action buttons */}
+                {(action === 'CONSIDER_EXIT' || action === 'HEDGE_SUGGESTED') && (
+                  <div className="flex gap-2 mt-2 pt-2 border-t border-slate-700/50">
+                    {action === 'CONSIDER_EXIT' && (
+                      <button
+                        onClick={onClose}
+                        className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-300 text-xs border border-red-500/30 rounded transition"
+                      >
+                        Exit Position
+                      </button>
+                    )}
+                    <button
+                      onClick={onHedge}
+                      className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 text-xs border border-blue-500/30 rounded transition"
+                    >
+                      Add Hedge
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-xs text-slate-500 hover:text-slate-300 transition px-1"
+            title={expanded ? 'Collapse' : 'See details'}
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
+          <button
+            onClick={onDismiss}
+            className="text-slate-600 hover:text-slate-400 transition"
+            title="Dismiss suggestion"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, smartSuggestion }) => {
   const [showLegs, setShowLegs] = React.useState(false);
+  const [showAdvice, setShowAdvice] = React.useState(true);
   const [editOpen, setEditOpen] = React.useState(false);
   const [hedgeOpen, setHedgeOpen] = React.useState(false);
   const [adjustOpen, setAdjustOpen] = React.useState(false);
@@ -680,6 +946,16 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading }) 
           </button>
         </div>
       </div>
+
+      {/* 🧠 Smart Suggestion Banner */}
+      {smartSuggestion && smartSuggestion.severity !== 'NONE' && showAdvice && (
+        <SmartSuggestionBanner
+          suggestion={smartSuggestion}
+          onDismiss={() => setShowAdvice(false)}
+          onClose={onClose}
+          onHedge={() => setHedgeOpen(true)}
+        />
+      )}
 
       <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${isZerodhaMode && marginRequired > 0 ? 'grid-cols-2 md:grid-cols-7' : 'grid-cols-2 md:grid-cols-6'}`}>
         <div>

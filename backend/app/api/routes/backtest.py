@@ -79,6 +79,8 @@ def run_backtest(
     Returns:
         Backtest result with performance metrics
     """
+    import time as _time
+    _t0 = _time.perf_counter()
     try:
         logger.info(f"🔄 Running backtest for strategy {request.strategy_config_id}")
         
@@ -94,6 +96,14 @@ def run_backtest(
         mode = (request.mode or "auto").lower().strip()
         if mode not in {"auto", "proxy", "options"}:
             raise HTTPException(status_code=400, detail="Invalid mode. Use auto|proxy|options")
+
+        # Validate date range
+        if request.start_date >= request.end_date:
+            raise HTTPException(status_code=400, detail="start_date must be before end_date")
+        if (request.end_date - request.start_date).days > 365:
+            raise HTTPException(status_code=400, detail="Backtest range cannot exceed 1 year")
+        if request.initial_capital <= 0:
+            raise HTTPException(status_code=400, detail="initial_capital must be positive")
 
         use_options = mode == "options" or (mode == "auto" and config.strategy_type == "option_spread_15m")
 
@@ -227,6 +237,9 @@ def run_backtest(
             logger.warning(f"⚠️ Could not save backtest to DB: {e}")
             # Still return results even if save fails
         
+        elapsed = _time.perf_counter() - _t0
+        result["elapsed_seconds"] = round(elapsed, 2)
+        logger.info(f"⏱️ Backtest completed in {elapsed:.1f}s")
         return result
     
     except HTTPException:

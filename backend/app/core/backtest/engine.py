@@ -15,6 +15,46 @@ from app.core.utils.time import now_ist
 
 logger = logging.getLogger(__name__)
 
+# Realistic Indian brokerage model (Zerodha-like)
+# ₹20 per executed order OR 0.03% (whichever is lower) + regulatory charges
+BROKERAGE_PER_ORDER = 20.0   # Zerodha flat fee per order
+STT_RATE = 0.000625           # STT on sell side (options: 0.0625% on sell premium)
+EXCHANGE_TXN_RATE = 0.0000345 # NSE transaction charges
+GST_RATE = 0.18               # GST on brokerage + exchange charges
+SEBI_RATE = 0.000001           # SEBI turnover fee
+STAMP_DUTY_RATE = 0.00003     # Stamp duty (buy side only)
+
+
+def _calculate_commission(entry_price: float, exit_price: float, quantity: int) -> float:
+    """
+    Calculate realistic Indian market trading costs (Zerodha model).
+    Returns total round-trip charges.
+    """
+    buy_turnover = abs(entry_price * quantity)
+    sell_turnover = abs(exit_price * quantity)
+    total_turnover = buy_turnover + sell_turnover
+
+    # Brokerage: ₹20 per order × 2 sides (or 0.03% whichever is lower)
+    brokerage = min(BROKERAGE_PER_ORDER, buy_turnover * 0.0003) + \
+                min(BROKERAGE_PER_ORDER, sell_turnover * 0.0003)
+
+    # STT (on sell side only for intraday equity/options)
+    stt = sell_turnover * STT_RATE
+
+    # Exchange transaction charges
+    exchange = total_turnover * EXCHANGE_TXN_RATE
+
+    # GST on brokerage + exchange charges
+    gst = (brokerage + exchange) * GST_RATE
+
+    # SEBI charges
+    sebi = total_turnover * SEBI_RATE
+
+    # Stamp duty (buy side only)
+    stamp = buy_turnover * STAMP_DUTY_RATE
+
+    return brokerage + stt + exchange + gst + sebi + stamp
+
 
 class Trade:
     """Represents a single trade in the backtest"""
@@ -42,25 +82,25 @@ class Trade:
             gross_pnl = (self.entry_price - exit_price) * self.quantity
         else:
             gross_pnl = (exit_price - self.entry_price) * self.quantity
-        # Apply commission (0.1% round trip)
-        commission = abs(self.entry_price * self.quantity * 0.001)
-        commission += abs(exit_price * self.quantity * 0.001)
+
+        # Realistic Indian market commission
+        commission = _calculate_commission(self.entry_price, exit_price, self.quantity)
         
         self.pnl = gross_pnl - commission
-        self.pnl_pct = (self.pnl / (self.entry_price * self.quantity)) * 100
+        self.pnl_pct = (self.pnl / (self.entry_price * self.quantity)) * 100 if self.entry_price > 0 else 0
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
         return {
-            "entry_date": self.entry_date.isoformat(),
-            "exit_date": self.exit_date.isoformat() if self.exit_date else None,
+            "entry_date": self.entry_date.isoformat() if hasattr(self.entry_date, 'isoformat') else str(self.entry_date),
+            "exit_date": self.exit_date.isoformat() if self.exit_date and hasattr(self.exit_date, 'isoformat') else None,
             "entry_price": self.entry_price,
             "exit_price": self.exit_price,
             "quantity": self.quantity,
             "side": self.side,
             "strategy": self.strategy,
-            "pnl": self.pnl,
-            "pnl_pct": self.pnl_pct,
+            "pnl": round(self.pnl, 2) if self.pnl is not None else None,
+            "pnl_pct": round(self.pnl_pct, 2) if self.pnl_pct is not None else None,
             "status": self.status,
         }
 
@@ -86,18 +126,28 @@ class BacktestEngine:
             from app.core.strategies.backtest_mock import BacktestMockStrategy
             self.strategy_class = BacktestMockStrategy
         
+        # Keep ONE persistent strategy instance so stateful strategies
+        # (e.g. moving average crossover) can maintain their candle history.
+        self._strategy_instance = self.strategy_class()
+
         self.trades: List[Trade] = []
         self.equity_curve: List[float] = []
-        self.daily_equity: Dict[date, float] = {}
 
         self.candles_loaded: int = 0
         self.signal_counts: Dict[str, int] = {"BUY": 0, "SELL": 0, "HOLD": 0}
         self.raw_action_counts: Dict[str, int] = {}
         
+        # Read SL/TP from strategy parameters (with sane defaults)
+        params = strategy_config.parameters or {}
+        self.sl_pct = float(params.get("sl_pct", 3) or 3)    # Stop loss %
+        self.tp_pct = float(params.get("tp_pct", 3) or 3)    # Take profit %
+        
         logger.info(
-            "✅ Initialized BacktestEngine for %s (strategy: %s)",
+            "✅ Initialized BacktestEngine for %s (strategy: %s, SL=%.1f%%, TP=%.1f%%)",
             strategy_config.name,
             strategy_config.strategy_type,
+            self.sl_pct,
+            self.tp_pct,
         )
     
     def run(
@@ -122,7 +172,6 @@ class BacktestEngine:
             
             # Initialize
             current_equity = initial_capital
-            self.daily_equity[start_date] = initial_capital
             
             # Fetch historical candles
             logger.info(f"📊 Fetching historical candles...")
@@ -140,20 +189,22 @@ class BacktestEngine:
             
             logger.info(f"✅ Loaded {len(candles)} candles")
             self.candles_loaded = len(candles)
+
+            # Track equity per candle (not just per day) for accurate Sharpe/Sortino
+            self.equity_curve = [initial_capital]
             
+            # Keep candle history in memory for strategies that need TA
+            # (no DB writes needed — 100x faster)
+            self._candle_history: List[Dict] = []
+
             # Replay candles
             for idx, candle in enumerate(candles):
                 try:
                     current_date = candle.get("date", start_date)
                     candle_close = candle.get("close", 0)
 
-                    # Feed candles incrementally into DB (prevents lookahead bias)
-                    try:
-                        from app.core.data.candles import _save_candles_to_db
-
-                        _save_candles_to_db(symbol=self.backtest_symbol, candles=[candle], interval="15minute")
-                    except Exception:
-                        pass
+                    # Accumulate candles in memory (no DB round-trip)
+                    self._candle_history.append(candle)
                     
                     # Check stop loss / take profit on open trades
                     open_trade = self._get_open_trade()
@@ -164,17 +215,19 @@ class BacktestEngine:
                         else:
                             pnl_pct = ((candle_close - open_trade.entry_price) / open_trade.entry_price) * 100
                         
-                        # Stop loss at -2% or Take profit at +1%
-                        if pnl_pct <= -2.0:  # Stop loss
+                        # Stop loss / Take profit from strategy parameters
+                        sl_hit = pnl_pct <= -self.sl_pct
+                        tp_hit = pnl_pct >= self.tp_pct
+
+                        if sl_hit:
                             open_trade.close(current_date, candle_close)
                             current_equity += open_trade.pnl
-                            logger.debug(f"🛑 Stop Loss at {current_date} @ {candle_close}, P&L: {open_trade.pnl}")
-                            continue
-                        elif pnl_pct >= 1.0:  # Take profit
+                            logger.debug(f"🛑 Stop Loss at {current_date} @ {candle_close}, P&L: {open_trade.pnl:.2f}")
+                            # Don't `continue` — still generate signal for potential re-entry
+                        elif tp_hit:
                             open_trade.close(current_date, candle_close)
                             current_equity += open_trade.pnl
-                            logger.debug(f"💰 Take Profit at {current_date} @ {candle_close}, P&L: {open_trade.pnl}")
-                            continue
+                            logger.debug(f"💰 Take Profit at {current_date} @ {candle_close}, P&L: {open_trade.pnl:.2f}")
                     
                     # Generate signal using strategy
                     context = {
@@ -182,6 +235,7 @@ class BacktestEngine:
                         "backtest_symbol": self.backtest_symbol,
                         "parameters": self.config.parameters,
                         "candle": candle,
+                        "candle_history": self._candle_history,
                         "current_equity": current_equity,
                     }
                     
@@ -190,8 +244,7 @@ class BacktestEngine:
                     raw_action = signal.get("action") or "HOLD"
                     self.raw_action_counts[raw_action] = self.raw_action_counts.get(raw_action, 0) + 1
                     
-                    # Only trade if confidence >= min_confidence (default 55% for backtests)
-                    # Lowered from 60% to 55% to generate more trades
+                    # Only trade if confidence >= min_confidence
                     min_confidence = self.config.parameters.get("min_confidence", 55)
                     is_confident = signal.get("confidence", 0) >= min_confidence
                     
@@ -221,11 +274,12 @@ class BacktestEngine:
                                 open_trade.close(candle["date"], candle["close"])
                                 current_equity += open_trade.pnl
                     
-                    # Track daily equity
-                    self.daily_equity[current_date] = current_equity
+                    # Track equity every candle for accurate Sharpe/Sortino
+                    self.equity_curve.append(current_equity)
                 
                 except Exception as e:
                     logger.error(f"❌ Error processing candle {idx}: {e}")
+                    self.equity_curve.append(current_equity)
                     continue
             
             # Close any remaining open trades at end
@@ -235,9 +289,7 @@ class BacktestEngine:
                 if open_trade:
                     open_trade.close(last_candle["date"], last_candle["close"])
                     current_equity += open_trade.pnl
-            
-            # Build equity curve
-            self.equity_curve = list(self.daily_equity.values())
+                    self.equity_curve[-1] = current_equity
             
             logger.info(f"✅ Backtest complete: {len(self.trades)} trades, Final equity: ₹{current_equity:,.0f}")
             
@@ -269,10 +321,8 @@ class BacktestEngine:
     def _generate_signal(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Generate trading signal using strategy"""
         try:
-            if not self.strategy_class:
+            if not self._strategy_instance:
                 return {"action": "HOLD"}
-            
-            strategy_instance = self.strategy_class()
 
             # Many strategies expect config parameters at the top-level payload.
             # Keep original context keys, but also flatten parameters for compatibility.
@@ -286,7 +336,7 @@ class BacktestEngine:
                 payload.setdefault("spot", candle.get("close"))
                 payload.setdefault("backtest", True)
 
-            result = strategy_instance.run(payload)
+            result = self._strategy_instance.run(payload)
             
             # Strategy can return either "strategy" or "signal" key
             action = result.get("strategy") or result.get("signal")
@@ -353,11 +403,35 @@ class BacktestEngine:
         try:
             from app.core.backtest.metrics import MetricsCalculator
             
+            # Determine actual calendar date range from candle data
+            first_date = None
+            last_date = None
+            unique_dates = set()
+            for t in self.trades:
+                if t.entry_date:
+                    d = t.entry_date
+                    if hasattr(d, 'date'):
+                        d = d.date()
+                    unique_dates.add(d)
+                if t.exit_date:
+                    d = t.exit_date
+                    if hasattr(d, 'date'):
+                        d = d.date()
+                    unique_dates.add(d)
+
+            if unique_dates:
+                first_date = min(unique_dates)
+                last_date = max(unique_dates)
+            
+            # Compute number of trading days for proper annualization
+            trading_days = len(unique_dates) if unique_dates else max(1, len(self.equity_curve) // 26)
+            
             calculator = MetricsCalculator(
                 initial_capital=initial_capital,
                 final_equity=final_equity,
                 equity_curve=self.equity_curve,
                 trades=self.trades,
+                trading_days=trading_days,
             )
             
             metrics = calculator.calculate_all()
@@ -365,8 +439,8 @@ class BacktestEngine:
             return {
                 "success": True,
                 "strategy_config_id": self.config.id,
-                "start_date": min(self.daily_equity.keys()),
-                "end_date": max(self.daily_equity.keys()),
+                "start_date": first_date or date.today(),
+                "end_date": last_date or date.today(),
                 "initial_capital": initial_capital,
                 "final_equity": final_equity,
                 "total_return_pct": metrics["total_return_pct"],

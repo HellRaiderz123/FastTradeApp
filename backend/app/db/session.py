@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # Use an absolute path so the DB location doesn't depend on process CWD.
@@ -18,8 +18,19 @@ else:
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},  # needed for SQLite
+    connect_args={
+        "check_same_thread": False,  # needed for SQLite
+        "timeout": 30,               # wait up to 30s for DB lock
+    },
 )
+
+
+# Enable WAL mode — allows concurrent reads while a write is in progress
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
 
 SessionLocal = sessionmaker(
     autocommit=False,

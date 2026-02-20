@@ -212,6 +212,9 @@ class ZerodhaExecutionAdapter:
             
         ltp_map = get_ltp(symbols)
 
+        # Correct quantity: prefer per-leg qty, then ticket-level lots × lot_size
+        ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
+
         # Check if we have leg prices
         has_leg_prices = all(leg.get("price") is not None for leg in ticket["legs"])
         
@@ -227,7 +230,7 @@ class ZerodhaExecutionAdapter:
                 if entry is None:
                     continue
                 entry_f = float(entry)
-                leg_qty = int(leg.get("qty", 1))
+                leg_qty = int(leg.get("qty", 0)) or ticket_qty
 
                 if leg["side"] == "SELL":
                     pnl += (entry_f - ltp) * leg_qty
@@ -244,7 +247,7 @@ class ZerodhaExecutionAdapter:
                 if not sym:
                     continue
                 ltp = float(ltp_map.get(sym) or 0.0)
-                leg_qty = int(leg.get("qty", 1))
+                leg_qty = int(leg.get("qty", 0)) or ticket_qty
                 
                 if leg["side"] == "SELL":
                     cost_to_close += ltp * leg_qty
@@ -281,16 +284,19 @@ class ZerodhaExecutionAdapter:
 
         ltp = get_ltp(symbols)
 
+        # Compute per-leg quantity from ticket-level lots × lot_size
+        qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
+
         entry_credit_total = 0.0
         for leg in ticket.get("legs", []):
             sym = leg.get("symbol")
             px = float(ltp.get(sym) or 0.0)
             leg["price"] = px
-            leg_qty = int(leg.get("qty", 1))
+            leg["qty"] = qty  # persist so MTM can use it later
             if leg.get("side") == "SELL":
-                entry_credit_total += px * leg_qty
+                entry_credit_total += px * qty
             else:
-                entry_credit_total -= px * leg_qty
+                entry_credit_total -= px * qty
 
         return round(entry_credit_total, 2)
 

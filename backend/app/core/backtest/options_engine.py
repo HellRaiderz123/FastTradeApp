@@ -12,9 +12,9 @@ from app.core.backtest.metrics import MetricsCalculator
 from app.core.backtest.options_pricing import CandleSeries, fetch_option_series
 from app.core.broker.zerodha.instruments import load_instruments
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
-from app.core.data.candles import _save_candles_to_db, get_historical_candles
+from app.core.data.candles import get_historical_candles
 from app.core.market.expiry import get_weekly_expiry_for_date
-from app.core.signals.signals import generate_signal
+from app.core.signals.signals import generate_signal_from_candles
 from app.core.strategies.option_spread_15m.context import build_market_context
 from app.core.strategies.option_spread_15m.decision import decide_strategy
 from app.core.strategies.option_spread_15m.strikes import SpreadStrikes, compute_spread_strikes
@@ -145,20 +145,18 @@ class OptionsBacktestEngine:
         from_dt = _dt_from_candle(candles[0])
         to_dt = _dt_from_candle(candles[-1])
 
+        # Keep candle history in memory for TA (no DB writes needed)
+        _candle_history: List[Dict] = []
+
         for candle in candles:
             ts = _dt_from_candle(candle)
 
-            # Incremental candle injection for correct TA
-            try:
-                _save_candles_to_db(symbol=backtest_symbol, candles=[candle], interval="15minute")
-            except Exception:
-                pass
+            # Accumulate candles in memory for TA computation
+            _candle_history.append(candle)
 
-            sig = generate_signal(
-                db=self.db,
-                symbol=backtest_symbol,
-                use_ml=False,
-                # Avoid live VIX calls and keep regime stable in backtests
+            # Generate signal from in-memory candles (100x faster than DB round-trip)
+            sig = generate_signal_from_candles(
+                candles=_candle_history,
                 india_vix=15.0,
                 vix_rank=50.0,
                 iv_regime="NORMAL",
@@ -303,19 +301,24 @@ class OptionsBacktestEngine:
 
         final_equity = float(starting_capital)
 
-        metrics = MetricsCalculator(
-            initial_capital=float(self.equity_curve[0] if self.equity_curve else initial_capital),
-            final_equity=final_equity,
-            equity_curve=self.equity_curve,
-            trades=self.trades,
-        ).calculate_all()
+        # Compute actual trading days for proper annualization
+        unique_dates = set()
+        for t in self.trades:
+            if t.entry_ts:
+                unique_dates.add(t.entry_ts.date())
+            if t.exit_ts:
+                unique_dates.add(t.exit_ts.date())
+        trading_days = len(unique_dates) if unique_dates else max(1, len(self.equity_curve) // 26)
 
-        drawdown_periods = MetricsCalculator(
+        calc = MetricsCalculator(
             initial_capital=float(self.equity_curve[0] if self.equity_curve else initial_capital),
             final_equity=final_equity,
             equity_curve=self.equity_curve,
             trades=self.trades,
-        ).calculate_drawdown_periods()
+            trading_days=trading_days,
+        )
+        metrics = calc.calculate_all()
+        drawdown_periods = calc.calculate_drawdown_periods()
 
         return {
             "success": True,

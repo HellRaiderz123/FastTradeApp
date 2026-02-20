@@ -150,6 +150,27 @@ export const journalAPI = {
     api.get(`/journal/strategy-runs?limit=${limit}`),
   getExecutionIntents: (limit = 50) =>
     api.get(`/journal/execution-intents?limit=${limit}`),
+  getSpreadAnalysis: (limit = 50) =>
+    api.get(`/journal/spread-analysis?limit=${limit}`),
+};
+
+// Smart Position Suggestions API
+export const smartSuggestionsAPI = {
+  get: () => api.get('/positions/smart-suggestions'),
+};
+
+// Auto-Trader API
+export const autoTraderAPI = {
+  getConfig: () => api.get('/auto-trader/config'),
+  updateConfig: (data: Record<string, any>) => api.put('/auto-trader/config', data),
+  getStatus: () => api.get('/auto-trader/status'),
+  start: () => api.post('/auto-trader/start'),
+  stop: () => api.post('/auto-trader/stop'),
+  pause: () => api.post('/auto-trader/pause'),
+  resetDaily: () => api.post('/auto-trader/reset-daily'),
+  getLogs: (params?: { limit?: number; action?: string; underlying?: string; severity?: string }) =>
+    api.get('/auto-trader/logs', { params }),
+  clearLogs: () => api.delete('/auto-trader/logs'),
 };
 
 // Market Data APIs

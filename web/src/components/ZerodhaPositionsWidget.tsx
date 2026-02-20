@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
-import { financeAPI } from '../lib/api';
+import { RefreshCw, TrendingUp, TrendingDown, AlertTriangle, Shield, Eye, CheckCircle, X  } from 'lucide-react';
+import { financeAPI, smartSuggestionsAPI } from '../lib/api';
 
 interface ZerodhaPosition {
   tradingsymbol: string;
@@ -20,6 +20,8 @@ export default function ZerodhaPositionsWidget() {
   const [positions, setPositions] = useState<ZerodhaPosition[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [spreadAdvice, setSpreadAdvice] = useState<any[]>([]);
+  const [adviceDismissed, setAdviceDismissed] = useState<Set<number>>(new Set());
 
   const loadPositions = async () => {
     setLoading(true);
@@ -36,10 +38,24 @@ export default function ZerodhaPositionsWidget() {
     }
   };
 
+  const loadSmartSuggestions = async () => {
+    try {
+      const res = await smartSuggestionsAPI.get();
+      const data = res?.data;
+      if (data?.spread_suggestions?.length > 0) {
+        setSpreadAdvice(data.spread_suggestions);
+      }
+    } catch (e) {
+      console.debug('[ZerodhaPositions] Smart suggestions fetch failed:', e);
+    }
+  };
+
   useEffect(() => {
     loadPositions();
-    const interval = setInterval(loadPositions, 30000); // Refresh every 30s
-    return () => clearInterval(interval);
+    loadSmartSuggestions();
+    const interval = setInterval(loadPositions, 30000);
+    const smartInterval = setInterval(loadSmartSuggestions, 60000);
+    return () => { clearInterval(interval); clearInterval(smartInterval); };
   }, []);
 
   const totalPnL = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
@@ -77,6 +93,44 @@ export default function ZerodhaPositionsWidget() {
             <p className="text-xs text-slate-400">Losses</p>
             <p className="text-lg font-bold text-red-400">{losingPositions}</p>
           </div>
+        </div>
+      )}
+
+      {/* Smart Position Suggestions */}
+      {spreadAdvice.filter((_, i) => !adviceDismissed.has(i)).length > 0 && (
+        <div className="space-y-2 mb-4">
+          {spreadAdvice.map((ss, idx) => {
+            if (adviceDismissed.has(idx)) return null;
+            const advice = ss.advice || {};
+            const severity = advice.severity || 'LOW';
+            const action = advice.action || 'HOLD';
+            if (severity === 'NONE') return null;
+
+            const colorMap: Record<string, { bg: string; border: string; text: string; badge: string }> = {
+              HIGH: { bg: 'bg-red-500/10', border: 'border-red-500/40', text: 'text-red-300', badge: 'bg-red-500/20 text-red-300 border-red-500/40' },
+              MEDIUM: { bg: 'bg-amber-500/10', border: 'border-amber-500/40', text: 'text-amber-300', badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+              LOW: { bg: 'bg-blue-500/10', border: 'border-blue-500/30', text: 'text-blue-300', badge: 'bg-blue-500/20 text-blue-300 border-blue-500/30' },
+            };
+            const colors = colorMap[severity] || colorMap.LOW;
+
+            const ActionIcon = { CONSIDER_EXIT: AlertTriangle, HEDGE_SUGGESTED: Shield, WATCH: Eye, HOLD: CheckCircle }[action] || Eye;
+            const actionLabel = { CONSIDER_EXIT: 'Consider Exiting', HEDGE_SUGGESTED: 'Hedge Suggested', WATCH: 'Watch Closely', HOLD: 'Hold' }[action] || action;
+
+            return (
+              <SmartAdviceBanner
+                key={idx}
+                idx={idx}
+                ss={ss}
+                advice={advice}
+                severity={severity}
+                action={action}
+                colors={colors}
+                ActionIcon={ActionIcon}
+                actionLabel={actionLabel}
+                onDismiss={() => setAdviceDismissed(prev => new Set([...prev, idx]))}
+              />
+            );
+          })}
         </div>
       )}
 
@@ -144,6 +198,85 @@ export default function ZerodhaPositionsWidget() {
       <p className="text-xs text-slate-500 mt-3 text-center">
         Data from Zerodha • Updated every 30 seconds
       </p>
+    </div>
+  );
+}
+
+// ── Smart Advice Banner (expandable) ────────────────────>>>>
+function SmartAdviceBanner({
+  idx, ss, advice, severity, action, colors, ActionIcon, actionLabel, onDismiss
+}: {
+  idx: number;
+  ss: any;
+  advice: any;
+  severity: string;
+  action: string;
+  colors: { bg: string; border: string; text: string; badge: string };
+  ActionIcon: React.ElementType;
+  actionLabel: string;
+  onDismiss: () => void;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+
+  const currentBias = advice.current_signal_bias || '?';
+  const confidence = advice.current_confidence || 0;
+  const details = advice.details || '';
+  const marketMode = advice.current_market_mode || '?';
+  const ivRegime = advice.current_iv_regime || '?';
+  const currentStrategy = advice.current_strategy_name || '?';
+
+  return (
+    <div className={`${colors.bg} border ${colors.border} rounded-lg p-3`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 flex-1">
+          <ActionIcon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${colors.text}`} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`text-xs font-bold px-2 py-0.5 rounded border ${colors.badge}`}>
+                🧠 {actionLabel}
+              </span>
+              <span className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">
+                {ss.spread_type?.replace(/_/g, ' ')} • {ss.underlying}
+              </span>
+              <span className="text-xs text-slate-400">
+                TA: <span className={`font-semibold ${
+                  currentBias === 'BULLISH' ? 'text-green-400' :
+                  currentBias === 'BEARISH' ? 'text-red-400' : 'text-slate-300'
+                }`}>{currentBias}</span> • {confidence}% conf
+              </span>
+            </div>
+            <p className={`text-xs mt-1 ${colors.text}`}>{advice.reason}</p>
+
+            {expanded && (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs text-slate-400 leading-relaxed">{details}</p>
+                <div className="flex flex-wrap gap-2">
+                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                    Now suggests: {currentStrategy}
+                  </span>
+                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                    Market: {marketMode}
+                  </span>
+                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                    IV: {ivRegime}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-xs text-slate-500 hover:text-slate-300 transition px-1"
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
+          <button onClick={onDismiss} className="text-slate-600 hover:text-slate-400 transition">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

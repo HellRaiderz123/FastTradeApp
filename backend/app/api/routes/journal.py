@@ -11,6 +11,8 @@ from app.api.schemas.journal import StrategyRunOut, ExecutionIntentOut
 from app.core.utils.time import now_ist
 from app.core.broker.zerodha.client import get_kite_client
 from app.services.zerodha_ticker import subscribe_symbols as subscribe_to_ticker
+from app.core.spreads import detect_spreads
+from app.core.exit.broker_reconcile import reconcile_broker_positions
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +56,23 @@ def _sync_zerodha_live_positions(db: Session) -> List[ExecutionIntent]:
                 continue
             
             # Check if this position is already tracked in the database by symbol
+            # Use a direct DB query for efficiency and to avoid race conditions
+            already_tracked = db.query(ExecutionIntent).filter(
+                ExecutionIntent.status == "EXECUTED",
+                ExecutionIntent.closed_at.is_(None),
+                ExecutionIntent.underlying == symbol,
+                ExecutionIntent.strategy == "DIRECT_ZERODHA",
+            ).first()
+            
+            if already_tracked:
+                continue  # Already synced: skip
+            
+            # Also check if any other intent has this symbol in its legs
             existing = db.query(ExecutionIntent).filter(
                 ExecutionIntent.status == "EXECUTED",
                 ExecutionIntent.closed_at.is_(None)
             ).all()
             
-            # Look for a match: symbol in ticket.legs
             found = False
             for intent in existing:
                 ticket = intent.ticket or {}
@@ -154,8 +167,10 @@ def list_execution_intents(
         List of execution intents ordered by most recent first.
     """
     # Sync Zerodha live positions that aren't tracked in the app
+    # AND reconcile stale positions that were closed on Zerodha directly
     try:
         _sync_zerodha_live_positions(db)
+        reconcile_broker_positions(db, force=True)
     except Exception as e:
         logger.debug(f"⚠️  Zerodha position sync skipped: {e}")
         # Non-blocking: proceed with available data
@@ -196,3 +211,62 @@ def list_execution_intents(
         pass
 
     return intents
+
+
+@router.get("/spread-analysis")
+def analyze_spreads(
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """
+    Analyze open positions and group them into spreads.
+    Detects incomplete spreads, naked positions, and associated risks.
+    
+    Returns:
+        {
+            "spreads": [ { spread analysis } ],
+            "naked_positions": [ { naked position details } ],
+            "incomplete_spreads": [ { incomplete spread with warning } ],
+            "total_warnings": [ { warning details } ],
+            "has_critical_warnings": boolean
+        }
+    """
+    # Get active execution intents
+    intents = (
+        db.query(ExecutionIntent)
+        .filter(ExecutionIntent.status == "EXECUTED", ExecutionIntent.closed_at.is_(None))
+        .order_by(ExecutionIntent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    
+    # Convert to dicts for the detector
+    intent_dicts = [
+        {
+            "intent_id": intent.intent_id,
+            "strategy": intent.strategy,
+            "underlying": intent.underlying,
+            "expiry": intent.expiry,
+            "ticket": intent.ticket or {},
+            "pnl": intent.pnl,
+            "unrealized_pnl": intent.unrealized_pnl,
+            "entry_credit": intent.entry_credit,
+        }
+        for intent in intents
+    ]
+
+    # Debug log ticket structures for troubleshooting
+    for d in intent_dicts:
+        ticket = d.get("ticket", {})
+        legs = ticket.get("legs", [])
+        logger.debug(
+            "Spread analysis intent=%s strategy=%s underlying=%s legs=%s",
+            d.get("intent_id"), d.get("strategy"), d.get("underlying"),
+            [{k: v for k, v in leg.items() if k in ("side", "type", "option_type", "strike", "symbol", "qty", "quantity")} for leg in legs],
+        )
+    
+    # Run spread detection
+    grouped = detect_spreads(intent_dicts)
+    
+    return grouped.to_dict()
+

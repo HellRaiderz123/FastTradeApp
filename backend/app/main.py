@@ -52,6 +52,8 @@ from app.api.routes import safety
 from app.api.routes import ml
 from app.api.routes import candles
 from app.api.routes import zerodha_broker
+from app.api.routes import position_suggestions
+from app.api.routes import auto_trader as auto_trader_routes
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
@@ -92,6 +94,7 @@ async def lifespan(app: FastAPI):
         from app.db.models import Base
         from app.db.models_notification import Notification
         from app.db.models_risk import RiskLimitConfig  # noqa: F401 ensures table registration
+        from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog  # noqa: F401
         Base.metadata.create_all(bind=engine)
         logger.info("✅ Database tables initialized")
     except Exception as e:
@@ -108,6 +111,22 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
+
+    # Resume auto-trader scheduler if it was RUNNING before restart
+    try:
+        from app.db.session import SessionLocal as _SL
+        from app.db.models_auto_trader import AutoTraderConfig as _ATC
+        from app.core.auto_trader import _ensure_scheduler_job, reset_daily_counters
+        _db = _SL()
+        _cfg = _db.query(_ATC).first()
+        if _cfg and _cfg.enabled and _cfg.status == "RUNNING":
+            _ensure_scheduler_job(_cfg.scan_interval_sec or 30)
+            # Reset daily counters on fresh server start
+            reset_daily_counters(_db)
+            logger.info("✅ Auto-trader scheduler resumed (was RUNNING before restart)")
+        _db.close()
+    except Exception as e:
+        logger.warning(f"⚠️ Auto-trader resume failed: {e}")
     
     # Start WebSocket background tasks
     # FIX: Initialize to None before try block — prevents NameError on shutdown
@@ -255,5 +274,7 @@ app.include_router(peer_comparison.router)
 app.include_router(safety.router)
 app.include_router(candles.router)
 app.include_router(zerodha_broker.router)
+app.include_router(position_suggestions.router)
+app.include_router(auto_trader_routes.router)
 
 logger.info(" All routers registered (including Phase 5 features)")
