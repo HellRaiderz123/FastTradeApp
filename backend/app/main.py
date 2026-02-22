@@ -102,10 +102,14 @@ async def lifespan(app: FastAPI):
     
     # Initialize VIX data and start schedulers
     try:
+        # Get startup delay config from environment (prevents startup blocking)
+        daily_backfill_delay = int(os.getenv("DAILY_BACKFILL_DELAY_MINUTES", "5"))
+        vix_backfill_delay = int(os.getenv("VIX_BACKFILL_DELAY_MINUTES", "2"))
+        
         initialize_vix_data()
         start_candle_scheduler()
-        start_daily_candles_scheduler()
-        start_vix_scheduler()
+        start_daily_candles_scheduler(delay_minutes=daily_backfill_delay)
+        start_vix_scheduler(delay_minutes=vix_backfill_delay)
         start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
         start_expiry_exit_scheduler()  # Auto-exit options near expiry
         logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit")

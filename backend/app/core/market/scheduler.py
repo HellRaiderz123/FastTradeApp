@@ -212,8 +212,12 @@ def start_candle_scheduler():
     _update()  # Initial run
 
 
-def start_vix_scheduler():
-    """Start daily VIX update scheduler (runs at market close)."""
+def start_vix_scheduler(delay_minutes: int = 2):
+    """Start daily VIX update scheduler (runs at market close).
+    
+    Args:
+        delay_minutes: Delay in minutes before running initial VIX update (default: 2 minutes)
+    """
     if not scheduler.running:
         logger.warning("⚠️ Cannot start VIX scheduler: main scheduler not running")
         return
@@ -229,13 +233,30 @@ def start_vix_scheduler():
         max_instances=1,
     )
     
-    logger.info("🟢 VIX daily scheduler started (3:45 PM IST)")
-    # Also run immediately on startup to ensure data is fresh
-    _update_daily_vix()
+    # Schedule initial run after delay to avoid blocking startup
+    if delay_minutes > 0:
+        from datetime import datetime, timedelta
+        run_time = datetime.now() + timedelta(minutes=delay_minutes)
+        scheduler.add_job(
+            func=_update_daily_vix,
+            trigger="date",
+            run_date=run_time,
+            id="vix_initial_run",
+            replace_existing=True,
+        )
+        logger.info(f"🟢 VIX scheduler started (daily: 3:45 PM IST, initial run: {delay_minutes}m delay)")
+    else:
+        logger.info("🟢 VIX daily scheduler started (3:45 PM IST)")
+        _update_daily_vix()
 
 
-def start_daily_candles_scheduler():
-    """Start daily candle update scheduler (runs after market close)."""
+def start_daily_candles_scheduler(delay_minutes: int = 5):
+    """Start daily candle update scheduler (runs after market close).
+    
+    Args:
+        delay_minutes: Delay in minutes before running initial backfill (default: 5 minutes)
+                      Set to 0 to run immediately on startup
+    """
     if not scheduler.running:
         logger.warning("⚠️ Cannot start daily candles scheduler: main scheduler not running")
         return
@@ -251,8 +272,21 @@ def start_daily_candles_scheduler():
         max_instances=1,
     )
 
-    logger.info("🟢 Daily candles scheduler started (3:50 PM IST)")
-    _update_daily_candles()
+    # Schedule initial backfill after delay to avoid blocking startup
+    if delay_minutes > 0:
+        from datetime import datetime, timedelta
+        run_time = datetime.now() + timedelta(minutes=delay_minutes)
+        scheduler.add_job(
+            func=_update_daily_candles,
+            trigger="date",
+            run_date=run_time,
+            id="daily_candles_initial_run",
+            replace_existing=True,
+        )
+        logger.info(f"🟢 Daily candles scheduler started (daily: 3:50 PM IST, initial backfill: {delay_minutes}m delay)")
+    else:
+        logger.info("🟢 Daily candles scheduler started (3:50 PM IST)")
+        _update_daily_candles()
 
 
 def initialize_vix_data():

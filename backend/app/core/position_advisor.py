@@ -157,13 +157,12 @@ def advise_position(
 
     # ── Engine says NO_TRADE now ──────────────────────────────
     if new_strategy == "NO_TRADE":
-        sev = "MEDIUM" if confidence >= 50 else "LOW"
-        # If position is in profit, suggest taking profits
+        # If position is in profit, suggest taking profits (HIGH severity)
         if pnl > 0 and entry_credit > 0 and (pnl / abs(entry_credit)) > 0.5:
             return {
                 **base,
                 "action": "CONSIDER_EXIT",
-                "severity": sev,
+                "severity": "HIGH",
                 "reason": f"TA no longer supports any trade — you're in profit, consider booking",
                 "details": (
                     f"Your {position_name} is in ₹{pnl:,.0f} profit. "
@@ -171,16 +170,19 @@ def advise_position(
                     f"No new strategy passes quality gates. Consider booking profits."
                 ),
             }
+        # Strategy completely changed to NO_TRADE — this is a clear signal to exit
+        # Use MEDIUM severity minimum so auto-trader can act on it
+        sev = "HIGH" if confidence >= 65 else "MEDIUM"
         return {
             **base,
-            "action": "WATCH",
+            "action": "CONSIDER_EXIT",
             "severity": sev,
-            "reason": f"TA engine says NO_TRADE — conditions deteriorated",
+            "reason": f"TA engine says NO_TRADE — strategy conditions no longer valid",
             "details": (
                 f"Your {position_name} ({position_bias}) is still open but the TA engine "
                 f"no longer recommends any strategy (quality/confidence too low). "
                 f"Current: {signal_bias} bias, {confidence:.0f}% confidence, {market_mode} market. "
-                f"Keep monitoring — exit if P&L deteriorates."
+                f"Strategy conditions have changed — consider exiting to avoid risk."
             ),
         }
 

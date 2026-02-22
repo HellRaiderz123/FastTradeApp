@@ -228,8 +228,13 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
         severity = advice.get("severity", "NONE")
         confidence = advice.get("current_confidence", 0)
 
-        # Only act on HIGH severity reversals above threshold
-        if severity == "HIGH" and confidence >= (cfg.reversal_confidence_threshold or 65):
+        # Act on HIGH severity signals OR MEDIUM severity with CONSIDER_EXIT action
+        should_act = (
+            (severity == "HIGH" and confidence >= (cfg.reversal_confidence_threshold or 65))
+            or (severity == "MEDIUM" and action == "CONSIDER_EXIT")
+        )
+
+        if should_act:
             if cfg.auto_exit_on_reversal:
                 _auto_exit_position(db, cfg, intent, executor, advice)
             elif cfg.auto_hedge_on_reversal:
@@ -240,12 +245,12 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
                      strategy=strategy, intent_id=intent.intent_id,
                      reason=f"Reversal detected but auto-action disabled: {advice.get('reason', '')}",
                      details=advice, severity="WARNING")
-        elif severity == "MEDIUM" and action in ("CONSIDER_EXIT", "HEDGE_SUGGESTED"):
+        elif severity in ("MEDIUM", "LOW") and action in ("WATCH", "HEDGE_SUGGESTED"):
             # Log for awareness but don't auto-act
             _log(db, cfg.id,
                  action="SCAN", underlying=underlying,
                  strategy=strategy, intent_id=intent.intent_id,
-                 reason=f"Medium severity watch: {advice.get('reason', '')}",
+                 reason=f"{severity} severity watch: {advice.get('reason', '')}",
                  details=advice, severity="INFO")
 
     # ── Step 2: New entry evaluation ──────────────────────────────
