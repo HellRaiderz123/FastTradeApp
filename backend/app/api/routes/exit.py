@@ -8,6 +8,7 @@ from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.utils.time import now_ist
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode
+from app.core.learning.signal_diagnostics import record_exit_outcome
 
 router = APIRouter(prefix="/exit", tags=["Exit"])
 
@@ -53,10 +54,16 @@ def manual_exit(intent_id: str, db: Session = Depends(get_db)):
     intent.exit_reason = "MANUAL"               # type: ignore
     intent.closed_at = now_ist()                # type: ignore
     intent.final_pnl = exit_result["final_pnl"] # type: ignore
+    intent.pnl = exit_result["final_pnl"]       # type: ignore
 
     # 🔥 VERY IMPORTANT
     intent.unrealized_pnl = None                # type: ignore
     intent.execution_result = exit_result       # type: ignore
+
+    try:
+        record_exit_outcome(db, intent=intent, commit=False)
+    except Exception:
+        pass
 
     db.commit()
     db.refresh(intent)

@@ -462,7 +462,7 @@ const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
         <div className="space-y-3">
           <div className="p-3 bg-slate-800 rounded border border-slate-700">
             <p className="text-xs text-slate-400 mb-2">Current Strikes</p>
-            {legs.map((leg: any, idx) => (
+            {legs.map((leg: any, idx: string) => (
               <p key={idx} className="text-xs text-white mb-1">
                 <span className={leg.side === 'SELL' ? 'text-red-400' : 'text-green-400'}>{leg.side}</span> {leg.strike} {leg.type}
               </p>
@@ -495,7 +495,7 @@ const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
 
           <div className="p-3 bg-slate-800 rounded border border-slate-700">
             <p className="text-xs text-slate-400 mb-2">New Strikes (Preview)</p>
-            {legs.map((leg: any, idx) => {
+            {legs.map((leg: any, idx: string) => {
               const newStrike = direction === 'up' ? leg.strike + adjustment : leg.strike - adjustment;
               return (
                 <p key={idx} className="text-xs text-green-400 mb-1">
@@ -731,20 +731,30 @@ const SmartSuggestionBanner: React.FC<SmartSuggestionBannerProps> = ({
   const colors = colorMap[severity] || colorMap.LOW;
 
   // Icon based on action
-  const ActionIcon = {
-    CONSIDER_EXIT: AlertTriangle,
-    HEDGE_SUGGESTED: Shield,
-    WATCH: Eye,
-    HOLD: CheckCircle,
-  }[action] || Eye;
+ const actionIcons = {
+  CONSIDER_EXIT: AlertTriangle,
+  HEDGE_SUGGESTED: Shield,
+  WATCH: Eye,
+  HOLD: CheckCircle,
+} as const;
+
+type ActionType2 = keyof typeof actionIcons;
+
+const ActionIcon =
+  actionIcons[action as ActionType2] ?? Eye;
 
   // Action label
-  const actionLabel = {
-    CONSIDER_EXIT: 'Consider Exiting',
-    HEDGE_SUGGESTED: 'Hedge Suggested',
-    WATCH: 'Watch Closely',
-    HOLD: 'Hold',
-  }[action] || action;
+ const actionLabels = {
+  CONSIDER_EXIT: 'Consider Exiting',
+  HEDGE_SUGGESTED: 'Hedge Suggested',
+  WATCH: 'Watch Closely',
+  HOLD: 'Hold',
+} as const;
+
+type ActionType = keyof typeof actionLabels;
+
+const actionLabel =
+  actionLabels[action as ActionType] ?? 'Unknown';
 
   return (
     <div className={`${colors.bg} border ${colors.border} rounded-lg p-3 mb-2`}>

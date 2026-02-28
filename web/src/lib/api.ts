@@ -152,6 +152,8 @@ export const journalAPI = {
     api.get(`/journal/execution-intents?limit=${limit}`),
   getSpreadAnalysis: (limit = 50) =>
     api.get(`/journal/spread-analysis?limit=${limit}`),
+  getSignalDiagnostics: (params?: { limit?: number; lookback_days?: number; underlying?: string; strategy?: string }) =>
+    api.get('/journal/signal-diagnostics', { params }),
 };
 
 // Smart Position Suggestions API
@@ -309,6 +311,18 @@ export const settingsAPI = {
   
   generateZerodhaToken: (data: { request_token: string }) =>
     api.post('/settings/zerodha/generate-token', data),
+  
+  getZerodhaLoginUrl: (callbackUrl?: string) =>
+    api.get('/settings/zerodha/login-url', { params: { callback_url: callbackUrl } }),
+  
+  handleZerodhaCallback: (requestToken: string) =>
+    api.get('/settings/zerodha/callback', { params: { request_token: requestToken } }),
+  
+  getZerodhaSessionStatus: () =>
+    api.get('/settings/zerodha/session-status'),
+  
+  logoutZerodha: () =>
+    api.post('/settings/zerodha/logout'),
   
   setExecutionMode: (mode: string) =>
     api.post(`/settings/execution-mode`, {}, { params: { mode } }),

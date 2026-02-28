@@ -14,7 +14,7 @@ interface Forecast {
 
 export default function ExpenseForecastWidget() {
   const [forecasts, setForecasts] = useState<Forecast[]>([]);
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[] | unknown[]>([]);
   const [loading, setLoading] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
 

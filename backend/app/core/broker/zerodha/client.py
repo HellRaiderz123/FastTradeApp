@@ -1,6 +1,8 @@
 import os
 from kiteconnect import KiteConnect
 import logging
+from app.db.session import SessionLocal
+from app.core.broker.zerodha.oauth import get_access_token_for_client
 
 _kite = None
 
@@ -15,7 +17,16 @@ def get_kite_client() -> KiteConnect:
         return _kite
 
     api_key = os.getenv("ZERODHA_API_KEY")
-    access_token = os.getenv("ZERODHA_ACCESS_TOKEN")
+    
+    # Try to get access token from DB first, fall back to .env
+    db = SessionLocal()
+    try:
+        access_token = get_access_token_for_client(db)
+    except Exception as e:
+        logger.warning(f"Failed to get token from DB, using .env: {e}")
+        access_token = os.getenv("ZERODHA_ACCESS_TOKEN")
+    finally:
+        db.close()
 
     logger.info("access_token=%s", access_token)
 

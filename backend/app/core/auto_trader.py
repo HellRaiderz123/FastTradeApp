@@ -45,6 +45,7 @@ from app.core.execution.paper import PaperExecutionAdapter
 from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.execution.mode import normalize_execution_mode, is_live_mode, is_paper_mode
 from app.core.broker.zerodha.client import get_kite_client
+from app.core.learning.signal_diagnostics import record_entry_snapshot, record_exit_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,15 @@ def _log(db: Session, config_id: int, **kwargs):
     db.add(entry)
     try:
         db.commit()
+
+        try:
+            record_entry_snapshot(
+                db,
+                intent=intent,
+                engine_result=engine_result,
+            )
+        except Exception:
+            pass
     except Exception:
         db.rollback()
 
@@ -431,6 +441,11 @@ def _auto_exit_position(
         intent.pnl = final_pnl
         intent.execution_result = exit_result
         db.commit()
+
+        try:
+            record_exit_outcome(db, intent=intent)
+        except Exception:
+            pass
 
         # Update daily P&L
         cfg.daily_pnl = (cfg.daily_pnl or 0) + (final_pnl or 0)

@@ -113,8 +113,27 @@ export default function ZerodhaPositionsWidget() {
             };
             const colors = colorMap[severity] || colorMap.LOW;
 
-            const ActionIcon = { CONSIDER_EXIT: AlertTriangle, HEDGE_SUGGESTED: Shield, WATCH: Eye, HOLD: CheckCircle }[action] || Eye;
-            const actionLabel = { CONSIDER_EXIT: 'Consider Exiting', HEDGE_SUGGESTED: 'Hedge Suggested', WATCH: 'Watch Closely', HOLD: 'Hold' }[action] || action;
+           const actionIcons = {
+  CONSIDER_EXIT: AlertTriangle,
+  HEDGE_SUGGESTED: Shield,
+  WATCH: Eye,
+  HOLD: CheckCircle,
+} as const;
+
+const actionLabels = {
+  CONSIDER_EXIT: 'Consider Exiting',
+  HEDGE_SUGGESTED: 'Hedge Suggested',
+  WATCH: 'Watch Closely',
+  HOLD: 'Hold',
+} as const;
+
+type ActionType = keyof typeof actionIcons;
+
+const ActionIcon =
+  actionIcons[action as ActionType] ?? Eye;
+
+const actionLabel =
+  actionLabels[action as ActionType] ?? action;
 
             return (
               <SmartAdviceBanner

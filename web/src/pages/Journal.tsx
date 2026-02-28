@@ -17,6 +17,33 @@ interface JournalEntry {
   execution_result?: any; // Preserve execution result for deduplication logic
 }
 
+interface DiagnosticsSummary {
+  trades: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  win_rate_pct: number;
+  gross_profit: number;
+  gross_loss: number;
+  profit_factor: number | null;
+  avg_pnl: number;
+  net_pnl: number;
+}
+
+type DiagnosticsGroup = Record<string, DiagnosticsSummary>;
+
+interface SignalDiagnostics {
+  summary: DiagnosticsSummary;
+  by_signal_bias: DiagnosticsGroup;
+  by_strategy: DiagnosticsGroup;
+  by_bias_strategy: DiagnosticsGroup;
+  by_market_mode: DiagnosticsGroup;
+  by_iv_regime: DiagnosticsGroup;
+  count: number;
+  lookback_days: number | null;
+  limit: number;
+}
+
 type PnLFilter = 'all' | 'profit' | 'loss';
 type ExecutionTypeFilter = 'all' | 'paper' | 'zerodha_dry' | 'zerodha_live';
 
@@ -26,9 +53,15 @@ const Journal: React.FC = () => {
   const [pnlFilter, setPnlFilter] = useState<PnLFilter>('all');
   const [executionTypeFilter, setExecutionTypeFilter] = useState<ExecutionTypeFilter>('all');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [diagnostics, setDiagnostics] = useState<SignalDiagnostics | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [diagnosticsLookback, setDiagnosticsLookback] = useState(30);
+  const [diagnosticsLimit, setDiagnosticsLimit] = useState(200);
 
   useEffect(() => {
     fetchJournal();
+    fetchDiagnostics();
   }, []);
 
   const fetchJournal = async () => {
@@ -65,6 +98,24 @@ const Journal: React.FC = () => {
       console.error('Failed to fetch journal:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchDiagnostics = async () => {
+    setDiagnosticsLoading(true);
+    setDiagnosticsError(null);
+    try {
+      const response = await journalAPI.getSignalDiagnostics({
+        limit: diagnosticsLimit,
+        lookback_days: diagnosticsLookback,
+      });
+      setDiagnostics(response.data || null);
+    } catch (error) {
+      console.error('Failed to fetch diagnostics:', error);
+      setDiagnosticsError('Diagnostics unavailable');
+      setDiagnostics(null);
+    } finally {
+      setDiagnosticsLoading(false);
     }
   };
 
@@ -160,6 +211,39 @@ const Journal: React.FC = () => {
   // Check if filters are active
   const hasActiveFilters = pnlFilter !== 'all' || executionTypeFilter !== 'all';
 
+  const formatMoney = (value?: number | null) => {
+    if (value === null || value === undefined) return 'N/A';
+    return `₹${Number(value).toLocaleString()}`;
+  };
+
+  const formatPercent = (value?: number | null) => {
+    if (value === null || value === undefined) return 'N/A';
+    return `${Number(value).toFixed(1)}%`;
+  };
+
+  const toGroupRows = (
+    group?: DiagnosticsGroup,
+    max: number = 6,
+    order: 'asc' | 'desc' = 'asc'
+  ) => {
+    if (!group) return [];
+    const rows = Object.entries(group).map(([key, value]) => ({
+      key: key.split('|').join(' / '),
+      trades: value.trades,
+      win_rate_pct: value.win_rate_pct,
+      net_pnl: value.net_pnl,
+      profit_factor: value.profit_factor,
+    }));
+    rows.sort((a, b) => order === 'asc' ? a.net_pnl - b.net_pnl : b.net_pnl - a.net_pnl);
+    return rows.slice(0, max);
+  };
+
+  const diagnosticsSummary = diagnostics?.summary;
+  const lossDrivers = toGroupRows(diagnostics?.by_bias_strategy, 5, 'asc');
+  const marketModeRows = toGroupRows(diagnostics?.by_market_mode, 5, 'desc');
+  const ivRegimeRows = toGroupRows(diagnostics?.by_iv_regime, 5, 'desc');
+  const biasRows = toGroupRows(diagnostics?.by_signal_bias, 5, 'desc');
+
   return (
     <div className="space-y-6">
       {/* Filter Status Indicator */}
@@ -198,6 +282,82 @@ const Journal: React.FC = () => {
           subtext={hasActiveFilters ? `(All-time: ₹${allTimeStats.totalPnL.toLocaleString()})` : undefined}
           color={stats.totalPnL >= 0 ? 'green' : 'red'} 
         />
+      </div>
+
+      {/* Diagnostics */}
+      <div className="terminal-panel terminal-pattern p-6">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+          <div>
+            <p className="terminal-title text-2xl text-white">Signal Diagnostics</p>
+            <p className="text-sm text-slate-400">
+              Loss drivers by signal bias, strategy, and regime for the selected window.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-slate-400">Lookback (days)</label>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={diagnosticsLookback}
+                onChange={(event) => setDiagnosticsLookback(Math.max(1, Number(event.target.value) || 1))}
+                className="w-24 bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-slate-400">Limit</label>
+              <input
+                type="number"
+                min={10}
+                max={1000}
+                value={diagnosticsLimit}
+                onChange={(event) => setDiagnosticsLimit(Math.max(10, Number(event.target.value) || 10))}
+                className="w-24 bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200"
+              />
+            </div>
+            <button
+              onClick={fetchDiagnostics}
+              className="px-4 py-2 bg-slate-900/80 border border-slate-700 rounded-md text-sm text-slate-200 hover:text-white hover:border-slate-500 transition"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {diagnosticsLoading ? (
+          <div className="text-center py-10 text-slate-400">Loading diagnostics...</div>
+        ) : diagnosticsError ? (
+          <div className="text-center py-10 text-rose-300">{diagnosticsError}</div>
+        ) : !diagnosticsSummary ? (
+          <div className="text-center py-10 text-slate-400">No diagnostics data yet</div>
+        ) : (
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <StatCard label="Trades" value={diagnosticsSummary.trades.toString()} />
+              <StatCard label="Win Rate" value={formatPercent(diagnosticsSummary.win_rate_pct)} />
+              <StatCard
+                label="Net P&L"
+                value={formatMoney(diagnosticsSummary.net_pnl)}
+                color={diagnosticsSummary.net_pnl >= 0 ? 'green' : 'red'}
+              />
+              <StatCard
+                label="Profit Factor"
+                value={diagnosticsSummary.profit_factor === null ? 'N/A' : diagnosticsSummary.profit_factor.toFixed(2)}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <DiagnosticsPanel title="Loss Drivers (Bias + Strategy)" rows={lossDrivers} />
+              <DiagnosticsPanel title="Signal Bias Performance" rows={biasRows} />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <DiagnosticsPanel title="Market Mode Performance" rows={marketModeRows} />
+              <DiagnosticsPanel title="IV Regime Performance" rows={ivRegimeRows} />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Journal */}
@@ -417,6 +577,47 @@ const AnalysisCard: React.FC<{ title: string; value: string }> = ({ title, value
   <div className="card-glass p-6">
     <p className="text-slate-400 mb-2">{title}</p>
     <p className="text-3xl font-bold text-white">{value}</p>
+  </div>
+);
+
+interface DiagnosticsRow {
+  key: string;
+  trades: number;
+  win_rate_pct: number;
+  net_pnl: number;
+  profit_factor: number | null;
+}
+
+const formatCompactMoney = (value: number) => {
+  const sign = value >= 0 ? '+' : '-';
+  return `${sign}₹${Math.abs(value).toLocaleString()}`;
+};
+
+const DiagnosticsPanel: React.FC<{ title: string; rows: DiagnosticsRow[] }> = ({ title, rows }) => (
+  <div className="card-glass p-4">
+    <div className="flex items-center justify-between mb-3">
+      <p className="text-sm font-semibold text-slate-200">{title}</p>
+      <span className="text-xs text-slate-500">{rows.length} buckets</span>
+    </div>
+    {rows.length === 0 ? (
+      <p className="text-sm text-slate-500">No data yet</p>
+    ) : (
+      <div className="space-y-3">
+        {rows.map((row) => (
+          <div key={row.key} className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm text-white">{row.key}</p>
+              <p className="text-xs text-slate-500">
+                {row.trades} trades · Win {row.win_rate_pct.toFixed(1)}% · PF {row.profit_factor === null ? 'N/A' : row.profit_factor.toFixed(2)}
+              </p>
+            </div>
+            <div className={`text-sm font-semibold ${row.net_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {formatCompactMoney(row.net_pnl)}
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
   </div>
 );
 

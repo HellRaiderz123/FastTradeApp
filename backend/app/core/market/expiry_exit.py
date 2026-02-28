@@ -48,6 +48,7 @@ from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_mode
 from app.core.broker.zerodha.client import get_kite_client
 from app.services.notifications import NotificationService
+from app.core.learning.signal_diagnostics import record_exit_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,11 @@ def run_expiry_day_exit(db: Session) -> List[str]:
             final_pnl = exit_result.get("final_pnl", intent.pnl)
             intent.pnl = final_pnl                # type: ignore
             intent.execution_result = exit_result  # type: ignore
+
+            try:
+                record_exit_outcome(db, intent=intent, commit=False)
+            except Exception:
+                pass
 
             exited.append(intent.intent_id)
             logger.info(

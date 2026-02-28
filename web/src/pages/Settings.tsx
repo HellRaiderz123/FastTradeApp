@@ -46,6 +46,13 @@ const Settings: React.FC = () => {
     apiSecret: false,
     accessToken: false,
   });
+  const [oauthLoading, setOAuthLoading] = useState(false);
+  const [sessionStatus, setSessionStatus] = useState<{
+    has_active_session: boolean;
+    user_id?: string;
+    expires_at?: string;
+    fallback_to_env?: boolean;
+  } | null>(null);
 
   // Gmail notification settings
   const [notificationStatus, setNotificationStatus] = useState({
@@ -78,10 +85,14 @@ const Settings: React.FC = () => {
     loadNotificationSettings();
     loadTradingSettings();
     loadMlSettings();
+    loadSessionStatus();
+    // Handle OAuth callback if redirected back
+    handleOAuthCallback();
     // Refresh every 5 seconds to sync with backend
     const interval = setInterval(() => {
       //loadZerodhaSettings();
       loadNotificationSettings();
+      loadSessionStatus();
     }, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -305,6 +316,79 @@ const Settings: React.FC = () => {
       setZerodhaMessage(error.response?.data?.detail || 'Error changing mode');
     } finally {
       setZerodhaLoading(false);
+    }
+  };
+
+  const loadSessionStatus = async () => {
+    try {
+      const response = await settingsAPI.getZerodhaSessionStatus();
+      const data = response.data || response;
+      setSessionStatus(data);
+    } catch (error) {
+      console.error('Error loading session status:', error);
+    }
+  };
+
+  const handleLoginWithZerodha = async () => {
+    try {
+      setOAuthLoading(true);
+      const response = await settingsAPI.getZerodhaLoginUrl('http://localhost:5173/settings');
+      const loginUrl = response.data?.login_url;
+      if (loginUrl) {
+        // Open in new window; user will be redirected back to settings page with request_token
+        window.open(loginUrl, '_blank', 'width=600,height=700');
+        setZerodhaMessage('Opening Zerodha login... You will be redirected back after login');
+        // Poll for session after a delay
+        setTimeout(() => loadSessionStatus(), 3000);
+      }
+    } catch (error: any) {
+      console.error('Error:', error);
+      setZerodhaMessage(error.response?.data?.detail || 'Error getting login URL');
+    } finally {
+      setOAuthLoading(false);
+    }
+  };
+
+  const handleOAuthCallback = async () => {
+    // Check if URL has request_token parameter
+    const params = new URLSearchParams(window.location.search);
+    const requestToken = params.get('request_token');
+    
+    if (requestToken) {
+      console.log('OAuth callback detected, exchanging token...');
+      try {
+        setOAuthLoading(true);
+        const response = await settingsAPI.handleZerodhaCallback(requestToken);
+        setZerodhaMessage('✓ ' + (response.data?.message || 'Login successful! Access token saved.'));
+        // Clear the URL parameter
+        window.history.replaceState({}, document.title, window.location.pathname);
+        // Reload settings and session status
+        setTimeout(() => {
+          loadZerodhaSettings();
+          loadSessionStatus();
+        }, 500);
+        setTimeout(() => setZerodhaMessage(''), 3000);
+      } catch (error: any) {
+        console.error('Error:', error);
+        setZerodhaMessage(error.response?.data?.detail || 'OAuth callback failed');
+      } finally {
+        setOAuthLoading(false);
+      }
+    }
+  };
+
+  const handleLogoutZerodha = async () => {
+    try {
+      setOAuthLoading(true);
+      await settingsAPI.logoutZerodha();
+      setZerodhaMessage('✓ Logged out successfully');
+      await loadSessionStatus();
+      setTimeout(() => setZerodhaMessage(''), 3000);
+    } catch (error: any) {
+      console.error('Error:', error);
+      setZerodhaMessage(error.response?.data?.detail || 'Error logging out');
+    } finally {
+      setOAuthLoading(false);
     }
   };
 
@@ -608,10 +692,15 @@ const Settings: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <span className="text-slate-400">Access Token Status:</span>
                   <div className="flex items-center gap-1">
-                    {zerodhaStatus?.access_token_set ? (
+                    {sessionStatus?.has_active_session ? (
                       <>
                         <CheckCircle className="w-4 h-4 text-green-400" />
-                        <span className="text-green-400">Configured</span>
+                        <span className="text-green-400">Active (OAuth)</span>
+                      </>
+                    ) : zerodhaStatus?.access_token_set ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-blue-400" />
+                        <span className="text-blue-400">.env Token</span>
                       </>
                     ) : (
                       <>
@@ -622,11 +711,18 @@ const Settings: React.FC = () => {
                   </div>
                 </div>
               </div>
+              {sessionStatus?.user_id && (
+                <p className="text-xs text-slate-400 mt-3">🔐 Logged in as: <span className="text-slate-200 font-semibold">{sessionStatus.user_id}</span></p>
+              )}
+              {sessionStatus?.expires_at && (
+                <p className="text-xs text-slate-400 mt-1">expires: {new Date(sessionStatus.expires_at).toLocaleDateString()}</p>
+              )}
             </div>
             <button
               onClick={() => {
                 console.log('Refreshing settings...');
                 loadZerodhaSettings();
+                loadSessionStatus();
               }}
               className="ml-4 px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded transition"
             >
@@ -634,6 +730,42 @@ const Settings: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* OAuth Login Section */}
+        {sessionStatus?.has_active_session ? (
+          <div className="space-y-4 mb-6 p-4 bg-green-900/20 rounded-lg border border-green-700/50">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-green-400" />
+              <p className="text-sm font-semibold text-green-300">Zerodha OAuth Session Active</p>
+            </div>
+            <p className="text-xs text-green-200">✓ Your Zerodha session is active and will be used automatically for trading.</p>
+            <button
+              onClick={handleLogoutZerodha}
+              disabled={oauthLoading}
+              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            >
+              {oauthLoading ? 'Logging out...' : 'Logout from Zerodha'}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4 mb-6 p-4 bg-blue-900/20 rounded-lg border border-blue-700/50">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-blue-400" />
+              <p className="text-sm font-semibold text-blue-300">Quick OAuth Login</p>
+            </div>
+            <p className="text-xs text-blue-200">Click below to login with your Zerodha account. No API keys or tokens needed!</p>
+            <button
+              onClick={handleLoginWithZerodha}
+              disabled={oauthLoading || !zerodhaStatus.api_key_set}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 text-base"
+            >
+              {oauthLoading ? 'Opening login...' : '🔐 Login with Zerodha'}
+            </button>
+            {!zerodhaStatus.api_key_set && (
+              <p className="text-xs text-yellow-400">⚠️ Please configure API Key first</p>
+            )}
+          </div>
+        )}
 
         {/* Credentials Form */}
         <div className="space-y-4">

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.utils.time import now_ist
 from app.db.models_intent import ExecutionIntent
 from app.core.broker.zerodha.client import get_kite_client
+from app.core.learning.signal_diagnostics import record_exit_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,11 @@ def reconcile_broker_positions(db: Session, force: bool = False) -> List[str]:
         # Use broker-reported P&L if available, otherwise keep last computed MTM
         if total_broker_pnl != 0:
             intent.pnl = total_broker_pnl  # type: ignore
+
+        try:
+            record_exit_outcome(db, intent=intent, commit=False)
+        except Exception:
+            pass
 
         closed_ids.append(intent.intent_id)
 

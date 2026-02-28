@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const DEPTH_API = axios.create({
-  baseURL: import.meta.env?.VITE_API_BASE ? `${import.meta.env.VITE_API_BASE}/market-depth` : '/api/market-depth',
+  baseURL:(import.meta as any).env?.VITE_API_BASE ? `${(import.meta as any).env?.VITE_API_BASE}/market-depth` : '/api/market-depth',
   timeout: 15000,
 });
 

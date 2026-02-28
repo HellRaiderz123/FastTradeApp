@@ -274,6 +274,166 @@ def set_execution_mode(mode: str):
             detail=f"Error setting execution mode: {str(e)}"
         )
 
+
+# ─── Zerodha OAuth Flow ───────────────────────────────────────────────────
+
+@router.get("/zerodha/login-url")
+def get_zerodha_login_url(callback_url: str = "http://localhost:5173/settings"):
+    """
+    Get Zerodha OAuth login URL.
+    
+    User clicks link to open login, then Zerodha redirects to callback_url
+    with request_token parameter.
+    
+    Args:
+        callback_url: Where Zerodha redirects after login (default: frontend settings page)
+        
+    Returns:
+        {"login_url": "https://kite.zerodha.com/connect/..."}
+    """
+    try:
+        from app.core.broker.zerodha.oauth import get_login_url
+        
+        login_url = get_login_url(callback_url)
+        logger.info(f"Generated Zerodha login URL")
+        return {"login_url": login_url}
+        
+    except Exception as e:
+        logger.error(f"Error generating login URL: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating login URL: {str(e)}"
+        )
+
+
+@router.get("/zerodha/callback")
+def zerodha_oauth_callback(request_token: str):
+    """
+    OAuth callback endpoint — Zerodha redirects here with request_token.
+    
+    Exchanges request_token for access_token and stores in DB.
+    No app restart needed after this.
+    
+    Args:
+        request_token: Token from Zerodha after user login
+        
+    Returns:
+        {"status": "success", "access_token": "token", "user_id": "id"}
+    """
+    try:
+        from app.core.broker.zerodha.oauth import exchange_request_token_for_access_token
+        
+        if not request_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="request_token is required"
+            )
+        
+        db = SessionLocal()
+        try:
+            access_token = exchange_request_token_for_access_token(db, request_token)
+            if not access_token:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to generate access token"
+                )
+            
+            # Get session to return user_id
+            from app.core.broker.zerodha.oauth import get_active_session
+            session = get_active_session(db)
+            
+            logger.info("✅ Zerodha OAuth callback successful")
+            return {
+                "status": "success",
+                "access_token": access_token,
+                "user_id": session.user_id if session else None,
+                "message": "You are now logged in! No restart needed."
+            }
+        finally:
+            db.close()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in OAuth callback: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"OAuth callback failed: {str(e)}"
+        )
+
+
+@router.get("/zerodha/session-status")
+def get_zerodha_session_status():
+    """
+    Check if user has an active Zerodha session in DB.
+    
+    Returns:
+        {"has_active_session": bool, "user_id": str, "expires_at": datetime}
+    """
+    try:
+        from app.core.broker.zerodha.oauth import get_active_session
+        
+        db = SessionLocal()
+        try:
+            session = get_active_session(db)
+            if session:
+                return {
+                    "has_active_session": True,
+                    "user_id": session.user_id,
+                    "expires_at": session.expires_at.isoformat() if session.expires_at else None,
+                    "created_at": session.created_at.isoformat() if session.created_at else None,
+                }
+            else:
+                # No active session in DB, check .env fallback
+                env_token = os.getenv("ZERODHA_ACCESS_TOKEN")
+                return {
+                    "has_active_session": False,
+                    "fallback_to_env": bool(env_token),
+                    "message": "No active DB session. Using .env fallback." if env_token else "No active session found."
+                }
+        finally:
+            db.close()
+        
+    except Exception as e:
+        logger.error(f"Error checking session status: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error checking session: {str(e)}"
+        )
+
+
+@router.post("/zerodha/logout")
+def zerodha_logout():
+    """
+    Logout current Zerodha session (mark as inactive in DB).
+    
+    Returns:
+        {"status": "success", "message": "Logged out"}
+    """
+    try:
+        from app.core.broker.zerodha.oauth import get_active_session
+        
+        db = SessionLocal()
+        try:
+            session = get_active_session(db)
+            if session:
+                session.is_active = 0
+                db.commit()
+                logger.info("Zerodha session deactivated")
+                return {"status": "success", "message": "Logged out"}
+            else:
+                return {"status": "success", "message": "No active session to logout"}
+        finally:
+            db.close()
+        
+    except Exception as e:
+        logger.error(f"Error logging out: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error logging out: {str(e)}"
+        )
+
+
 @router.get("/trading")
 def get_trading_settings():
     """Get current trading settings (risk per trade, max trades per day)"""

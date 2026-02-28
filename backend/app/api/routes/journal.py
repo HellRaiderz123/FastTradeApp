@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import logging
 from datetime import datetime
 
@@ -13,6 +13,7 @@ from app.core.broker.zerodha.client import get_kite_client
 from app.services.zerodha_ticker import subscribe_symbols as subscribe_to_ticker
 from app.core.spreads import detect_spreads
 from app.core.exit.broker_reconcile import reconcile_broker_positions
+from app.core.learning.signal_diagnostics import compute_signal_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -269,4 +270,26 @@ def analyze_spreads(
     grouped = detect_spreads(intent_dicts)
     
     return grouped.to_dict()
+
+
+@router.get("/signal-diagnostics")
+def signal_diagnostics(
+    limit: int = Query(200, ge=10, le=1000),
+    lookback_days: int = Query(30, ge=1, le=365),
+    underlying: Optional[str] = Query(None),
+    strategy: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Rule-based diagnostics for closed trades based on signal snapshots.
+
+    Returns aggregated stats to explain loss drivers and weak signal regimes.
+    """
+    return compute_signal_diagnostics(
+        db,
+        limit=limit,
+        lookback_days=lookback_days,
+        underlying=underlying,
+        strategy=strategy,
+    )
 
