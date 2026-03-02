@@ -10,7 +10,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 # Now do all the imports
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.option_spread import router as option_spread_router
 from app.api.routes import journal
@@ -54,6 +54,10 @@ from app.api.routes import candles
 from app.api.routes import zerodha_broker
 from app.api.routes import position_suggestions
 from app.api.routes import auto_trader as auto_trader_routes
+from app.api.routes import auth
+from app.api.routes import trade_costs
+from app.api.routes import watchlists
+from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
@@ -234,6 +238,7 @@ app.include_router(
     option_spread_router,
     prefix="/strategy",
     tags=["Option Spreads"],
+    dependencies=[Depends(require_authenticated_user)],
 )
 
 @app.get("/")
@@ -241,12 +246,13 @@ def health_check():
     return {"status": "ok", "service": "trading-backend"}
 
 app.include_router(journal.router)
-app.include_router(intent.router)
-app.include_router(execute.router)
-app.include_router(account.router)
-app.include_router(strategies.router)
-app.include_router(execution_v2.router)
-app.include_router(settings.router)
+app.include_router(auth.router)
+app.include_router(intent.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(execute.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(account.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(strategies.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(execution_v2.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(settings.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(backtest.router)
 app.include_router(greeks.router)
 app.include_router(market.router)
@@ -257,10 +263,10 @@ app.include_router(suggestions.router)
 app.include_router(stock_suggestions.router)
 app.include_router(ws_positions.router)
 app.include_router(alerts.router)
-app.include_router(paper_mtm_router)
-app.include_router(exit_router)
-app.include_router(auto_exit_router)
-app.include_router(system_router)
+app.include_router(paper_mtm_router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(exit_router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(auto_exit_router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(system_router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(ml.router)
 #  Phase 5 Features
 app.include_router(notifications.router)
@@ -279,8 +285,10 @@ app.include_router(timeframe_suggestions.router)
 app.include_router(peer_comparison.router)
 app.include_router(safety.router)
 app.include_router(candles.router)
-app.include_router(zerodha_broker.router)
+app.include_router(zerodha_broker.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(position_suggestions.router)
-app.include_router(auto_trader_routes.router)
+app.include_router(auto_trader_routes.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(trade_costs.router)
+app.include_router(watchlists.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

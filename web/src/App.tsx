@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
+import ProtectedRoute from './components/ProtectedRoute';
 import Dashboard from './pages/Dashboard';
 import Terminal from './pages/TerminalBloomberg';
 import Screener from './pages/Screener';
@@ -13,6 +14,7 @@ import Positions from './pages/Positions';
 import Journal from './pages/Journal';
 import Settings from './pages/Settings';
 import Heatmap from './pages/Heatmap';
+import Login from './pages/Login';
 import { systemAPI } from './lib/api';
 import { useTradeStore } from './lib/store';
 import FinanceTracker from './pages/FinanceTracker';
@@ -66,37 +68,47 @@ function App() {
   return (
     <ErrorBoundary>
       <Router>
-        <div className="flex h-screen terminal-shell">
-          <Sidebar open={sidebarOpen} />
+        <Routes>
+          {/* Public route - no authentication required */}
+          <Route path="/login" element={<Login />} />
           
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <Header 
-              onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-              systemEnabled={systemEnabled}
-              onSystemToggle={setSystemEnabled}
-            />
-            
-            <main className="flex-1 overflow-auto p-6">
-              <Routes>
-                <Route path="/" element={<Terminal />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/screener" element={<Screener />} />
-                <Route path="/heatmap" element={<Heatmap />} />
-                <Route path="/options" element={<OptionsChain />} />
-                <Route path="/ml" element={<MLCenter />} />
-                <Route path="/strategies" element={<Strategies />} />
-                <Route path="/strategies/builder" element={<StrategyBuilder />} />
-                <Route path="/backtest" element={<Backtest />} />
-                <Route path="/positions" element={<Positions />} />
-                <Route path="/journal" element={<Journal />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/finance" element={<FinanceTracker />} />
-                <Route path="/calendar" element={<Calendar />} />
-                <Route path="/auto-trader" element={<AutoTrader />} />
-              </Routes>
-            </main>
-          </div>
-        </div>
+          {/* Protected routes - require authentication */}
+          <Route path="*" element={
+            <ProtectedRoute>
+              <div className="flex h-screen terminal-shell">
+                <Sidebar open={sidebarOpen} />
+                
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <Header 
+                    onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+                    systemEnabled={systemEnabled}
+                    onSystemToggle={setSystemEnabled}
+                  />
+                  
+                  <main className="flex-1 overflow-auto p-6">
+                    <Routes>
+                      <Route path="/" element={<Terminal />} />
+                      <Route path="/dashboard" element={<Dashboard />} />
+                      <Route path="/screener" element={<Screener />} />
+                      <Route path="/heatmap" element={<Heatmap />} />
+                      <Route path="/options" element={<OptionsChain />} />
+                      <Route path="/ml" element={<MLCenter />} />
+                      <Route path="/strategies" element={<Strategies />} />
+                      <Route path="/strategies/builder" element={<StrategyBuilder />} />
+                      <Route path="/backtest" element={<Backtest />} />
+                      <Route path="/positions" element={<Positions />} />
+                      <Route path="/journal" element={<Journal />} />
+                      <Route path="/settings" element={<Settings />} />
+                      <Route path="/finance" element={<FinanceTracker />} />
+                      <Route path="/calendar" element={<Calendar />} />
+                      <Route path="/auto-trader" element={<AutoTrader />} />
+                    </Routes>
+                  </main>
+                </div>
+              </div>
+            </ProtectedRoute>
+          } />
+        </Routes>
       </Router>
     </ErrorBoundary>
   );

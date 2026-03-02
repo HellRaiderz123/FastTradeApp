@@ -37,7 +37,7 @@ from app.core.strategies.option_spread_15m.risk import (
 )
 from app.core.risk.risk_limits_config import get_risk_limits
 
-def _log_strategy_run(result: dict, underlying: str) -> Optional[StrategyRun]:
+def _log_strategy_run(result: dict, underlying: str) -> Optional[int]:
     """
     Persist strategy run to DB.
     Never raises (DB failure must not block engine).
@@ -56,7 +56,8 @@ def _log_strategy_run(result: dict, underlying: str) -> Optional[StrategyRun]:
             signal=result.get("signal") or {},
             context=result.get("context") or {},
         )
-        return run
+        # Return primitive id to avoid returning ORM instances bound to a closed session
+        return run.id if run is not None else None
 
     except Exception as e:
         print("⚠️ DB log failed:", e)
@@ -126,9 +127,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "context": ctx,
             "spot": spot,
         }
-        run = _log_strategy_run(result, payload.get("underlying") or "")
-        if run:
-            result["run_id"] = run.id
+        run_id = _log_strategy_run(result, payload.get("underlying") or "")
+        if run_id:
+            result["run_id"] = run_id
         return result
 
     # =====================================================
@@ -162,9 +163,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "strike_meta": strikes.get("meta"),
         }
 
-        run = _log_strategy_run(result, payload["underlying"])
-        if run:
-            result["run_id"] = run.id
+        run_id = _log_strategy_run(result, payload["underlying"])
+        if run_id:
+            result["run_id"] = run_id
         return result
 
     # Needed later for lot size
@@ -229,7 +230,8 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # 6️⃣ RISK CHECK (FINAL GATE)
     # =====================================================
     # Load DB-backed risk limits (env/profile fallback if DB unavailable)
-    risk_config = get_risk_limits()
+    # Pass db session to load from same transaction context
+    risk_config = get_risk_limits(db=db)
     
     capital = float(payload.get("capital", 0))
     lots = int(payload.get("lots", 1))
@@ -339,9 +341,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "context": ctx,
         }
 
-        run = _log_strategy_run(result, payload["underlying"])
-        if run:
-            result["run_id"] = run.id
+        run_id = _log_strategy_run(result, payload["underlying"])
+        if run_id:
+            result["run_id"] = run_id
         return result
 
 
@@ -762,9 +764,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         "expiry": expiry,  # Include at top level for easy access
     }
 
-    run = _log_strategy_run(result, payload["underlying"])
-    if run:
-        result["run_id"] = run.id
+    run_id = _log_strategy_run(result, payload["underlying"])
+    if run_id:
+        result["run_id"] = run_id
     return result
 
 

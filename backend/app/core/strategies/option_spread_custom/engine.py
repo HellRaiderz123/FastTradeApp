@@ -260,7 +260,7 @@ class OptionSpreadCustom:
                 signal=result.get("signal") or {},
                 context=result.get("context") or {},
             )
-            if run:
+            if run and run.id:
                 result["run_id"] = run.id
         except Exception:
             # Never block execution if logging fails.

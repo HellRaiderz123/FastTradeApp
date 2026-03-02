@@ -10,6 +10,7 @@ import BudgetWidget from "../components/BudgetWidget";
 import SavingsGoalsWidget from "../components/SavingsGoalsWidget";
 import BillRemindersWidget from "../components/BillRemindersWidget";
 import ExpenseForecastWidget from "../components/ExpenseForecastWidget";
+import TrendWidget from "../components/TrendWidget";
 
 // ---------------- Types ----------------
 export interface Transaction {
@@ -251,8 +252,9 @@ export default function FinanceTracker() {
       </div>
 
       {/* Expense Forecast & Trends */}
-      <div className="lg:col-span-2">
+      <div className="lg:col-span-2 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <ExpenseForecastWidget />
+        <TrendWidget />
       </div>
 
       {/* Transactions */}

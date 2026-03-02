@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func, desc
 from datetime import datetime, timedelta, date
 from app.db.models_finance import (
     FinanceTransaction, RecurringTransaction, Budget, SavingsGoal,
@@ -312,6 +313,109 @@ def get_expense_forecasts(db: Session, month: str = None):
     return db.query(ExpenseForecast).filter(
         ExpenseForecast.forecast_month == month
     ).all()
+
+
+def compute_category_trends(db: Session, months: int = 6, top_n: int = 5):
+    """Return trend analysis for top spending categories over past `months` months.
+
+    Result format:
+    {
+        "months": ["2025-09", ..., "2026-02"],
+        "trends": [
+            {
+                "category": "Food",
+                "months": [{"month":"2026-02","total":1234.0}, ...],
+                "pct_change_last_month": 5.2,  # percent
+                "slope": 12.3,  # raw slope from simple regression
+                "trend": "increasing"|"decreasing"|"stable"
+            }, ...
+        ]
+    }
+    """
+    today = date.today()
+    current_month_start = today.replace(day=1)
+
+    def shift_months(month_start: date, delta_months: int) -> date:
+        total_months = month_start.year * 12 + (month_start.month - 1) + delta_months
+        new_year = total_months // 12
+        new_month = (total_months % 12) + 1
+        return date(new_year, new_month, 1)
+
+    # build months list oldest->newest using true calendar-month stepping
+    month_starts = [shift_months(current_month_start, -offset) for offset in range(months - 1, -1, -1)]
+    months_list = [month_start.strftime("%Y-%m") for month_start in month_starts]
+
+    start_date = month_starts[0]
+
+    # pick top categories by total spent in the period
+    cat_rows = (
+        db.query(FinanceTransaction.category, func.sum(FinanceTransaction.debit).label("total"))
+        .filter(FinanceTransaction.tran_date >= start_date)
+        .group_by(FinanceTransaction.category)
+        .order_by(desc("total"))
+        .limit(top_n)
+        .all()
+    )
+
+    categories = [r[0] for r in cat_rows]
+    result = []
+
+    for cat in categories:
+        monthly = []
+        totals = []
+        for m in months_list:
+            year, mon = map(int, m.split("-"))
+            from_dt = date(year, mon, 1)
+            if mon == 12:
+                to_dt = date(year + 1, 1, 1)
+            else:
+                to_dt = date(year, mon + 1, 1)
+
+            s = db.query(func.coalesce(func.sum(FinanceTransaction.debit), 0)).filter(
+                FinanceTransaction.category == cat,
+                FinanceTransaction.tran_date >= from_dt,
+                FinanceTransaction.tran_date < to_dt,
+            ).scalar()
+            s = float(s or 0)
+            monthly.append({"month": m, "total": s})
+            totals.append(s)
+
+        # percent change last month vs previous
+        pct_change = None
+        if len(totals) >= 2:
+            prev = totals[-2]
+            last = totals[-1]
+            pct_change = ((last - prev) / prev * 100) if prev != 0 else None
+
+        # simple slope (least squares) over months
+        slope = 0.0
+        if len(totals) >= 2:
+            xs = list(range(len(totals)))
+            n = len(xs)
+            mean_x = sum(xs) / n
+            mean_y = sum(totals) / n
+            num = sum((xs[i] - mean_x) * (totals[i] - mean_y) for i in range(n))
+            den = sum((xs[i] - mean_x) ** 2 for i in range(n))
+            slope = (num / den) if den != 0 else 0.0
+
+        trend = "stable"
+        if pct_change is not None:
+            if pct_change > 5:
+                trend = "increasing"
+            elif pct_change < -5:
+                trend = "decreasing"
+
+        result.append(
+            {
+                "category": cat,
+                "months": monthly,
+                "pct_change_last_month": pct_change,
+                "slope": slope,
+                "trend": trend,
+            }
+        )
+
+    return {"months": months_list, "trends": result}
 
 
 # ============= CURRENCY EXCHANGE =============

@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.models_risk import RiskLimitConfig, default_iv_limits
 
@@ -39,6 +40,9 @@ def update_risk_limits(
     record.max_portfolio_loss_pct = max_portfolio_loss_pct
     record.max_trades_per_day = max_trades_per_day
     record.iv_regime_limits = iv_regime_limits or default_iv_limits()
+
+    # Flag the JSON column as modified so SQLAlchemy knows to persist changes
+    flag_modified(record, "iv_regime_limits")
 
     db.add(record)
     db.commit()

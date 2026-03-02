@@ -34,6 +34,7 @@ from app.db.finance_repo import (
     delete_bill_reminder,
     calculate_expense_forecast,
     get_expense_forecasts,
+    compute_category_trends,
     update_exchange_rate,
     get_exchange_rate,
     get_all_exchange_rates,
@@ -293,6 +294,12 @@ def generate_forecast(
 @router.get("/forecast", response_model=list[ExpenseForecastOut])
 def list_forecasts(month: str = None, db: Session = Depends(get_db)):
     return get_expense_forecasts(db, month)
+
+
+@router.get("/trends")
+def list_trends(months: int = 6, top_n: int = 5, db: Session = Depends(get_db)):
+    """Return spending trends for top categories over the given months."""
+    return compute_category_trends(db, months=months, top_n=top_n)
 
 
 # ============= CURRENCY EXCHANGE =============

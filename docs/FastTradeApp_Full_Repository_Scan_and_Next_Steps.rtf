@@ -1,0 +1,194 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}{\f1 Consolas;}}
+\fs22
+\b FastTradeApp - Full Repository Scan & Next Steps\b0\par
+\par
+\b Prepared on:\b0 March 2, 2026\par
+\b Scope:\b0 Backend, Frontend (Web + Mobile), Data, Trading Safety, Infra\par
+\par
+\b 1) Current State Summary\b0\par
+\par
+\b Metric\tab Count\b0\par
+Backend API endpoints\tab ~192 across 40 route modules\par
+Database tables\tab 27 SQLAlchemy models\par
+Frontend pages (web)\tab 15 routes, 29 components\par
+Frontend API methods\tab ~145+\par
+Mobile screens\tab 7 (only ~25% parity with web)\par
+Scheduled jobs\tab 5 (candles, VIX, auto-exit, expiry)\par
+Backend LOC (est.)\tab ~15,000+\par
+Frontend LOC (est.)\tab ~15,000+\par
+\par
+\b 2) What is DONE and Working\b0\par
+\par
+\b Area\tab Status\tab Details\b0\par
+Zerodha Integration\tab [DONE]\tab Full OAuth login, KiteConnect, instruments, live orders/positions/holdings\par
+Signal Engine (TA)\tab [DONE]\tab Full 657-line engine: RSI, ADX, MACD, Bollinger, VWAP, EMA, Stochastic\par
+ML Prediction\tab [DONE]\tab Full GradientBoosting, train/predict/backfill, 11 API endpoints, feature engineering\par
+Signal Diagnostics\tab [DONE]\tab Full entry/exit snapshots, outcome tracking, diagnostics aggregation\par
+Auto-Trader\tab [DONE]\tab Full 670-line engine, scan/decide/execute/monitor/exit, 3 modes\par
+Option Spread Strategies\tab [DONE]\tab Bull Put, Bear Call, Iron Condor + custom spreads\par
+Stock Strategies\tab [DONE]\tab Momentum, Mean Reversion, Trend Following\par
+Strategy Builder UI\tab [DONE]\tab 1726 lines, 12 templates, payoff charts, Greeks, drag legs\par
+Bloomberg Terminal\tab [DONE]\tab Watchlist, movers, sectors, sentiment, scanner, alerts, depth, news, shortcuts\par
+Paper Trading\tab [DONE]\tab Simulator with MTM updates, entry/exit\par
+Backtesting\tab [DONE]\tab Stocks + Options, equity curves, Sharpe/Sortino/MaxDD/Calmar\par
+Risk Management\tab [DONE]\tab Circuit breaker (5 checks), drawdown tracker, kill switch, trade limits, cost calculator\par
+Expiry Auto-Exit\tab [DONE]\tab Force-exit at 3:15 PM on expiry day, multi-tier warnings\par
+TP/SL/Trailing Stop\tab [DONE]\tab Scheduler-driven auto-exit every minute\par
+Broker Reconciliation\tab [DONE]\tab Detects Zerodha-closed positions, syncs to local DB\par
+Notifications\tab [DONE]\tab In-app DB + Gmail SMTP, 13 notification types\par
+Health Monitoring\tab [DONE]\tab DB check, candle freshness, API performance, rate limiter stats\par
+Personal Finance\tab [DONE]\tab 26 endpoints, CSV import, budgets, goals, bills, forecasts\par
+WebSocket Real-time\tab [DONE]\tab 3 channels: positions, quotes, live data\par
+Journal + Diagnostics\tab [DONE]\tab Trade log, signal diagnostics by bias/strategy/market-mode/IV-regime\par
+Options Chain\tab [DONE]\tab Real Zerodha data, Greeks, IV, OI, volume\par
+Screener + Heatmap\tab [DONE]\tab Multi-criteria filter, NIFTY 50 heatmap\par
+Economic Calendar\tab [DONE]\tab Earnings, RBI, IPO, dividends, economic events\par
+News Feed\tab [DONE]\tab RSS + newsdata.io, sentiment filter, trending\par
+Alerts System\tab [DONE]\tab Create/list/enable/disable/delete/evaluate\par
+\par
+\b 3) What is BROKEN or has GAPS\b0\par
+\par
+\b Critical Bugs\b0\par
+1. Mobile: Backtest crashes\par
+   - Location: mobile backtest.tsx\par
+   - Impact: backtestAPI not exported from lib/api.ts -> runtime crash\par
+\par
+2. Mobile: Strategy Builder crashes\par
+   - Location: mobile strategyBuilder.tsx\par
+   - Impact: greeksAPI, marketAPI not exported from lib/api.ts\par
+\par
+3. Mobile: Hardcoded IP\par
+   - Location: mobile api.ts\par
+   - Impact: http://192.168.31.244:8000 breaks on different networks\par
+\par
+4. Market Depth: Fake data\par
+   - Location: market_depth.py\par
+   - Impact: import random based values, not true L2 market depth\par
+\par
+5. LTP returns 0.0 on failure\par
+   - Location: ltp.py\par
+   - Impact: caller can proceed with price 0, unsafe execution risk\par
+\par
+\b Open TODOs\b0\par
+1. stock_enricher.py\par
+   - TODOs: sector momentum, P/E vs sector avg, symbol DB query\par
+\par
+2. data/candles.py\par
+   - TODO: replace mock candle source with real broker API\par
+\par
+3. routes/market.py\par
+   - TODO: proper historical data from Zerodha\par
+\par
+\b 4) Next Steps - Prioritized by Impact\b0\par
+\par
+\b TIER 1: Production Safety (Before Real Money)\b0\par
+1) Global exception handler on FastAPI (2h)\par
+   Why: Prevent raw tracebacks leaking to clients; standardize clean 500 response envelopes\par
+\par
+2) LTP zero-guard (1h)\par
+   Why: Block order flow when LTP unavailable or invalid (<=0)\par
+\par
+3) Authentication / Login (4-6h)\par
+   Why: No auth means any local-network user can access trading endpoints\par
+\par
+4) API key encryption at rest (2-3h)\par
+   Why: Zerodha credentials in plain env are high-risk\par
+\par
+5) Emergency \ldblquote Close All\rdblquote button (3h)\par
+   Why: One-click panic flatten for live and paper positions\par
+\par
+6) Real Market Depth (2h)\par
+   Why: Replace random output with Zerodha quote depth payload\par
+\par
+\b TIER 2: High-Impact Features\b0\par
+7) Multi-timeframe candles (1m/5m/1h/daily) - 6-8h\par
+8) Backtest comparison UI wiring - 3-4h\par
+9) Live trade cost tracking (brokerage/STT/GST) - 3h\par
+10) Custom watchlists - 4-5h\par
+11) Draggable dashboard layout - 4h\par
+12) TradingView-style candlesticks via lightweight-charts - 4h\par
+13) Toast notifications instead of blocking alert() - 2h\par
+14) Loading skeletons instead of plain \ldblquote Loading...\rdblquote - 2h\par
+\par
+\b TIER 3: ML & Intelligence\b0\par
+15) Model ensemble (GBM + RF + XGBoost voting) - 6-8h\par
+16) Feature importance dashboard (SHAP) - 3h\par
+17) Signal-level backtest engine - 6h\par
+18) News sentiment scoring in signal context - 4-5h\par
+19) Position correlation matrix - 3h\par
+20) Walk-forward optimization - 8h\par
+\par
+\b TIER 4: Mobile (Current ~25% parity)\b0\par
+21) Fix broken screens (missing API exports) - 2h\par
+22) Environment config (remove hardcoded LAN IP) - 1h\par
+23) Push notifications (Expo) - 4-5h\par
+24) Auto-Trader mobile screen - 4h\par
+25) Options Chain mobile screen - 4h\par
+26) Biometric auth (FaceID/Fingerprint) - 3h\par
+27) Remove dead code (unused root App.tsx) - 1h\par
+\par
+\b TIER 5: Infrastructure & Scale\b0\par
+28) PostgreSQL migration - 6-8h\par
+29) Redis caching (market/chain/candles) - 4-5h\par
+30) Formal pytest unit/integration suite - 8-12h\par
+31) Docker CI/CD (GitHub Actions) - 4h\par
+32) Dark/Light theme toggle plumbing - 2h\par
+33) Rate limiter per-user buckets - 2h\par
+\par
+\b 5) Recommended Implementation Order\b0\par
+\par
+The platform is approximately 85% feature-complete with broad and advanced scope.\par
+Top priority should be:\par
+- Security and access control (auth, secrets)\par
+- Production safety guards (LTP zero-block, exception middleware, panic close-all)\par
+- Data correctness (real depth, real historical feeds)\par
+\par
+After that, move to UX velocity and trader productivity items (candles, charting, watchlists, toasts), then mobile parity, and finally infra scaling hardening.\par
+\par
+\b 6) Execution Plan (Recommended 4-Week Sprint)\b0\par
+\par
+\b Week 1 (Safety + Security)\b0\par
+- Add global exception middleware and error envelope standard\par
+- Implement LTP zero-guard in order pipeline\par
+- Implement auth (JWT/session) for sensitive endpoints\par
+- Add emergency close-all action with audit log\par
+\par
+\b Week 2 (Data Integrity + Trading Reliability)\b0\par
+- Replace market depth random output with live depth source\par
+- Harden historical/candle data sources to real broker path\par
+- Track live execution costs and persist to execution records\par
+\par
+\b Week 3 (Frontend Productivity + Mobile Fixes)\b0\par
+- Fix mobile missing API exports and env config\par
+- Add toasts and loading skeletons\par
+- Wire backtest comparison UI\par
+\par
+\b Week 4 (Scale + Foundations)\b0\par
+- Start PostgreSQL migration path\par
+- Add Redis cache for expensive market endpoints\par
+- Establish pytest structure + smoke tests in CI\par
+\par
+\b 7) Risk Register (High Priority)\b0\par
+1. Unauthorized trade execution risk (no auth)\par
+2. Invalid-price execution risk (LTP fallback = 0.0)\par
+3. Credential leakage risk (plain secret storage)\par
+4. Data-quality risk (fake depth + mocked historical paths)\par
+\par
+\b 8) Definition of Production Ready\b0\par
+Minimum acceptance checklist before real capital deployment:\par
+- [ ] Auth required for all trade-affecting endpoints\par
+- [ ] LTP and quote validity guardrails in execution pipeline\par
+- [ ] Panic close-all tested in paper and live mode\par
+- [ ] Exception middleware + structured logs + alerting\par
+- [ ] Real market depth and historical data feeds only\par
+- [ ] Smoke test suite in CI for critical flows\par
+\par
+\b 9) Quick Executive Summary\b0\par
+FastTradeApp is already highly capable and unusually broad in scope (trading, analytics, Bloomberg-like terminal, finance suite, diagnostics, auto-trading).\par
+Core engines are mature; the primary blockers are production safety and security controls, plus mobile parity and infra hardening.\par
+\par
+With the Tier-1 items completed, the platform can move from advanced prototype toward controlled production rollout.\par
+\par
+\b Document End\b0\par
+}

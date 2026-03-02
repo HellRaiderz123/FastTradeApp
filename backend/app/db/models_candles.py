@@ -2,8 +2,56 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, Index, Date
 from app.db.session import Base
 from app.core.utils.time import now_ist
 
+class Candle1m(Base):
+    __tablename__ = "candles_1m"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String, index=True)      # NIFTY
+    timestamp = Column(DateTime(timezone=True), index=True)
+
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+    volume = Column(Float)
+
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+
+
+class Candle5m(Base):
+    __tablename__ = "candles_5m"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String, index=True)      # NIFTY
+    timestamp = Column(DateTime(timezone=True), index=True)
+
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+    volume = Column(Float)
+
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+
+
 class Candle15m(Base):
     __tablename__ = "candles_15m"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String, index=True)      # NIFTY
+    timestamp = Column(DateTime(timezone=True), index=True)
+
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+    volume = Column(Float)
+
+    created_at = Column(DateTime(timezone=True), default=now_ist)
+
+
+class Candle1h(Base):
+    __tablename__ = "candles_1h"
 
     id = Column(Integer, primary_key=True)
     symbol = Column(String, index=True)      # NIFTY
@@ -60,7 +108,10 @@ class OptionHistoricalCandle(Base):
     created_at = Column(DateTime(timezone=True), default=now_ist)
 
 
-Index("ix_candles_symbol_ts", Candle15m.symbol, Candle15m.timestamp, unique=True)
+Index("ix_candles_1m_symbol_ts", Candle1m.symbol, Candle1m.timestamp, unique=True)
+Index("ix_candles_5m_symbol_ts", Candle5m.symbol, Candle5m.timestamp, unique=True)
+Index("ix_candles_15m_symbol_ts", Candle15m.symbol, Candle15m.timestamp, unique=True)
+Index("ix_candles_1h_symbol_ts", Candle1h.symbol, Candle1h.timestamp, unique=True)
 Index("ix_candles_daily_symbol_date", CandleDaily.symbol, CandleDaily.date, unique=True)
 Index("ix_option_candles_symbol_ts", OptionHistoricalCandle.tradingsymbol, OptionHistoricalCandle.timestamp, unique=True)
 Index("ix_option_candles_expiry_strike", OptionHistoricalCandle.underlying, OptionHistoricalCandle.expiry, OptionHistoricalCandle.strike, OptionHistoricalCandle.option_type)

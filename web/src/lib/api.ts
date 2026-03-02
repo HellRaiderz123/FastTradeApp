@@ -10,6 +10,23 @@ const api = axios.create({
   },
 });
 
+const AUTH_TOKEN_KEY = 'fasttrade_auth_token';
+
+export const authTokenStore = {
+  get: () => localStorage.getItem(AUTH_TOKEN_KEY) || '',
+  set: (token: string) => localStorage.setItem(AUTH_TOKEN_KEY, token),
+  clear: () => localStorage.removeItem(AUTH_TOKEN_KEY),
+};
+
+api.interceptors.request.use((config) => {
+  const token = authTokenStore.get();
+  if (token) {
+    config.headers = config.headers || {};
+    (config.headers as any).Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // ── Global Error Interceptor ───────────────────────────────────────────────
 api.interceptors.response.use(
   (response) => response,
@@ -182,6 +199,12 @@ export const marketAPI = {
       params: { interval, from_date, to_date } 
     }),
   
+  // Get candles from database (multi-timeframe support)
+  getCandlesDB: (symbol: string, timeframe: '1m' | '5m' | '15m' | '1h' | 'daily', limit: number = 50) =>
+    api.get(`/candles/${timeframe}/${symbol}`, {
+      params: { limit }
+    }),
+  
   // Get live LTP (Last Traded Price) for spot price
   getLTP: (symbol: string = 'NIFTY') =>
     api.get(`/market/ltp/${symbol}`),
@@ -285,6 +308,7 @@ export const backtestAPI = {
   run: (payload: any) => api.post('/backtest/run', payload),
   getResult: (id: number) => api.get(`/backtest/results/${id}`),
   listForStrategy: (strategyId: number) => api.get(`/backtest/strategy/${strategyId}`),
+  compare: (backtestIds: number[]) => api.post('/backtest/compare', { backtest_ids: backtestIds }),
 };
 
 // Suggestions APIs (AlgoRoom-like)
@@ -473,6 +497,10 @@ export const financeAPI = {
   getExpenseForecasts: (month?: string) =>
     api.get('/finance/forecast', { params: { month } }),
 
+  // ========== TRENDS ==========
+  getTrends: (months: number = 6, top_n: number = 5) =>
+    api.get('/finance/trends', { params: { months, top_n } }),
+
   // ========== CURRENCY EXCHANGE ==========
   setExchangeRate: (fromCurrency: string, toCurrency: string, rate: number) =>
     api.post(`/finance/currency/${fromCurrency}/${toCurrency}/${rate}`),
@@ -494,6 +522,71 @@ export const financeAPI = {
     api.get('/zerodha/holdings'),
 };
 
+// Trade Cost APIs
+export const tradeCostAPI = {
+  calculate: (trade: {
+    symbol: string;
+    trade_type: 'BUY' | 'SELL';
+    segment: 'EQUITY' | 'FNO';
+    product_type: 'DELIVERY' | 'INTRADAY' | 'OPTIONS' | 'FUTURES';
+    quantity: number;
+    price: number;
+    intent_id?: string;
+    order_id?: string;
+  }) => api.post('/trade-costs/calculate', trade),
+  
+  getHistory: (limit?: number) =>
+    api.get('/trade-costs/history', { params: { limit } }),
+  
+  getSummary: () =>
+    api.get('/trade-costs/summary'),
+  
+  getConfig: () =>
+    api.get('/trade-costs/config'),
+  
+  updateConfig: (config: any) =>
+    api.post('/trade-costs/config', config),
+};
+
+// Watchlist APIs
+export const watchlistAPI = {
+  getAll: (includeInactive?: boolean) =>
+    api.get('/watchlists', { params: { include_inactive: includeInactive } }),
+  
+  get: (id: number) =>
+    api.get(`/watchlists/${id}`),
+  
+  create: (data: {
+    name: string;
+    description?: string;
+    symbols?: string[];
+    color?: string;
+    icon?: string;
+    is_default?: boolean;
+  }) => api.post('/watchlists', data),
+  
+  update: (id: number, data: {
+    name?: string;
+    description?: string;
+    symbols?: string[];
+    color?: string;
+    icon?: string;
+    is_default?: boolean;
+  }) => api.put(`/watchlists/${id}`, data),
+  
+  delete: (id: number, softDelete?: boolean) =>
+    api.delete(`/watchlists/${id}`, { params: { soft_delete: softDelete } }),
+  
+  addSymbol: (id: number, symbol: string) =>
+    api.post(`/watchlists/${id}/symbols/${symbol}`),
+  
+  removeSymbol: (id: number, symbol: string) =>
+    api.delete(`/watchlists/${id}/symbols/${symbol}`),
+  
+  getQuotes: (id: number) =>
+    api.get(`/watchlists/${id}/quotes`),
+};
+
 export default api;
 
 // FIX: positionsAPI was previously declared BEFORE the `api` axios instance was
@@ -502,4 +595,14 @@ export default api;
 export const positionsAPI = {
   updateTPSL: (intentId: string, { tp, sl, trailing_sl }: { tp?: number; sl?: number; trailing_sl?: number }) =>
     api.patch(`/intent/${intentId}/update_tp_sl`, { tp, sl, trailing_sl }),
+};
+
+// Authentication APIs
+export const authAPI = {
+  login: (username: string, password: string) =>
+    api.post('/auth/login', { username, password }),
+  me: () => api.get('/auth/me'),
+  logout: () => {
+    authTokenStore.clear();
+  },
 };
