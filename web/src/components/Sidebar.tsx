@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain, Bot } from 'lucide-react';
+import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock, GitCompare, DollarSign, Star, Sparkles } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
-import { Wallet } from 'lucide-react';
 
 interface SidebarProps {
   open: boolean;
@@ -41,12 +40,17 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     { path: '/dashboard', icon: TrendingUp, label: 'Dashboard' },
     { path: '/screener', icon: Search, label: 'Screener' },
     { path: '/heatmap', icon: Grid, label: 'Heatmap' },
+    { path: '/watchlists', icon: Star, label: 'Watchlists' },
+    { path: '/multi-timeframe', icon: Clock, label: 'Multi-Timeframe' },
     { path: '/options', icon: Target, label: 'Options Chain' },
     { path: '/calendar', icon: Calendar, label: 'Calendar' },
     { path: '/ml', icon: Brain, label: 'ML Center' },
+    { path: '/ml-intelligence', icon: Sparkles, label: 'ML Intelligence' },
     { path: '/strategies', icon: Zap, label: 'Strategies' },
     { path: '/backtest', icon: LineChart, label: 'Backtest' },
+    { path: '/backtest-comparison', icon: GitCompare, label: 'Compare Backtests' },
     { path: '/positions', icon: Briefcase, label: 'Positions' },
+    { path: '/trade-costs', icon: DollarSign, label: 'Trade Costs' },
     { path: '/auto-trader', icon: Bot, label: 'Auto Trader' },
     { path: '/journal', icon: BookOpen, label: 'Journal' },
     { path: '/finance', icon: Wallet, label: 'Finance' },
@@ -75,7 +79,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
       </div>
 
       {/* Menu Items */}
-      <nav className="flex-1 p-4 space-y-2">
+      <nav className="flex-1 p-4 pr-2 space-y-2 overflow-y-auto custom-scrollbar">
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = location.pathname === item.path;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Eye, Star, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
 import { watchlistAPI } from '../lib/api';
+import { useToast } from '../components/Toast';
 
 interface Watchlist {
   id: number;
@@ -27,6 +28,7 @@ interface Quote {
 }
 
 const CustomWatchlists: React.FC = () => {
+  const { showToast } = useToast();
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [selectedWatchlist, setSelectedWatchlist] = useState<Watchlist | null>(null);
   const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -86,7 +88,7 @@ const CustomWatchlists: React.FC = () => {
 
   const createWatchlist = async () => {
     if (!newName.trim()) {
-      alert('Please enter a watchlist name');
+      showToast('warning', 'Missing Name', 'Please enter a watchlist name');
       return;
     }
 
@@ -104,7 +106,7 @@ const CustomWatchlists: React.FC = () => {
       setNewColor('#3b82f6');
       loadWatchlists();
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to create watchlist');
+      showToast('error', 'Create Failed', err.response?.data?.detail || 'Failed to create watchlist');
     }
   };
 
@@ -118,7 +120,7 @@ const CustomWatchlists: React.FC = () => {
         setSelectedWatchlist(null);
       }
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to delete watchlist');
+      showToast('error', 'Delete Failed', err.response?.data?.detail || 'Failed to delete watchlist');
     }
   };
 
@@ -132,7 +134,7 @@ const CustomWatchlists: React.FC = () => {
       loadWatchlists();
       loadQuotes(selectedWatchlist.id);
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to add symbol');
+      showToast('error', 'Add Failed', err.response?.data?.detail || 'Failed to add symbol');
     }
   };
 
@@ -146,7 +148,7 @@ const CustomWatchlists: React.FC = () => {
       loadWatchlists();
       loadQuotes(selectedWatchlist.id);
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to remove symbol');
+      showToast('error', 'Remove Failed', err.response?.data?.detail || 'Failed to remove symbol');
     }
   };
 

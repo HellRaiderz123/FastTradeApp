@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle } from 'lucide-react';
 import { exitAPI, journalAPI, smartSuggestionsAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
+import { useToast } from '../components/Toast';
 import ZerodhaPositionsWidget from '../components/ZerodhaPositionsWidget';
 import SpreadGrouping from '../components/SpreadGrouping';
 
 const Positions: React.FC = () => {
+  const { showToast } = useToast();
   const { trades, setTrades } = useTradeStore();
   const [loading, setLoading] = useState(false);
   const [localTrades, setLocalTrades] = useState<any[]>([]);
@@ -144,10 +146,10 @@ const Positions: React.FC = () => {
     try {
       await exitAPI.manualExit(intentId);
       setLocalTrades(localTrades.filter((t) => t.intent_id !== intentId));
-      alert('Position closed successfully!');
+      showToast('success', 'Position Closed', 'Position closed successfully!');
     } catch (error) {
       console.error('Failed to close position:', error);
-      alert('Failed to close position');
+      showToast('error', 'Close Failed', 'Failed to close position');
     } finally {
       setLoading(false);
     }
@@ -361,17 +363,18 @@ interface PositionCardProps {
 
 // Hedge Position Modal Component
 const HedgeModal: React.FC<{ trade: any; onClose: () => void; onSuccess: () => void }> = ({ trade, onClose, onSuccess }) => {
+  const { showToast } = useToast();
   const [hedgeType, setHedgeType] = React.useState<'strangle' | 'wing' | 'opposite'>('strangle');
   const [loading, setLoading] = React.useState(false);
   
   const handleHedge = async () => {
     setLoading(true);
     try {
-      alert(`Hedge feature coming soon: Adding ${hedgeType} hedge to position ${trade.strategy}`);
+      showToast('info', 'Coming Soon', `Hedge feature: Adding ${hedgeType} hedge to ${trade.strategy}`);
       // TODO: Implement actual hedge logic
       onSuccess();
     } catch (err) {
-      alert('Failed to add hedge');
+      showToast('error', 'Hedge Failed', 'Failed to add hedge');
     } finally {
       setLoading(false);
     }
@@ -434,6 +437,7 @@ const HedgeModal: React.FC<{ trade: any; onClose: () => void; onSuccess: () => v
 
 // Adjust Strikes Modal Component
 const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess: () => void }> = ({ trade, onClose, onSuccess }) => {
+  const { showToast } = useToast();
   const [adjustment, setAdjustment] = React.useState<number>(50);
   const [direction, setDirection] = React.useState<'up' | 'down'>('up');
   const [loading, setLoading] = React.useState(false);
@@ -443,11 +447,11 @@ const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
   const handleAdjust = async () => {
     setLoading(true);
     try {
-      alert(`Adjusting strikes ${direction} by ${adjustment} points`);
+      showToast('info', 'Adjusting', `Adjusting strikes ${direction} by ${adjustment} points`);
       // TODO: Close current legs and open new ones with adjusted strikes
       onSuccess();
     } catch (err) {
-      alert('Failed to adjust strikes');
+      showToast('error', 'Adjust Failed', 'Failed to adjust strikes');
     } finally {
       setLoading(false);
     }
@@ -534,6 +538,7 @@ const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
 
 // Add to Position Modal Component
 const AddToPositionModal: React.FC<{ trade: any; onClose: () => void; onSuccess: () => void }> = ({ trade, onClose, onSuccess }) => {
+  const { showToast } = useToast();
   const [quantity, setQuantity] = React.useState<number>(1);
   const [loading, setLoading] = React.useState(false);
   
@@ -542,11 +547,11 @@ const AddToPositionModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
   const handleAdd = async () => {
     setLoading(true);
     try {
-      alert(`Adding ${quantity} more contracts to position`);
+      showToast('info', 'Adding', `Adding ${quantity} more contracts to position`);
       // TODO: Execute additional legs with same strikes
       onSuccess();
     } catch (err) {
-      alert('Failed to add to position');
+      showToast('error', 'Add Failed', 'Failed to add to position');
     } finally {
       setLoading(false);
     }
@@ -836,6 +841,7 @@ const actionLabel =
 };
 
 const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, smartSuggestion }) => {
+  const { showToast } = useToast();
   const [showLegs, setShowLegs] = React.useState(false);
   const [showAdvice, setShowAdvice] = React.useState(true);
   const [editOpen, setEditOpen] = React.useState(false);
@@ -909,7 +915,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
       // Optionally, refresh positions here (reload page or trigger parent refresh)
       window.location.reload();
     } catch (err) {
-      alert('Failed to update TP/SL/Trailing');
+      showToast('error', 'Update Failed', 'Failed to update TP/SL/Trailing');
     } finally {
       setEditLoading(false);
     }

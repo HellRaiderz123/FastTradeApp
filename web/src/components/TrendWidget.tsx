@@ -59,7 +59,9 @@ export default function TrendWidget({ months = 6, topN = 5 }: { months?: number;
       </div>
 
       {loading ? (
-        <div>Loading...</div>
+        <div className="animate-pulse space-y-3">
+          <div className="h-[300px] bg-slate-800 rounded"></div>
+        </div>
       ) : (
         <>
           <div className="w-full h-[300px]">

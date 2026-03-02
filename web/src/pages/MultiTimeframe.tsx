@@ -4,7 +4,7 @@ import CandleChart from '../components/CandleChart';
 
 const MultiTimeframeDemo: React.FC = () => {
   return (
-    <div className="min-h-screen bg-gray-950 p-6">
+    <div className="min-h-screen p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center gap-3 mb-8">
@@ -31,14 +31,14 @@ const MultiTimeframeDemo: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <CandleChart
               symbol="BANKNIFTY"
-              defaultTimeframe="5m"
+              defaultTimeframe="15m"
               height={300}
               showTimeframeSelector={true}
             />
             
             <CandleChart
               symbol="FINNIFTY"
-              defaultTimeframe="1h"
+              defaultTimeframe="15m"
               height={300}
               showTimeframeSelector={true}
             />

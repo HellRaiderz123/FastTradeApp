@@ -15,6 +15,7 @@ import {
   Clock
 } from 'lucide-react';
 import { strategyAPI, executionAPI, stockSuggestionsAPI } from '../lib/api';
+import { useToast } from './Toast';
 
 interface Strategy {
   id: number;
@@ -65,6 +66,7 @@ interface StockStrategyPanelProps {
 }
 type TimeframeMode = 'intraday' | 'swing';
 const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, currentPrice }) => {
+  const { showToast } = useToast();
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(false);
   const [executing, setExecuting] = useState<number | null>(null);
@@ -303,7 +305,7 @@ const StockStrategyPanel: React.FC<StockStrategyPanelProps> = ({ symbol, current
       await loadStrategies();
     } catch (error) {
       console.error('Failed to create strategy:', error);
-      alert('Failed to create strategy. Please try again.');
+      showToast('error', 'Strategy Error', 'Failed to create strategy. Please try again.');
     }
   };
 

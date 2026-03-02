@@ -344,12 +344,16 @@ def list_strategy_backtests(
 
 @router.post("/compare", summary="Compare multiple backtests")
 def compare_backtests(
-    backtest_ids: list[int],
+    body: dict,
     db: Session = Depends(get_db),
 ):
     """
-    Compare multiple backtest results
+    Compare multiple backtest results.
+    Accepts: { "backtest_ids": [1, 2, 3] }
     """
+    backtest_ids = body.get("backtest_ids", [])
+    if not backtest_ids:
+        raise HTTPException(status_code=400, detail="backtest_ids required")
     try:
         results = db.query(BacktestResult)\
             .filter(BacktestResult.id.in_(backtest_ids))\

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { DollarSign, TrendingUp, Calculator, History, Settings } from 'lucide-react';
 import { tradeCostAPI } from '../lib/api';
+import { useToast } from '../components/Toast';
 
 interface CostBreakdown {
   trade_value: number;
@@ -25,6 +26,7 @@ interface CostSummary {
 }
 
 const TradeCostTracker: React.FC = () => {
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'calculator' | 'history' | 'summary'>('calculator');
   
   // Calculator state
@@ -91,7 +93,7 @@ const TradeCostTracker: React.FC = () => {
       setCostBreakdown(response.data);
     } catch (err: any) {
       console.error('Failed to calculate costs:', err);
-      alert(err.response?.data?.detail || 'Failed to calculate costs');
+      showToast('error', 'Calculation Failed', err.response?.data?.detail || 'Failed to calculate costs');
     } finally {
       setCalculating(false);
     }
@@ -105,8 +107,17 @@ const TradeCostTracker: React.FC = () => {
     }).format(value);
   };
 
+  const toSafeNumber = (value: unknown, fallback = 0): number => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  };
+
+  const formatFixed = (value: unknown, digits = 2): string => {
+    return toSafeNumber(value).toFixed(digits);
+  };
+
   return (
-    <div className="min-h-screen bg-gray-950 p-6">
+    <div className="min-h-screen p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center gap-3">
@@ -187,6 +198,7 @@ const TradeCostTracker: React.FC = () => {
                     <select
                       value={tradeType}
                       onChange={(e) => setTradeType(e.target.value as 'BUY' | 'SELL')}
+                      title="Trade Type"
                       className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="BUY">BUY</option>
@@ -199,6 +211,7 @@ const TradeCostTracker: React.FC = () => {
                     <select
                       value={segment}
                       onChange={(e) => setSegment(e.target.value as 'EQUITY' | 'FNO')}
+                      title="Segment"
                       className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="FNO">F&O</option>
@@ -212,6 +225,7 @@ const TradeCostTracker: React.FC = () => {
                   <select
                     value={productType}
                     onChange={(e) => setProductType(e.target.value as any)}
+                    title="Product Type"
                     className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="OPTIONS">Options</option>
@@ -228,6 +242,8 @@ const TradeCostTracker: React.FC = () => {
                       type="number"
                       value={quantity}
                       onChange={(e) => setQuantity(parseInt(e.target.value) || 0)}
+                      title="Quantity"
+                      placeholder="Enter quantity"
                       className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
@@ -239,6 +255,8 @@ const TradeCostTracker: React.FC = () => {
                       step="0.01"
                       value={price}
                       onChange={(e) => setPrice(parseFloat(e.target.value) || 0)}
+                      title="Price"
+                      placeholder="Enter price"
                       className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
@@ -311,7 +329,7 @@ const TradeCostTracker: React.FC = () => {
                   </div>
                   
                   <div className="text-center text-sm text-gray-500 mt-4">
-                    Cost as % of trade value: <span className="text-yellow-400 font-semibold">{costBreakdown.cost_pct.toFixed(4)}%</span>
+                    Cost as % of trade value: <span className="text-yellow-400 font-semibold">{formatFixed(costBreakdown.cost_pct, 4)}%</span>
                   </div>
                 </div>
               )}
@@ -405,12 +423,12 @@ const TradeCostTracker: React.FC = () => {
                           </span>
                         </td>
                         <td className="p-3 text-right text-white">{item.quantity}</td>
-                        <td className="p-3 text-right text-white">₹{item.price.toFixed(2)}</td>
-                        <td className="p-3 text-right text-white">₹{item.trade_value.toFixed(2)}</td>
-                        <td className="p-3 text-right text-red-400">₹{item.brokerage.toFixed(2)}</td>
-                        <td className="p-3 text-right text-red-400">₹{item.stt_ctt.toFixed(2)}</td>
-                        <td className="p-3 text-right text-red-400 font-semibold">₹{item.total_cost.toFixed(2)}</td>
-                        <td className="p-3 text-right text-green-400 font-semibold">₹{item.net_value.toFixed(2)}</td>
+                        <td className="p-3 text-right text-white">₹{formatFixed(item.price, 2)}</td>
+                        <td className="p-3 text-right text-white">₹{formatFixed(item.trade_value, 2)}</td>
+                        <td className="p-3 text-right text-red-400">₹{formatFixed(item.brokerage, 2)}</td>
+                        <td className="p-3 text-right text-red-400">₹{formatFixed(item.stt_ctt, 2)}</td>
+                        <td className="p-3 text-right text-red-400 font-semibold">₹{formatFixed(item.total_cost, 2)}</td>
+                        <td className="p-3 text-right text-green-400 font-semibold">₹{formatFixed(item.net_value, 2)}</td>
                       </tr>
                     ))}
                   </tbody>

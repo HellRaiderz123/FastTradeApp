@@ -77,40 +77,56 @@ def _get_nifty100_symbols(db: Session) -> list:
 @router.get("/metrics")
 async def get_ml_metrics(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    Get ML model metrics including accuracy, precision, recall, F1 score
+    Get ML model metrics including accuracy, precision, recall, F1 score.
+    Reports 'ready' if either single or ensemble model file exists.
     """
     try:
-        # Check if model exists
-        meta_path = ML_CONFIG.model_path.with_suffix(".json")
-        
-        if not meta_path.exists():
+        single_meta_path = ML_CONFIG.model_path.with_suffix(".json")
+        ensemble_meta_path = ML_CONFIG.model_dir / "ensemble_model.json"
+
+        # Try ensemble first, then single
+        if ensemble_meta_path.exists():
+            with open(ensemble_meta_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
             return {
-                "accuracy": None,
-                "precision": None,
-                "recall": None,
-                "f1_score": None,
-                "training_date": None,
-                "total_samples": 0,
-                "model_status": "not_trained",
-                "last_training_duration": None,
+                "accuracy": metadata.get("accuracy"),
+                "precision": metadata.get("precision"),
+                "recall": metadata.get("recall"),
+                "f1_score": metadata.get("f1_score"),
+                "training_date": metadata.get("training_date"),
+                "total_samples": metadata.get("total_samples", 0),
+                "model_status": "ready",
+                "model_type": "ensemble",
+                "last_training_duration": metadata.get("training_duration"),
+            }
+
+        if single_meta_path.exists():
+            with open(single_meta_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            return {
+                "accuracy": metadata.get("accuracy"),
+                "precision": metadata.get("precision"),
+                "recall": metadata.get("recall"),
+                "f1_score": metadata.get("f1_score"),
+                "training_date": metadata.get("training_date"),
+                "total_samples": metadata.get("total_samples", metadata.get("train_rows", 0) + metadata.get("test_rows", 0)),
+                "model_status": "ready",
+                "model_type": "single",
+                "last_training_duration": metadata.get("training_duration"),
+                "train_rows": metadata.get("train_rows"),
+                "test_rows": metadata.get("test_rows"),
             }
         
-        # Load metadata
-        with open(meta_path, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
-        
-        # Return metrics with defaults for missing fields (from old models)
         return {
-            "accuracy": metadata.get("accuracy"),
-            "precision": metadata.get("precision"),  # May be None for old models
-            "recall": metadata.get("recall"),  # May be None for old models
-            "f1_score": metadata.get("f1_score"),  # May be None for old models
-            "training_date": metadata.get("training_date"),
-            "total_samples": metadata.get("total_samples", metadata.get("train_rows", 0) + metadata.get("test_rows", 0)),
-            "model_status": "ready",
-            "last_training_duration": metadata.get("training_duration"),
-            "train_rows": metadata.get("train_rows"),
-            "test_rows": metadata.get("test_rows"),
+            "accuracy": None,
+            "precision": None,
+            "recall": None,
+            "f1_score": None,
+            "training_date": None,
+            "total_samples": 0,
+            "model_status": "not_trained",
+            "model_type": "none",
+            "last_training_duration": None,
         }
     
     except Exception as e:
@@ -491,3 +507,391 @@ async def get_training_history() -> Dict[str, Any]:
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading training history: {str(e)}")
+
+
+# ===========================================================================
+# TIER 3 — ML INTELLIGENCE ENDPOINTS
+# ===========================================================================
+
+
+# ---- #15  Model Ensemble (GBM + RF + XGBoost voting) ----------------------
+
+@router.post("/ensemble/train")
+async def train_ensemble_endpoint(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Train 3-model ensemble (GBM + RandomForest + XGBoost soft-voting)."""
+    from app.core.ml.ensemble import train_ensemble
+    try:
+        start = datetime.now()
+        symbols = _get_nifty100_symbols(db)
+        if not symbols:
+            raise ValueError("No symbols with sufficient data")
+        result = train_ensemble(db, symbols, ML_CONFIG)
+        result["training_duration"] = (datetime.now() - start).total_seconds()
+        return {"status": "success", **result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ensemble training failed: {e}")
+
+
+@router.get("/ensemble/info")
+async def get_ensemble_info() -> Dict[str, Any]:
+    """Get ensemble model metadata and per-model accuracy."""
+    from app.core.ml.ensemble import load_ensemble_metadata
+    meta = load_ensemble_metadata(ML_CONFIG)
+    if not meta:
+        return {"status": "not_trained"}
+    return {"status": "ready", **meta}
+
+
+@router.get("/ensemble/predict/{symbol}")
+async def ensemble_predict(symbol: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Predict using the 3-model ensemble."""
+    from app.core.ml.ensemble import predict_ensemble
+    result = predict_ensemble(db, symbol.upper(), ML_CONFIG)
+    result["symbol"] = symbol.upper()
+    result["timestamp"] = datetime.now().isoformat()
+    return result
+
+
+class EnsembleBulkRequest(BaseModel):
+    symbols: list[str]
+
+
+@router.post("/ensemble/predict-bulk")
+async def ensemble_predict_bulk(request: EnsembleBulkRequest, db: Session = Depends(get_db)):
+    """Bulk ensemble predictions (max 30)."""
+    from app.core.ml.ensemble import predict_ensemble
+    preds = {}
+    for sym in request.symbols[:30]:
+        s = sym.upper()
+        try:
+            preds[s] = predict_ensemble(db, s, ML_CONFIG)
+        except Exception as exc:
+            preds[s] = {"signal": "NO_TRADE", "confidence": 0, "bias": "NEUTRAL", "reason": str(exc)}
+    return {"predictions": preds, "count": len(preds), "timestamp": datetime.now().isoformat()}
+
+
+@router.get("/ensemble/compare/{symbol}")
+async def ensemble_vs_single(symbol: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Compare ensemble prediction vs single GBM for a given symbol."""
+    sym = symbol.upper().strip()
+    # Single model
+    try:
+        from app.core.ml.stock_model import predict_stock_signal
+        single = predict_stock_signal(db, sym, ML_CONFIG)
+    except Exception as exc:
+        single = {"signal": "ERROR", "confidence": 0, "reason": str(exc), "bias": "NEUTRAL"}
+
+    # Ensemble model
+    try:
+        from app.core.ml.ensemble import predict_ensemble
+        ensemble = predict_ensemble(db, sym, ML_CONFIG)
+    except Exception as exc:
+        ensemble = {"signal": "ERROR", "confidence": 0, "reason": str(exc), "bias": "NEUTRAL"}
+
+    return {
+        "symbol": sym,
+        "single_model": single,
+        "ensemble_model": ensemble,
+        "agreement": single.get("signal") == ensemble.get("signal"),
+    }
+
+
+# ---- #16  Feature Importance (SHAP) Dashboard ----------------------------
+
+@router.get("/shap/global")
+async def get_global_shap(
+    model_type: str = "single",
+    max_samples: int = 300,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Compute global SHAP feature importance across dataset sample."""
+    try:
+        from app.core.ml.shap_explainer import compute_global_shap
+        return compute_global_shap(db, ML_CONFIG, max_samples=max_samples, model_type=model_type)
+    except ImportError as e:
+        return {"error": f"SHAP library not installed: {e}", "features": []}
+    except Exception as e:
+        return {"error": f"SHAP computation failed: {e}", "features": []}
+
+
+@router.get("/shap/symbol/{symbol}")
+async def get_symbol_shap(
+    symbol: str,
+    model_type: str = "single",
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """SHAP waterfall for a single symbol's latest prediction."""
+    try:
+        from app.core.ml.shap_explainer import compute_symbol_shap
+        result = compute_symbol_shap(db, symbol.upper(), ML_CONFIG, model_type=model_type)
+        return result
+    except ImportError as e:
+        return {"error": f"SHAP library not installed: {e}", "waterfall": []}
+    except Exception as e:
+        import traceback, logging
+        logging.getLogger(__name__).error(f"SHAP waterfall error: {traceback.format_exc()}")
+        return {"error": f"SHAP computation failed: {e}", "waterfall": []}
+
+
+# ---- #17  Signal-Level Backtest Engine -----------------------------------
+
+class SignalBacktestRequest(BaseModel):
+    symbol: str
+    model_type: str = "single"
+    horizon: int = 5
+    threshold_bullish: float = 0.55
+    threshold_bearish: float = 0.45
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+@router.post("/signal-backtest")
+async def run_signal_backtest_endpoint(
+    req: SignalBacktestRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Run signal-level backtest for a single symbol."""
+    from app.core.ml.signal_backtest import run_signal_backtest
+    try:
+        return run_signal_backtest(
+            db, req.symbol.upper(), ML_CONFIG,
+            model_type=req.model_type,
+            threshold_bullish=req.threshold_bullish,
+            threshold_bearish=req.threshold_bearish,
+            horizon=req.horizon,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Signal backtest failed: {e}")
+
+
+class MultiSignalBacktestRequest(BaseModel):
+    symbols: list[str]
+    model_type: str = "single"
+    horizon: int = 5
+
+
+@router.post("/signal-backtest/multi")
+async def run_multi_signal_backtest(
+    req: MultiSignalBacktestRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Run signal backtest across multiple symbols."""
+    from app.core.ml.signal_backtest import run_multi_symbol_signal_backtest
+    try:
+        return run_multi_symbol_signal_backtest(
+            db, [s.upper() for s in req.symbols[:20]], ML_CONFIG,
+            model_type=req.model_type, horizon=req.horizon,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Multi signal backtest failed: {e}")
+
+
+# ---- #18  News Sentiment in Signal Context --------------------------------
+
+@router.get("/signal-with-news/{symbol}")
+async def signal_with_news(
+    symbol: str,
+    model_type: str = "single",
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Get ML signal enriched with news sentiment scoring."""
+    from app.core.ml.news_sentiment import get_signal_with_news
+    try:
+        return get_signal_with_news(db, symbol.upper(), ML_CONFIG, model_type=model_type)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Signal+news failed: {e}")
+
+
+class NewsSentimentRequest(BaseModel):
+    headlines: list[str]
+
+
+@router.post("/news-sentiment/score")
+async def score_news_sentiment(req: NewsSentimentRequest) -> Dict[str, Any]:
+    """Score a list of news headlines for sentiment."""
+    from app.core.ml.news_sentiment import score_headlines, aggregate_sentiment
+    scored = score_headlines(req.headlines)
+    agg = aggregate_sentiment(scored)
+    return {"headlines": scored, "aggregate": agg}
+
+
+# ---- #19  Position Correlation Matrix ------------------------------------
+
+class CorrelationRequest(BaseModel):
+    symbols: list[str]
+    days: int = 90
+    method: str = "pearson"
+
+
+@router.post("/correlation/matrix")
+async def get_correlation_matrix(
+    req: CorrelationRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Compute pairwise correlation matrix from daily returns."""
+    from app.core.ml.correlation import compute_correlation_matrix
+    try:
+        return compute_correlation_matrix(
+            db, [s.upper() for s in req.symbols], days=req.days, method=req.method,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Correlation failed: {e}")
+
+
+class RollingCorrelationRequest(BaseModel):
+    symbol_a: str
+    symbol_b: str
+    days: int = 252
+    window: int = 30
+
+
+@router.post("/correlation/rolling")
+async def get_rolling_correlation(
+    req: RollingCorrelationRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Rolling correlation between two symbols over time."""
+    from app.core.ml.correlation import compute_rolling_correlation
+    try:
+        return compute_rolling_correlation(
+            db, req.symbol_a.upper(), req.symbol_b.upper(),
+            days=req.days, window=req.window,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Rolling correlation failed: {e}")
+
+
+class PortfolioRiskRequest(BaseModel):
+    positions: list[dict]
+    days: int = 90
+
+
+@router.post("/correlation/portfolio-risk")
+async def get_portfolio_risk(
+    req: PortfolioRiskRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Portfolio-level risk analysis (variance, VaR, component risk)."""
+    from app.core.ml.correlation import compute_portfolio_risk
+    try:
+        return compute_portfolio_risk(db, req.positions, days=req.days)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Portfolio risk failed: {e}")
+
+
+# ---- #20  Walk-Forward Optimization --------------------------------------
+
+class WalkForwardRequest(BaseModel):
+    model_name: str = "gbm"
+    min_train: int = 500
+    test_size: int = 100
+    step: int = 100
+    optimize: bool = False
+    optuna_trials: int = 15
+
+
+@router.post("/walk-forward")
+async def run_walk_forward_endpoint(
+    req: WalkForwardRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Run walk-forward cross-validation with optional Optuna tuning."""
+    from app.core.ml.walk_forward import run_walk_forward
+    try:
+        symbols = _get_nifty100_symbols(db)
+        if not symbols:
+            raise ValueError("No symbols with sufficient data")
+        return run_walk_forward(
+            db, symbols, ML_CONFIG,
+            min_train=req.min_train,
+            test_size=req.test_size,
+            step=req.step,
+            model_name=req.model_name,
+            optimize=req.optimize,
+            optuna_trials=req.optuna_trials,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Walk-forward failed: {e}")
+
+
+# ---- Background Job Endpoints (async backtest / walk-forward) -------------
+
+@router.post("/signal-backtest/async")
+async def start_signal_backtest_async(
+    req: SignalBacktestRequest,
+) -> Dict[str, Any]:
+    """Start signal backtest in a background thread. Returns job_id immediately."""
+    from app.core.ml.job_store import submit_job
+
+    def _run_backtest():
+        from app.core.ml.signal_backtest import run_signal_backtest
+        db = SessionLocal()
+        try:
+            return run_signal_backtest(
+                db, req.symbol.upper(), ML_CONFIG,
+                model_type=req.model_type,
+                threshold_bullish=req.threshold_bullish,
+                threshold_bearish=req.threshold_bearish,
+                horizon=req.horizon,
+                start_date=req.start_date,
+                end_date=req.end_date,
+            )
+        finally:
+            db.close()
+
+    params = {"symbol": req.symbol.upper(), "model_type": req.model_type, "horizon": req.horizon}
+    job_id = submit_job("signal-backtest", _run_backtest, params)
+    return {"job_id": job_id, "status": "pending", "job_type": "signal-backtest"}
+
+
+@router.post("/walk-forward/async")
+async def start_walk_forward_async(
+    req: WalkForwardRequest,
+) -> Dict[str, Any]:
+    """Start walk-forward in a background thread. Returns job_id immediately."""
+    from app.core.ml.job_store import submit_job
+
+    def _run_wf():
+        from app.core.ml.walk_forward import run_walk_forward
+        db = SessionLocal()
+        try:
+            symbols = _get_nifty100_symbols(db)
+            if not symbols:
+                raise ValueError("No symbols with sufficient data")
+            return run_walk_forward(
+                db, symbols, ML_CONFIG,
+                min_train=req.min_train,
+                test_size=req.test_size,
+                step=req.step,
+                model_name=req.model_name,
+                optimize=req.optimize,
+                optuna_trials=req.optuna_trials,
+            )
+        finally:
+            db.close()
+
+    params = {"model_name": req.model_name, "optimize": req.optimize}
+    job_id = submit_job("walk-forward", _run_wf, params)
+    return {"job_id": job_id, "status": "pending", "job_type": "walk-forward"}
+
+
+@router.get("/jobs/latest/{job_type}")
+async def get_latest_job(job_type: str) -> Dict[str, Any]:
+    """Get the latest completed/running job of a given type."""
+    from app.core.ml.job_store import get_latest_by_type
+    job = get_latest_by_type(job_type)
+    if job is None:
+        return {"status": "none", "job_type": job_type}
+    return job
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str) -> Dict[str, Any]:
+    """Check status of a background ML job."""
+    from app.core.ml.job_store import get_job
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job

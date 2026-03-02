@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, Plus, Trash2, Calendar } from 'lucide-react';
 import { strategyAPI, marketAPI } from '../lib/api';
+import { useToast } from './Toast';
 
 interface Leg {
   id?: string;
@@ -24,6 +25,7 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
   onSuccess,
   initialData,
 }) => {
+  const { showToast } = useToast();
   const [loading, setLoading] = useState(false);
   const defaultParameters = {
     risk_mode: 'CONSERVATIVE',
@@ -184,7 +186,7 @@ export const StrategyForm: React.FC<StrategyFormProps> = ({
       onClose();
     } catch (error) {
       console.error('Form submission failed:', error);
-      alert('Failed to save strategy');
+      showToast('error', 'Save Failed', 'Failed to save strategy');
     } finally {
       setLoading(false);
     }

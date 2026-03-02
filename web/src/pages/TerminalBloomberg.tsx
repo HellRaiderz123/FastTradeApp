@@ -18,7 +18,7 @@ import {
   Bell,
   List,
 } from 'lucide-react';
-import TechnicalChart from '../components/TechnicalChart';
+import CandleChart from '../components/CandleChart';
 import NewsFeed from '../components/NewsFeed';
 import ErrorBoundary from '../components/ErrorBoundary';
 import StockDetailModal from '../components/StockDetailModal';
@@ -74,9 +74,10 @@ const Terminal: React.FC = () => {
   
   // ML Predictions
   const [mlPredictions, setMlPredictions] = useState<Record<string, {
-    signal: string; confidence: number; bias: string; reason: string;
+    signal: string; confidence: number; bias: string; reason: string; model_type?: string;
   }>>({});
   const [mlModelStatus, setMlModelStatus] = useState<string>('unknown');
+  const [mlModelType, setMlModelType] = useState<string>('none');
   
   // Watchlist - Universe aware (top stocks by weight for real-time WS streaming)
   const universeWatchlist: Record<string, string[]> = {
@@ -134,36 +135,47 @@ const Terminal: React.FC = () => {
         // Market breadth
         const breadth = await marketDashboardAPI.getMarketBreadth(universe);
         setMarketBreadth(breadth);
+      } catch (error) {
+        console.error('❌ Failed to fetch core market data:', error);
+      }
 
-        // Swing opportunities
-        const opportunities = await swingScannerAPI.scan('all', 60, universe);
+      // Swing opportunities — isolated so failure doesn't block other fetches
+      try {
+        const opportunities = await swingScannerAPI.scan('all', 50, universe);
         setSwingOpportunities(opportunities.opportunities.slice(0, 5));
         setSwingDataSource(opportunities.data_source || 'unknown');
+      } catch (swingErr) {
+        console.warn('Swing scanner unavailable:', swingErr);
+        setSwingOpportunities([]);
+        setSwingDataSource('error');
+      }
 
-        // Today's calendar events (high-impact only)
+      // Today's calendar events (high-impact only)
+      try {
         const calendarData = await getTodayEvents();
         console.log('📅 Calendar API response:', calendarData);
         const highImpactEvents = calendarData.events.filter(e => e.impact === 'high').slice(0, 4);
         console.log('📅 High-impact events for today:', highImpactEvents);
         setTodayEvents(highImpactEvents);
+      } catch (calErr) {
+        console.warn('Calendar events unavailable:', calErr);
+      }
 
-        // ML predictions for watchlist symbols
-        try {
-          const mlMetrics = await mlAPI.getMetrics();
-          setMlModelStatus(mlMetrics.data?.model_status || 'not_trained');
-          
-          if (mlMetrics.data?.model_status === 'ready') {
-            const wlSymbols = universeWatchlist[universe] || [];
-            const mlRes = await mlAPI.predictBulk(wlSymbols);
-            if (mlRes.data?.predictions) {
-              setMlPredictions(mlRes.data.predictions);
-            }
+      // ML predictions for watchlist symbols
+      try {
+        const mlMetrics = await mlAPI.getMetrics();
+        setMlModelStatus(mlMetrics.data?.model_status || 'not_trained');
+        setMlModelType(mlMetrics.data?.model_type || 'none');
+        
+        if (mlMetrics.data?.model_status === 'ready') {
+          const wlSymbols = universeWatchlist[universe] || [];
+          const mlRes = await mlAPI.predictBulk(wlSymbols);
+          if (mlRes.data?.predictions) {
+            setMlPredictions(mlRes.data.predictions);
           }
-        } catch (mlErr) {
-          console.warn('ML predictions unavailable:', mlErr);
         }
-      } catch (error) {
-        console.error('❌ Failed to fetch market data:', error);
+      } catch (mlErr) {
+        console.warn('ML predictions unavailable:', mlErr);
       }
     };
 
@@ -231,6 +243,9 @@ const Terminal: React.FC = () => {
     setShowCommandPalette(false);
     setCommandInput('');
   };
+
+  const candleTimeframe: '1m' | '5m' | '15m' | '1h' | 'daily' =
+    timeframe === '1d' ? 'daily' : timeframe === '30m' ? '15m' : timeframe;
   
   // Get all available symbols for command palette
   const getAllSymbols = (): string[] => {
@@ -353,6 +368,7 @@ const Terminal: React.FC = () => {
             <select 
               value={universe}
               onChange={(e) => setUniverse(e.target.value)}
+              title="Universe"
               className="bg-slate-900/80 border border-slate-700/50 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:border-emerald-400/50 hover:border-slate-500/70 transition cursor-pointer"
             >
               <option value="NIFTY50">NIFTY 50 (50 stocks)</option>
@@ -497,13 +513,13 @@ const Terminal: React.FC = () => {
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                     : 'bg-red-500/20 text-red-300 border border-red-500/30'
                 }`}>
-                  ML: {mlPredictions[selectedSymbol].signal} ({mlPredictions[selectedSymbol].confidence}%)
+                  {(mlPredictions[selectedSymbol] as any).model_type === 'ensemble' ? '🧠 Ensemble' : '🤖 ML'}: {mlPredictions[selectedSymbol].signal} ({mlPredictions[selectedSymbol].confidence}%)
                 </span>
                 <span className="text-xs text-slate-500">{mlPredictions[selectedSymbol].reason}</span>
               </div>
             )}
             <ErrorBoundary>
-              <TechnicalChart symbol={selectedSymbol} timeframe={timeframe} height={630} />
+              <CandleChart symbol={selectedSymbol} defaultTimeframe={candleTimeframe} height={630} showTimeframeSelector={true} />
             </ErrorBoundary>
           </div>
 
@@ -531,6 +547,11 @@ const Terminal: React.FC = () => {
                   {swingDataSource.includes('live') && (
                     <span className="px-2 py-1 rounded text-xs font-semibold bg-green-500/20 text-green-300 border border-green-500/40">
                       LIVE
+                    </span>
+                  )}
+                  {swingDataSource.includes('real') && (
+                    <span className="px-2 py-1 rounded text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                      REAL DATA
                     </span>
                   )}
                   <Target size={18} className="text-orange-300" />
@@ -594,8 +615,20 @@ const Terminal: React.FC = () => {
                       </div>
                     </div>
                   ))
+                ) : swingDataSource === 'error' ? (
+                  <p className="text-xs text-red-400">Scanner unavailable — check backend connection</p>
                 ) : (
-                  <p className="text-xs text-slate-500">Loading opportunities...</p>
+                  <div className="space-y-3">
+                    {[1,2,3].map(i => (
+                      <div key={i} className="animate-pulse flex items-center justify-between bg-slate-900/60 border border-slate-700/40 rounded-xl px-4 py-3">
+                        <div className="space-y-2">
+                          <div className="h-3 w-20 bg-slate-700 rounded" />
+                          <div className="h-2 w-32 bg-slate-800 rounded" />
+                        </div>
+                        <div className="h-4 w-14 bg-slate-700 rounded" />
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -802,7 +835,7 @@ const Terminal: React.FC = () => {
                         <div className="flex items-center justify-between">
                           <div>
                             <div className="text-sm font-semibold text-white">{symbol}</div>
-                            <div className="text-xs text-slate-500">Loading...</div>
+                            <div className="text-xs text-slate-500 animate-pulse">Fetching quote…</div>
                           </div>
                           <div className="text-right">
                             <div className="h-5 bg-slate-700/50 rounded w-24 mb-1 animate-pulse"></div>
@@ -920,12 +953,20 @@ const Terminal: React.FC = () => {
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-400">ML Engine</p>
                   <h2 className="terminal-title text-xl text-white">AI Signals</h2>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className={`inline-block w-2 h-2 rounded-full ${
-                    mlModelStatus === 'ready' ? 'bg-emerald-400' :
-                    mlModelStatus === 'training' ? 'bg-yellow-400 animate-pulse' : 'bg-slate-500'
-                  }`} />
-                  <span className="text-xs text-slate-400 capitalize">{mlModelStatus === 'not_trained' ? 'Not Trained' : mlModelStatus}</span>
+                <div className="flex items-center gap-3">
+                  {mlModelType === 'ensemble' && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">ENSEMBLE</span>
+                  )}
+                  {mlModelType === 'single' && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">GBM</span>
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <span className={`inline-block w-2 h-2 rounded-full ${
+                      mlModelStatus === 'ready' ? 'bg-emerald-400' :
+                      mlModelStatus === 'training' ? 'bg-yellow-400 animate-pulse' : 'bg-slate-500'
+                    }`} />
+                    <span className="text-xs text-slate-400 capitalize">{mlModelStatus === 'not_trained' ? 'Not Trained' : mlModelStatus}</span>
+                  </div>
                 </div>
               </div>
 

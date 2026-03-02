@@ -14,8 +14,10 @@ import {
   ArrowDownRight,
   Eye,
   Zap,
+  Brain,
   TrendingUp as TrendIcon
 } from 'lucide-react';
+import { mlAPI } from '../lib/api';
 import TechnicalChart from './TechnicalChart';
 import HistoricalReturns from './HistoricalReturns';
 import PeerComparison from './PeerComparison';
@@ -76,6 +78,11 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
   const [technicals, setTechnicals] = useState<TechnicalAnalysis | null>(null);
   const [timeframeSuggestions, setTimeframeSuggestions] = useState<TimeframeSuggestion[]>([]);
   const [newsLoading, setNewsLoading] = useState(false);
+  const [mlSignal, setMlSignal] = useState<{
+    signal: string; confidence: number; bias: string; reason: string;
+    model_type?: string; indicators?: any;
+  } | null>(null);
+  const [mlLoading, setMlLoading] = useState(false);
 
   // Calculate sentiment summary from news articles
   const calculateNewsSentiment = () => {
@@ -107,7 +114,8 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
       await Promise.all([
         loadNews(),
         loadTechnicals(),
-        loadTimeframeSuggestions()
+        loadTimeframeSuggestions(),
+        loadMLSignal()
       ]);
     } catch (error) {
       console.error('Failed to load stock details:', error);
@@ -190,6 +198,21 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
         console.error('Error details:', error.message, error.stack);
       }
       setTechnicals(null);
+    }
+  };
+
+  const loadMLSignal = async () => {
+    setMlLoading(true);
+    try {
+      const res = await mlAPI.predict(symbol);
+      if (res.data && res.data.signal) {
+        setMlSignal(res.data);
+      }
+    } catch (err) {
+      console.warn('ML signal unavailable:', err);
+      setMlSignal(null);
+    } finally {
+      setMlLoading(false);
     }
   };
 
@@ -323,6 +346,85 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
                       <TechnicalChart symbol={symbol} timeframe="15m" height={450} />
                     </div>
                   </div>
+
+                  {/* ML Signal Card */}
+                  {mlSignal && mlSignal.signal !== 'NO_TRADE' && (
+                    <div className={`border rounded-xl p-5 ${
+                      mlSignal.signal === 'BULLISH'
+                        ? 'bg-emerald-500/10 border-emerald-500/30'
+                        : mlSignal.signal === 'BEARISH'
+                        ? 'bg-red-500/10 border-red-500/30'
+                        : 'bg-slate-800/50 border-slate-700/50'
+                    }`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                          <Brain size={16} className="text-purple-400" />
+                          ML Prediction
+                          {mlSignal.model_type && (
+                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                              mlSignal.model_type === 'ensemble'
+                                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                            }`}>
+                              {mlSignal.model_type === 'ensemble' ? 'ENSEMBLE' : 'GBM'}
+                            </span>
+                          )}
+                        </h3>
+                        <span className={`text-lg font-bold ${
+                          mlSignal.signal === 'BULLISH' ? 'text-emerald-400' :
+                          mlSignal.signal === 'BEARISH' ? 'text-red-400' : 'text-slate-400'
+                        }`}>
+                          {mlSignal.signal === 'BULLISH' ? '▲' : mlSignal.signal === 'BEARISH' ? '▼' : '─'} {mlSignal.signal}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <p className="text-slate-400 text-xs">Confidence</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="flex-1 h-2 rounded-full bg-slate-700 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${
+                                  mlSignal.confidence >= 70 ? 'bg-emerald-400' :
+                                  mlSignal.confidence >= 55 ? 'bg-yellow-400' : 'bg-slate-400'
+                                }`}
+                                style={{ width: `${mlSignal.confidence}%` }}
+                              />
+                            </div>
+                            <span className="text-white text-sm font-bold">{mlSignal.confidence}%</span>
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-slate-400 text-xs">Bias</p>
+                          <p className={`text-sm font-semibold mt-1 ${
+                            mlSignal.bias === 'BULLISH' ? 'text-emerald-400' :
+                            mlSignal.bias === 'BEARISH' ? 'text-red-400' : 'text-slate-400'
+                          }`}>{mlSignal.bias}</p>
+                        </div>
+                      </div>
+                      {mlSignal.reason && (
+                        <p className="text-slate-500 text-xs mt-3 border-t border-slate-700/50 pt-2">{mlSignal.reason}</p>
+                      )}
+                      {mlSignal.indicators?.ensemble_prob_up !== undefined && (
+                        <div className="mt-2 flex items-center gap-3 text-xs">
+                          <span className="text-slate-400">Prob(Up):</span>
+                          <span className="text-white font-mono">{(mlSignal.indicators.ensemble_prob_up * 100).toFixed(1)}%</span>
+                          {mlSignal.indicators.per_model && (
+                            <span className="text-slate-500">
+                              GBM {(mlSignal.indicators.per_model.gbm * 100).toFixed(0)}%
+                              {' · '}RF {(mlSignal.indicators.per_model.rf * 100).toFixed(0)}%
+                              {' · '}XGB {(mlSignal.indicators.per_model.xgb * 100).toFixed(0)}%
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {mlSignal.indicators?.ml_prob_up !== undefined && !mlSignal.indicators?.ensemble_prob_up && (
+                        <div className="mt-2 flex items-center gap-3 text-xs">
+                          <span className="text-slate-400">Prob(Up):</span>
+                          <span className="text-white font-mono">{(mlSignal.indicators.ml_prob_up * 100).toFixed(1)}%</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Quick Stats */}

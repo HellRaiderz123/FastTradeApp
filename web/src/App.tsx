@@ -21,6 +21,13 @@ import FinanceTracker from './pages/FinanceTracker';
 import Calendar from './pages/Calendar';
 import MLCenter from './pages/MLCenter';
 import AutoTrader from './pages/AutoTrader';
+import MultiTimeframe from './pages/MultiTimeframe';
+import BacktestComparison from './pages/BacktestComparison';
+import TradeCostTracker from './pages/TradeCostTracker';
+import CustomWatchlists from './pages/CustomWatchlists';
+import MLIntelligence from './pages/MLIntelligence';
+import { ToastProvider } from './components/Toast';
+import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 
 // Simple Error Boundary to avoid white screen and show errors
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }>{
@@ -67,10 +74,11 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <Router>
-        <Routes>
-          {/* Public route - no authentication required */}
-          <Route path="/login" element={<Login />} />
+      <ToastProvider>
+        <Router>
+          <Routes>
+            {/* Public route - no authentication required */}
+            <Route path="/login" element={<Login />} />
           
           {/* Protected routes - require authentication */}
           <Route path="*" element={
@@ -85,6 +93,9 @@ function App() {
                     onSystemToggle={setSystemEnabled}
                   />
                   
+                  {/* ML Signal Alert Monitor — runs in background */}
+                  <SignalAlertMonitor />
+
                   <main className="flex-1 overflow-auto p-6">
                     <Routes>
                       <Route path="/" element={<Terminal />} />
@@ -102,6 +113,11 @@ function App() {
                       <Route path="/finance" element={<FinanceTracker />} />
                       <Route path="/calendar" element={<Calendar />} />
                       <Route path="/auto-trader" element={<AutoTrader />} />
+                      <Route path="/multi-timeframe" element={<MultiTimeframe />} />
+                      <Route path="/backtest-comparison" element={<BacktestComparison />} />
+                      <Route path="/trade-costs" element={<TradeCostTracker />} />
+                      <Route path="/watchlists" element={<CustomWatchlists />} />
+                      <Route path="/ml-intelligence" element={<MLIntelligence />} />
                     </Routes>
                   </main>
                 </div>
@@ -110,6 +126,7 @@ function App() {
           } />
         </Routes>
       </Router>
+      </ToastProvider>
     </ErrorBoundary>
   );
 }

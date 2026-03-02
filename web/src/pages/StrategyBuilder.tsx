@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, X, Trash2, TrendingUp, Calendar } from 'lucide-react';
 import { strategyAPI, greeksAPI, marketAPI } from '../lib/api';
+import { useToast } from '../components/Toast';
 
 interface OptionLeg {
   id: string;
@@ -58,6 +59,7 @@ const STRIKE_STEPS: Record<string, number> = {
 };
 
 const StrategyBuilder: React.FC = () => {
+  const { showToast } = useToast();
   const [legs, setLegs] = useState<OptionLeg[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [underlying, setUnderlying] = useState<'NIFTY' | 'BANKNIFTY' | 'FINNIFTY'>('NIFTY');
@@ -785,7 +787,7 @@ const StrategyBuilder: React.FC = () => {
   // Save strategy
   const handleSave = async () => {
     if (!strategyName.trim()) {
-      alert('Please enter strategy name');
+      showToast('warning', 'Missing Name', 'Please enter a strategy name');
       return;
     }
 
@@ -836,7 +838,7 @@ const StrategyBuilder: React.FC = () => {
         // Update existing
         await strategyAPI.updateStrategy(strategyId, strategyData);
         setSaveStatus('success');
-        alert('Strategy updated successfully!');
+        showToast('success', 'Strategy Updated', 'Strategy updated successfully!');
       } else {
         // Create new
         const response = await strategyAPI.createStrategy(strategyData);
@@ -847,7 +849,7 @@ const StrategyBuilder: React.FC = () => {
           setStrategyId(created.id);
         }
         setSaveStatus('success');
-        alert('Strategy saved successfully!');
+        showToast('success', 'Strategy Saved', 'Strategy saved successfully!');
       }
 
       setShowSaveDialog(false);
@@ -856,7 +858,7 @@ const StrategyBuilder: React.FC = () => {
     } catch (error) {
       console.error('Failed to save strategy:', error);
       setSaveStatus('error');
-      alert('Failed to save strategy: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showToast('error', 'Save Failed', 'Failed to save: ' + (error instanceof Error ? error.message : 'Unknown error'));
       setTimeout(() => setSaveStatus('idle'), 2000);
     }
   };
@@ -869,7 +871,7 @@ const StrategyBuilder: React.FC = () => {
       setSavedStrategies(Array.isArray(strategies) ? strategies : []);
     } catch (error) {
       console.error('Failed to load strategies:', error);
-      alert('Failed to load strategies');
+      showToast('error', 'Load Failed', 'Failed to load strategies');
     } finally {
       setLoadingStrategies(false);
     }
@@ -918,10 +920,10 @@ const StrategyBuilder: React.FC = () => {
       }
       
       setShowLoadDialog(false);
-      alert(`Loaded strategy: ${strategy.name}`);
+      showToast('success', 'Loaded', `Loaded strategy: ${strategy.name}`);
     } catch (error) {
       console.error('Failed to load strategy:', error);
-      alert('Failed to load strategy');
+      showToast('error', 'Load Failed', 'Failed to load strategy');
     }
   };
 
@@ -932,11 +934,11 @@ const StrategyBuilder: React.FC = () => {
     
     try {
       await strategyAPI.deleteStrategy(strategyId);
-      alert('Strategy deleted successfully');
+      showToast('success', 'Deleted', 'Strategy deleted successfully');
       loadSavedStrategies(); // Refresh list
     } catch (error) {
       console.error('Failed to delete strategy:', error);
-      alert('Failed to delete strategy');
+      showToast('error', 'Delete Failed', 'Failed to delete strategy');
     }
   };
 

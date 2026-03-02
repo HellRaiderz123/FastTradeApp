@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Play, Pause, Trash2, Plus, RefreshCw, Zap, Edit2 } from 'lucide-react';
 import { strategyAPI, executionAPI, suggestionsAPI } from '../lib/api';
 import { StrategyForm } from './StrategyForm';
+import { useToast } from './Toast';
 
 interface Strategy {
   id: number;
@@ -49,6 +50,7 @@ interface Suggestion {
 }
 
 export const StrategyManager: React.FC = () => {
+  const { showToast } = useToast();
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(false);
   const [executing, setExecuting] = useState<number | null>(null);
@@ -141,12 +143,12 @@ export const StrategyManager: React.FC = () => {
       const response = await strategyAPI.createFromSuggestion(payload);
       
       if (response.data) {
-        alert(`✅ Strategy "${response.data.name}" created successfully! You can enable it from the strategies list below.`);
+        showToast('success', 'Strategy Created', `"${response.data.name}" created successfully! Enable it from the list below.`);
         await loadStrategies();
       }
     } catch (error: any) {
       console.error('Failed to create strategy from suggestion:', error);
-      alert(`❌ Failed to create strategy: ${error?.response?.data?.detail || error.message}`);
+      showToast('error', 'Creation Failed', error?.response?.data?.detail || error.message);
     }
   };
 
@@ -178,7 +180,7 @@ export const StrategyManager: React.FC = () => {
       const runId = runResult?.run_id;
       if (!runId) {
         setResults([runResult, ...results]);
-        alert('Strategy ran but no run_id returned');
+        showToast('warning', 'Partial Run', 'Strategy ran but no run_id returned');
         return;
       }
 
@@ -190,7 +192,7 @@ export const StrategyManager: React.FC = () => {
           { ...runResult, intent: intentData },
           ...results,
         ]);
-        alert('Intent creation failed (no intent_id)');
+        showToast('warning', 'Intent Failed', 'Intent creation failed (no intent_id)');
         return;
       }
 
@@ -206,10 +208,10 @@ export const StrategyManager: React.FC = () => {
         { ...runResult, intent_id: intentId, execution: execData },
         ...results,
       ]);
-      alert(`Executed (paper): ${runResult?.strategy_name || 'strategy'}`);
+      showToast('success', 'Executed', `Paper trade: ${runResult?.strategy_name || 'strategy'}`);
     } catch (error) {
       console.error('Execution failed:', error);
-      alert('Failed to execute strategy');
+      showToast('error', 'Execution Failed', 'Failed to execute strategy');
     } finally {
       setExecuting(null);
     }
@@ -217,7 +219,7 @@ export const StrategyManager: React.FC = () => {
 
   const handleExecuteMultiple = async () => {
     if (selectedStrategies.size === 0) {
-      alert('Please select at least one strategy');
+      showToast('warning', 'No Selection', 'Please select at least one strategy');
       return;
     }
 
@@ -231,13 +233,11 @@ export const StrategyManager: React.FC = () => {
         setResults([...response.data.results, ...results]);
       }
       
-      alert(
-        `Executed: ${response.data.completed}/${response.data.total} strategies`
-      );
+      showToast('success', 'Batch Executed', `${response.data.completed}/${response.data.total} strategies executed`);
       setSelectedStrategies(new Set());
     } catch (error) {
       console.error('Multi-execution failed:', error);
-      alert('Failed to execute strategies');
+      showToast('error', 'Batch Failed', 'Failed to execute strategies');
     } finally {
       setExecuting(null);
     }
@@ -252,12 +252,10 @@ export const StrategyManager: React.FC = () => {
         setResults([...response.data.results, ...results]);
       }
       
-      alert(
-        `Executed: ${response.data.completed}/${response.data.total} strategies`
-      );
+      showToast('success', 'All Executed', `${response.data.completed}/${response.data.total} strategies executed`);
     } catch (error) {
       console.error('Execute all failed:', error);
-      alert('Failed to execute all strategies');
+      showToast('error', 'Execute All Failed', 'Failed to execute all strategies');
     } finally {
       setExecuting(null);
     }

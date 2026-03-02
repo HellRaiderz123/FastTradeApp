@@ -171,6 +171,8 @@ export const journalAPI = {
     api.get(`/journal/spread-analysis?limit=${limit}`),
   getSignalDiagnostics: (params?: { limit?: number; lookback_days?: number; underlying?: string; strategy?: string }) =>
     api.get('/journal/signal-diagnostics', { params }),
+  deleteExecutionIntent: (intentId: string) =>
+    api.delete(`/journal/execution-intents/${intentId}`),
 };
 
 // Smart Position Suggestions API
@@ -292,6 +294,15 @@ export const alertsAPI = {
   deleteAlert: (id: number) => api.delete(`/alerts/${id}`),
   evaluateAlerts: (ticker?: string) =>
     api.post('/alerts/evaluate', {}, { params: ticker ? { ticker } : {} }),
+
+  // ML Signal Scanning
+  scanMLSignals: (payload: {
+    symbols: string[];
+    min_confidence?: number;
+    cooldown_minutes?: number;
+  }) => api.post('/alerts/scan-ml-signals', payload),
+  getMLSignalStatus: () => api.get('/alerts/ml-signal-status'),
+  clearMLCache: () => api.post('/alerts/clear-ml-cache', {}),
 };
 
 // Greeks Calculation APIs
@@ -401,6 +412,62 @@ export const mlAPI = {
   getTrainingHistory: () => api.get('/ml/training-history'),
   predict: (symbol: string) => api.get(`/ml/predict/${symbol}`),
   predictBulk: (symbols: string[]) => api.post('/ml/predict-bulk', { symbols }),
+
+  // --- Tier 3: ML Intelligence -------------------------------------------------
+  // #15 Ensemble
+  trainEnsemble: () => api.post('/ml/ensemble/train'),
+  getEnsembleInfo: () => api.get('/ml/ensemble/info'),
+  ensemblePredict: (symbol: string) => api.get(`/ml/ensemble/predict/${symbol}`),
+  ensemblePredictBulk: (symbols: string[]) => api.post('/ml/ensemble/predict-bulk', { symbols }),
+  ensembleCompare: (symbol: string) => api.get(`/ml/ensemble/compare/${symbol}`),
+
+  // #16 SHAP
+  getGlobalShap: (modelType: string = 'single', maxSamples: number = 300) =>
+    api.get(`/ml/shap/global?model_type=${modelType}&max_samples=${maxSamples}`),
+  getSymbolShap: (symbol: string, modelType: string = 'single') =>
+    api.get(`/ml/shap/symbol/${symbol}?model_type=${modelType}`),
+
+  // #17 Signal Backtest
+  runSignalBacktest: (params: {
+    symbol: string; model_type?: string; horizon?: number;
+    threshold_bullish?: number; threshold_bearish?: number;
+    start_date?: string; end_date?: string;
+  }) => api.post('/ml/signal-backtest', params),
+  runMultiSignalBacktest: (params: {
+    symbols: string[]; model_type?: string; horizon?: number;
+  }) => api.post('/ml/signal-backtest/multi', params),
+
+  // #18 News Sentiment
+  getSignalWithNews: (symbol: string, modelType: string = 'single') =>
+    api.get(`/ml/signal-with-news/${symbol}?model_type=${modelType}`),
+  scoreNewsSentiment: (headlines: string[]) =>
+    api.post('/ml/news-sentiment/score', { headlines }),
+
+  // #19 Correlation
+  getCorrelationMatrix: (params: { symbols: string[]; days?: number; method?: string }) =>
+    api.post('/ml/correlation/matrix', params),
+  getRollingCorrelation: (params: { symbol_a: string; symbol_b: string; days?: number; window?: number }) =>
+    api.post('/ml/correlation/rolling', params),
+  getPortfolioRisk: (params: { positions: { symbol: string; weight: number }[]; days?: number }) =>
+    api.post('/ml/correlation/portfolio-risk', params),
+
+  // #20 Walk-Forward
+  runWalkForward: (params: {
+    model_name?: string; min_train?: number; test_size?: number;
+    step?: number; optimize?: boolean; optuna_trials?: number;
+  }) => api.post('/ml/walk-forward', params),
+
+  // Async job endpoints (background backtest / walk-forward)
+  startBacktestAsync: (params: {
+    symbol: string; model_type?: string; horizon?: number;
+    threshold_bullish?: number; threshold_bearish?: number;
+  }) => api.post('/ml/signal-backtest/async', params),
+  startWalkForwardAsync: (params: {
+    model_name?: string; min_train?: number; test_size?: number;
+    step?: number; optimize?: boolean; optuna_trials?: number;
+  }) => api.post('/ml/walk-forward/async', params),
+  getJobStatus: (jobId: string) => api.get(`/ml/jobs/${jobId}`),
+  getLatestJob: (jobType: string) => api.get(`/ml/jobs/latest/${jobType}`),
 };
 
 // Finance APIs

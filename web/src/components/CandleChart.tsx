@@ -51,6 +51,7 @@ const CandleChart: React.FC<CandleChartProps> = ({
   showTimeframeSelector = true,
 }) => {
   const [timeframe, setTimeframe] = useState<Timeframe>(defaultTimeframe);
+  const [resolvedTimeframe, setResolvedTimeframe] = useState<Timeframe>(defaultTimeframe);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
@@ -63,14 +64,29 @@ const CandleChart: React.FC<CandleChartProps> = ({
       setError(null);
 
       try {
-        const response = await marketAPI.getCandlesDB(symbol, timeframe, 100);
-        const candles: CandleData[] = response.data;
+        const fallbackCandidates: Timeframe[] = [timeframe, '15m', 'daily'];
+        const uniqueCandidates = fallbackCandidates.filter((value, index) => fallbackCandidates.indexOf(value) === index);
+
+        let candles: CandleData[] = [];
+        let timeframeUsed: Timeframe = timeframe;
+
+        for (const candidate of uniqueCandidates) {
+          const response = await marketAPI.getCandlesDB(symbol, candidate, 100);
+          const candidateCandles: CandleData[] = Array.isArray(response.data) ? response.data : [];
+          if (candidateCandles.length > 0) {
+            candles = candidateCandles;
+            timeframeUsed = candidate;
+            break;
+          }
+        }
 
         if (!candles || candles.length === 0) {
           setError('No candle data available');
           setLoading(false);
           return;
         }
+
+        setResolvedTimeframe(timeframeUsed);
 
         // Reverse to show chronological order (oldest to newest)
         const reversedCandles = [...candles].reverse();
@@ -84,7 +100,7 @@ const CandleChart: React.FC<CandleChartProps> = ({
           
           const date = new Date(timestamp || Date.now());
           const timeStr =
-            timeframe === 'daily'
+            timeframeUsed === 'daily'
               ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
@@ -225,6 +241,9 @@ const CandleChart: React.FC<CandleChartProps> = ({
                   ₹{currentPrice.toFixed(2)}
                 </p>
               )}
+              {resolvedTimeframe !== timeframe && (
+                <p className="text-xs text-amber-400 mt-1">Showing {resolvedTimeframe} candles (requested {timeframe})</p>
+              )}
             </div>
           </div>
           
@@ -266,7 +285,7 @@ const CandleChart: React.FC<CandleChartProps> = ({
             <Tooltip content={<CustomTooltip />} />
 
             {/* Volume bars */}
-            <Bar yAxisId="volume" dataKey="volume" fill="#3B82F6" opacity={0.3} />
+            <Bar yAxisId="volume" dataKey="volume" fill="#3B82F6" opacity={0.6} />
 
             {/* Candlestick wicks (high-low lines) */}
             <Line

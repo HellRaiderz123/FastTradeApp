@@ -19,7 +19,10 @@ const QuotePanel: React.FC<QuotePanelProps> = ({ symbol, quote, onClick }) => {
           <Activity size={16} className="text-slate-400 animate-pulse" />
           <h3 className="text-sm font-semibold text-slate-300">{symbol}</h3>
         </div>
-        <p className="text-xs text-slate-500">Loading...</p>
+        <div className="space-y-2 animate-pulse">
+          <div className="h-5 bg-slate-800 rounded w-20"></div>
+          <div className="h-3 bg-slate-800 rounded w-14"></div>
+        </div>
       </div>
     );
   }

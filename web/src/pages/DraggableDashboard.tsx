@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import GridLayout from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import { Lock, Unlock, Save } from 'lucide-react';
+import { useToast } from '../components/Toast';
 import CandleChart from '../components/CandleChart';
 import { marketAPI } from '../lib/api';
 
 const DraggableDashboard: React.FC = () => {
+  const { showToast } = useToast();
   const [locked, setLocked] = useState(false);
   
   // Load layout from localStorage or use default
@@ -29,7 +31,7 @@ const DraggableDashboard: React.FC = () => {
   
   const saveLayout = () => {
     localStorage.setItem('dashboard_layout', JSON.stringify(layout));
-    alert('Layout saved!');
+    showToast('success', 'Layout Saved', 'Dashboard layout saved!');
   };
   
   const resetLayout = () => {

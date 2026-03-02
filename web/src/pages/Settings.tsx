@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Save, Bell, Lock, Eye, EyeOff, CheckCircle, XCircle, Send, Brain, Zap } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
 import { settingsAPI } from '../lib/api';
+import { useToast } from '../components/Toast';
 
 const DEFAULT_IV_LIMITS: Record<string, { min_atm_dist_pct: number; max_risk_pct_capital: number }> = {
   LOW: { min_atm_dist_pct: 0.5, max_risk_pct_capital: 4.0 },
@@ -10,6 +11,7 @@ const DEFAULT_IV_LIMITS: Record<string, { min_atm_dist_pct: number; max_risk_pct
 };
 
 const Settings: React.FC = () => {
+  const { showToast } = useToast();
   const { capital, setCapital } = useTradeStore();
   const [settings, setSettings] = useState({
     riskPerTrade: 2,
@@ -219,7 +221,7 @@ const Settings: React.FC = () => {
       setTimeout(() => setSaved(false), 2000);
     } catch (error: any) {
       console.error('Error saving settings:', error);
-      alert(error.response?.data?.detail || 'Error saving settings');
+      showToast('error', 'Save Error', error.response?.data?.detail || 'Error saving settings');
     } finally {
       setRiskSaving(false);
     }

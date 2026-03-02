@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, Download } from 'lucide-react';
+import { ChevronDown, Download, Trash2 } from 'lucide-react';
 import { journalAPI } from '../lib/api';
+import { useToast } from '../components/Toast';
 
 interface JournalEntry {
   id: number;
+  intent_id: string;
   strategy: string;
   underlying: string;
   created_at: string;
@@ -48,6 +50,7 @@ type PnLFilter = 'all' | 'profit' | 'loss';
 type ExecutionTypeFilter = 'all' | 'paper' | 'zerodha_dry' | 'zerodha_live';
 
 const Journal: React.FC = () => {
+  const { showToast } = useToast();
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [pnlFilter, setPnlFilter] = useState<PnLFilter>('all');
@@ -69,19 +72,31 @@ const Journal: React.FC = () => {
       const response = await journalAPI.getExecutionIntents(100);
       const data = Array.isArray(response.data) ? response.data : [];
       const mapped: JournalEntry[] = data.map((item: any) => {
-        const entryPrice = Number(item?.entry_credit ?? 0) || 0;
+        const entryCredit = Number(item?.entry_credit ?? 0) || 0;
         const pnl = Number(item?.pnl ?? 0) || 0;
-        const exitPrice = entryPrice ? entryPrice - pnl : null;
-        const pnlPercent = entryPrice !== 0 ? (pnl / entryPrice) * 100 : 0;
         const execution_result = item?.execution_result || {};
         const execution_mode = (execution_result && execution_result.mode) || 'UNKNOWN';
+        
+        // Calculate exit price properly from ticket legs if available
+        let exitPrice: number | null = null;
+        const isClosed = item?.closed_at != null;
+        
+        if (isClosed && entryCredit > 0) {
+          // For closed positions, calculate exit value from entry_credit + pnl
+          const exitValue = entryCredit + pnl;
+          exitPrice = exitValue;
+        }
+        
+        const pnlPercent = entryCredit !== 0 ? (pnl / entryCredit) * 100 : 0;
+        
         return {
-          id: item?.id ?? item?.intent_id ?? Math.random(),
+          id: item?.id ?? Math.random(),
+          intent_id: item?.intent_id ?? '',
           strategy: item?.strategy || 'Unknown',
           underlying: item?.underlying || '-',
           created_at: item?.created_at,
           closed_at: item?.closed_at,
-          entry_price: entryPrice,
+          entry_price: entryCredit,
           exit_price: exitPrice,
           pnl,
           pnl_percent: pnlPercent,
@@ -116,6 +131,22 @@ const Journal: React.FC = () => {
       setDiagnostics(null);
     } finally {
       setDiagnosticsLoading(false);
+    }
+  };
+
+  const handleDelete = async (intentId: string) => {
+    if (!confirm('Are you sure you want to delete this trade from the journal? This action cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      await journalAPI.deleteExecutionIntent(intentId);
+      // Remove from local state
+      setEntries(entries.filter(entry => entry.intent_id !== intentId));
+      showToast('success', 'Deleted', 'Trade deleted successfully');
+    } catch (error) {
+      console.error('Failed to delete trade:', error);
+      showToast('error', 'Delete Failed', 'Failed to delete trade. Please try again.');
     }
   };
 
@@ -427,7 +458,20 @@ const Journal: React.FC = () => {
 
         {/* Entries */}
         {loading ? (
-          <div className="text-center py-12 text-slate-400">Loading...</div>
+          <div className="space-y-3 py-4">
+            {[1,2,3].map(i => (
+              <div key={i} className="bg-slate-900 rounded-lg p-4 border border-slate-800 animate-pulse">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 bg-slate-800 rounded-lg"></div>
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 bg-slate-800 rounded w-1/3"></div>
+                    <div className="h-3 bg-slate-800 rounded w-1/2"></div>
+                  </div>
+                  <div className="w-20 h-6 bg-slate-800 rounded"></div>
+                </div>
+              </div>
+            ))}
+          </div>
         ) : filteredEntries.length === 0 ? (
           <div className="text-center py-12 text-slate-400">No trades yet</div>
         ) : (
@@ -438,6 +482,7 @@ const Journal: React.FC = () => {
                 entry={entry}
                 expanded={expandedId === entry.id}
                 onToggle={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+                onDelete={() => handleDelete(entry.intent_id)}
               />
             ))}
           </div>
@@ -483,6 +528,7 @@ interface JournalEntryRowProps {
   entry: JournalEntry;
   expanded: boolean;
   onToggle: () => void;
+  onDelete: () => void;
 }
 
 const getModeLabel = (mode?: string) => {
@@ -502,7 +548,7 @@ const getModeColor = (mode?: string) => {
   return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
 };
 
-const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onToggle }) => {
+const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onToggle, onDelete }) => {
   const isProfitable = entry.pnl >= 0;
 
   return (
@@ -540,6 +586,16 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
               {isProfitable ? '+' : ''}₹{Math.abs(entry.pnl).toLocaleString()}
             </p>
           </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="p-2 hover:bg-red-500/20 rounded-lg transition text-red-400 hover:text-red-300"
+            title="Delete this trade"
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
           <div className="w-6 h-6 text-slate-400">
             <ChevronDown className={`w-6 h-6 transition ${expanded ? 'rotate-180' : ''}`} />
           </div>

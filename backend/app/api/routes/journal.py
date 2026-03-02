@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
@@ -293,3 +293,36 @@ def signal_diagnostics(
         strategy=strategy,
     )
 
+
+@router.delete("/execution-intents/{intent_id}")
+def delete_execution_intent(
+    intent_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Delete an execution intent from the journal.
+    This permanently removes the trade record from the database.
+    """
+    intent = db.query(ExecutionIntent).filter(ExecutionIntent.intent_id == intent_id).first()
+    
+    if not intent:
+        raise HTTPException(status_code=404, detail="Execution intent not found")
+    
+    # Store info for response before deletion
+    deleted_info = {
+        "intent_id": intent.intent_id,
+        "strategy": intent.strategy,
+        "underlying": intent.underlying,
+        "deleted_at": now_ist().isoformat(),
+    }
+    
+    db.delete(intent)
+    db.commit()
+    
+    logger.info(f"🗑️ Deleted execution intent: {intent_id} ({intent.strategy} - {intent.underlying})")
+    
+    return {
+        "success": True,
+        "message": "Execution intent deleted successfully",
+        **deleted_info,
+    }

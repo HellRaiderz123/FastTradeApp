@@ -1,6 +1,7 @@
 """
 Alert Rules API
 Create, manage, and evaluate alert rules for price-based triggers.
+Includes ML signal scanning for automated buy/sell alerts.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 from datetime import datetime
+import logging
 
 from app.db.session import SessionLocal
 from app.db.models import AlertRule
@@ -19,10 +21,14 @@ from app.db.multi_asset_repo import (
     mark_alert_triggered,
 )
 from app.core.utils.time import now_ist
-from app.services.notifications import get_notification_service
+from app.services.notifications import get_notification_service, NotificationType, NotificationPriority
 from app.services.zerodha import KiteConnectService
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
+logger = logging.getLogger(__name__)
+
+# In-memory cache to avoid duplicate alerts within a time window
+_last_ml_alerts: Dict[str, Dict[str, Any]] = {}  # symbol -> {signal, confidence, timestamp}
 
 kite_service = KiteConnectService()
 
@@ -229,3 +235,133 @@ def evaluate_alerts(ticker: Optional[str] = None, db: Session = Depends(get_db))
             continue
 
     return {"success": True, "count": len(triggered), "triggered": triggered}
+
+
+# ============================
+# ML SIGNAL SCANNING
+# ============================
+
+class ScanMLSignalsRequest(BaseModel):
+    symbols: List[str] = Field(..., description="List of stock symbols to scan")
+    min_confidence: int = Field(60, ge=30, le=100, description="Minimum confidence to trigger alert")
+    cooldown_minutes: int = Field(15, ge=1, le=120, description="Minutes before re-alerting same symbol/signal")
+
+
+@router.post("/scan-ml-signals")
+def scan_ml_signals(request: ScanMLSignalsRequest, db: Session = Depends(get_db)):
+    """
+    Scan a list of symbols using ML predictions and return actionable BUY/SELL alerts.
+    Creates notifications for new signals that exceed the confidence threshold.
+    Uses an in-memory cooldown to avoid duplicate alerts.
+    """
+    from app.core.signals.ml_engine import ml_stock_signal
+
+    triggered_alerts = []
+    now = datetime.utcnow()
+
+    for symbol in request.symbols[:30]:  # Cap at 30 symbols
+        symbol = symbol.upper().strip()
+        if not symbol:
+            continue
+
+        try:
+            result = ml_stock_signal(db, symbol, timeframe="15m", use_ensemble=True)
+        except Exception as e:
+            logger.warning(f"ML scan failed for {symbol}: {e}")
+            continue
+
+        if not result or not isinstance(result, dict):
+            continue
+
+        signal = result.get("signal", "NO_TRADE")
+        confidence = result.get("confidence", 0)
+        bias = result.get("bias", "NEUTRAL")
+        reason = result.get("reason", "")
+        model_type = result.get("model_type", "unknown")
+        indicators = result.get("indicators", {})
+
+        # Only alert on actionable signals with sufficient confidence
+        if signal not in ("BULLISH", "BEARISH") or confidence < request.min_confidence:
+            continue
+
+        # Check cooldown – skip if same signal was alerted recently
+        cache_key = f"{symbol}:{signal}"
+        prev = _last_ml_alerts.get(cache_key)
+        if prev:
+            elapsed = (now - prev["timestamp"]).total_seconds() / 60.0
+            if elapsed < request.cooldown_minutes:
+                continue  # Still in cooldown
+
+        # New alert – update cache
+        _last_ml_alerts[cache_key] = {
+            "signal": signal,
+            "confidence": confidence,
+            "timestamp": now,
+        }
+
+        action = "BUY" if signal == "BULLISH" else "SELL"
+        emoji = "🟢" if signal == "BULLISH" else "🔴"
+
+        alert_data = {
+            "symbol": symbol,
+            "signal": signal,
+            "action": action,
+            "confidence": confidence,
+            "bias": bias,
+            "reason": reason,
+            "model_type": model_type,
+            "indicators": indicators,
+            "timestamp": now.isoformat(),
+        }
+
+        # Create in-app notification
+        try:
+            service = get_notification_service(db)
+            service._send_notification(
+                type=NotificationType.ALERT_TRIGGERED,
+                title=f"{emoji} {action} Signal – {symbol} ({confidence}%)",
+                message=(
+                    f"ML {model_type.upper()} model detected a {signal} signal for {symbol} "
+                    f"with {confidence}% confidence.\n"
+                    f"Bias: {bias}\n"
+                    f"Reason: {reason}"
+                ),
+                priority=NotificationPriority.HIGH if confidence >= 75 else NotificationPriority.MEDIUM,
+                metadata=alert_data,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to store notification for {symbol}: {e}")
+
+        triggered_alerts.append(alert_data)
+
+    return {
+        "success": True,
+        "count": len(triggered_alerts),
+        "alerts": triggered_alerts,
+        "scanned": min(len(request.symbols), 30),
+        "timestamp": now.isoformat(),
+    }
+
+
+@router.get("/ml-signal-status")
+def get_ml_signal_status():
+    """Return current state of the ML alert cache (for debugging/UI)"""
+    return {
+        "success": True,
+        "cached_alerts": {
+            k: {
+                "signal": v["signal"],
+                "confidence": v["confidence"],
+                "timestamp": v["timestamp"].isoformat(),
+            }
+            for k, v in _last_ml_alerts.items()
+        },
+        "count": len(_last_ml_alerts),
+    }
+
+
+@router.post("/clear-ml-cache")
+def clear_ml_signal_cache():
+    """Clear the ML alert cooldown cache"""
+    _last_ml_alerts.clear()
+    return {"success": True, "message": "ML signal cache cleared"}
