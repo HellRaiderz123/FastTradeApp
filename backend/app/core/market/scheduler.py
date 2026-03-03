@@ -72,9 +72,9 @@ def _get_daily_symbols() -> list[str]:
         # Insurance
         "SBILIFE", "HDFCLIFE", "ICICIPRULI",
         # IT
-        "WIPRO", "HCLTECH", "TECHM", "LTIM", "MPHASIS", "PERSISTENT",
+        "WIPRO", "HCLTECH", "TECHM", "LTM", "MPHASIS", "PERSISTENT",
         # Auto
-        "MARUTI", "TATAMOTORS", "BAJAJ-AUTO", "HEROMOTOCO", "EICHERMOT", "M&M",
+        "MARUTI", "TMPV", "BAJAJ-AUTO", "HEROMOTOCO", "EICHERMOT", "M&M",
         # FMCG
         "NESTLEIND", "BRITANNIA", "MARICO", "DABUR", "GODREJCP",
         "TATACONSUM", "COLPAL",
@@ -93,7 +93,7 @@ def _get_daily_symbols() -> list[str]:
         "TITAN", "ASIANPAINT", "PIDILITIND", "HAVELLS", "VOLTAS", "DMART", "TRENT",
         # Conglomerates & Others
         "ADANIENT", "ADANIPORTS", "GRASIM", "UPL",
-        "NAUKRI", "ZOMATO", "IRCTC", "JIOFIN", "PAYTM",
+        "NAUKRI", "ETERNAL", "IRCTC", "JIOFIN", "PAYTM",
         # Telecom & Media
         "IDEA",
     ]

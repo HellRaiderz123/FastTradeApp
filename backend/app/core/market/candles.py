@@ -73,6 +73,27 @@ def fetch_15m_candles(db: Session, symbol: str, days: int = 15):
     logger.info("Candles inserted: %d (skipped duplicates)", inserted)
 
 
+def _get_recent_close(db: Session, symbol: str) -> float | None:
+    """Get the most recent close price for a symbol to use as sanity baseline."""
+    row = (
+        db.query(CandleDaily.close)
+        .filter(CandleDaily.symbol == symbol)
+        .order_by(CandleDaily.date.desc())
+        .first()
+    )
+    return float(row[0]) if row else None
+
+
+def _is_price_sane(close: float, baseline: float | None, threshold: float = 0.50) -> bool:
+    """Reject candle if close deviates more than `threshold` (50%) from baseline.
+    This catches corrupted data like index values inserted into stock rows.
+    """
+    if baseline is None or baseline <= 0:
+        return True  # no baseline yet, accept
+    ratio = close / baseline
+    return (1 - threshold) <= ratio <= (1 + threshold)
+
+
 def fetch_daily_candles(db: Session, symbol: str, days: int = 400):
     """Fetch and store daily candles for a symbol."""
     symbol = symbol.upper().strip()
@@ -93,7 +114,12 @@ def fetch_daily_candles(db: Session, symbol: str, days: int = 400):
         interval="day",
     )
 
+    # Get baseline price for sanity checking (skip for index symbols)
+    is_index = symbol in INDEX_TOKENS
+    baseline_close = None if is_index else _get_recent_close(db, symbol)
+
     inserted = 0
+    skipped_sanity = 0
 
     for c in candles:
         ts = c["date"].date() if hasattr(c["date"], "date") else c["date"]
@@ -108,6 +134,15 @@ def fetch_daily_candles(db: Session, symbol: str, days: int = 400):
         if exists:
             continue
 
+        # Sanity check: reject if price deviates >50% from recent close
+        if not is_index and not _is_price_sane(c["close"], baseline_close):
+            logger.warning(
+                "REJECTED corrupt candle: %s %s close=%.2f vs baseline=%.2f",
+                symbol, ts, c["close"], baseline_close or 0,
+            )
+            skipped_sanity += 1
+            continue
+
         db.add(
             CandleDaily(
                 symbol=symbol,
@@ -120,10 +155,16 @@ def fetch_daily_candles(db: Session, symbol: str, days: int = 400):
             )
         )
         inserted += 1
+        # Update baseline for subsequent candles in this batch
+        baseline_close = c["close"]
 
     db.commit()
 
-    logger.info("Daily candles inserted: %d (skipped duplicates)", inserted)
+    if skipped_sanity:
+        logger.warning("Daily candles for %s: inserted=%d, rejected=%d (price sanity)",
+                       symbol, inserted, skipped_sanity)
+    else:
+        logger.info("Daily candles inserted: %d (skipped duplicates)", inserted)
 
 
 # ── Additional timeframe fetchers ──────────────────────────────────────────

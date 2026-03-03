@@ -25,7 +25,6 @@ import MultiTimeframe from './pages/MultiTimeframe';
 import BacktestComparison from './pages/BacktestComparison';
 import TradeCostTracker from './pages/TradeCostTracker';
 import CustomWatchlists from './pages/CustomWatchlists';
-import MLIntelligence from './pages/MLIntelligence';
 import CreateScanner from './pages/CreateScanner';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
@@ -118,7 +117,7 @@ function App() {
                       <Route path="/backtest-comparison" element={<BacktestComparison />} />
                       <Route path="/trade-costs" element={<TradeCostTracker />} />
                       <Route path="/watchlists" element={<CustomWatchlists />} />
-                      <Route path="/ml-intelligence" element={<MLIntelligence />} />
+                      <Route path="/ml-intelligence" element={<MLCenter />} />
                       <Route path="/create-scanner" element={<CreateScanner />} />
                     </Routes>
                   </main>

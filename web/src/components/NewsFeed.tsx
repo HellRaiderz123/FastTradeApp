@@ -131,6 +131,8 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
         return 'border-blue-500/50 bg-blue-500/10';
       case 'earnings':
         return 'border-purple-500/50 bg-purple-500/10';
+      case 'regulatory':
+        return 'border-yellow-500/50 bg-yellow-500/10';
       default:
         return 'border-gray-500/50 bg-gray-500/10';
     }

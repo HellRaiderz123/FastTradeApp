@@ -22,7 +22,7 @@ INDEX_TOKENS = {
 
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=4)
 def _load_live_instruments(exchange: str = "NFO") -> pd.DataFrame:
     """Load instruments from Zerodha API (live)."""
     try:

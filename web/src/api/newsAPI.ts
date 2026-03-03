@@ -41,10 +41,12 @@ export interface TrendingTopicsResponse {
 }
 
 export interface MarketAlert {
-  type: 'breaking' | 'volatility' | 'technical' | 'earnings';
+  type: 'breaking' | 'volatility' | 'technical' | 'earnings' | 'regulatory';
   message: string;
   timestamp: string;
   priority: 'high' | 'medium' | 'low';
+  source?: string;
+  link?: string;
 }
 
 export interface MarketAlertsResponse {

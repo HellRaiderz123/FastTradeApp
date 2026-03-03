@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock, GitCompare, DollarSign, Star, Sparkles, Filter } from 'lucide-react';
+import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock, GitCompare, DollarSign, Star, Filter } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
 
 interface SidebarProps {
@@ -45,7 +45,6 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     { path: '/options', icon: Target, label: 'Options Chain' },
     { path: '/calendar', icon: Calendar, label: 'Calendar' },
     { path: '/ml', icon: Brain, label: 'ML Center' },
-    { path: '/ml-intelligence', icon: Sparkles, label: 'ML Intelligence' },
     { path: '/strategies', icon: Zap, label: 'Strategies' },
     { path: '/create-scanner', icon: Filter, label: 'Create Scanner' },
     { path: '/backtest', icon: LineChart, label: 'Backtest' },

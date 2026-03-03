@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   BarChart3, 
   RefreshCw, 
@@ -9,14 +9,41 @@ import {
   TrendingUp,
   Activity,
   Gauge,
-  Calendar,
   Zap,
   Save,
   Database,
-  Download
+  Download,
+  Brain,
+  Layers,
+  Target,
+  Newspaper,
+  Grid,
+  GitBranch,
 } from 'lucide-react';
 import { settingsAPI, mlAPI } from '../lib/api';
+import {
+  EnsembleTab,
+  ShapTab,
+  SignalBacktestTab,
+  NewsSentimentTab,
+  CorrelationTab,
+  WalkForwardTab,
+} from './MLIntelligence';
 
+// ========================= TAB DEFINITIONS ==============================
+type Tab = 'overview' | 'ensemble' | 'shap' | 'signal-backtest' | 'news-sentiment' | 'correlation' | 'walk-forward';
+
+const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+  { id: 'overview', label: 'Overview', icon: Brain },
+  { id: 'ensemble', label: 'Ensemble', icon: Layers },
+  { id: 'shap', label: 'Feature Importance', icon: BarChart3 },
+  { id: 'signal-backtest', label: 'Signal Backtest', icon: Target },
+  { id: 'news-sentiment', label: 'News Sentiment', icon: Newspaper },
+  { id: 'correlation', label: 'Correlation', icon: Grid },
+  { id: 'walk-forward', label: 'Walk-Forward', icon: GitBranch },
+];
+
+// ========================= INTERFACES ===================================
 interface MLMetrics {
   accuracy: number | null;
   precision: number | null;
@@ -35,7 +62,60 @@ interface MLSettings {
   retraining_frequency: string;
 }
 
+// ========================= MAIN COMPONENT ================================
 const MLCenter: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<Tab>('overview');
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+            <Brain className="w-8 h-8 text-purple-400" />
+            ML Center
+          </h1>
+          <p className="text-slate-400 mt-1">Train, monitor, and analyze your machine learning models</p>
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex gap-1 bg-slate-900 p-1 rounded-xl overflow-x-auto">
+        {TABS.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-purple-600 text-white'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tab content */}
+      <div>
+        {activeTab === 'overview' && <OverviewTab />}
+        {activeTab === 'ensemble' && <EnsembleTab />}
+        {activeTab === 'shap' && <ShapTab />}
+        {activeTab === 'signal-backtest' && <SignalBacktestTab />}
+        {activeTab === 'news-sentiment' && <NewsSentimentTab />}
+        {activeTab === 'correlation' && <CorrelationTab />}
+        {activeTab === 'walk-forward' && <WalkForwardTab />}
+      </div>
+    </div>
+  );
+};
+
+// ========================= OVERVIEW TAB ==================================
+const OverviewTab: React.FC = () => {
   const [metrics, setMetrics] = useState<MLMetrics>({
     accuracy: null,
     precision: null,
@@ -82,7 +162,7 @@ const MLCenter: React.FC = () => {
     loadDataSummary();
     const interval = setInterval(() => {
       loadMLMetrics();
-    }, 30000); // Refresh every 30 seconds
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -97,7 +177,7 @@ const MLCenter: React.FC = () => {
           setBackfillStatus(data);
           if (!data.running) {
             setIsBackfilling(false);
-            loadDataSummary(); // Refresh data summary when done
+            loadDataSummary();
           }
         }
       } catch (e) {
@@ -182,7 +262,6 @@ const MLCenter: React.FC = () => {
       });
     } catch (error) {
       console.error('Error loading ML settings:', error);
-      // Load from localStorage as fallback
       const stored = localStorage.getItem('ml_settings');
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -193,12 +272,8 @@ const MLCenter: React.FC = () => {
 
   const saveMLSettings = async () => {
     try {
-      // Save to localStorage
       localStorage.setItem('ml_settings', JSON.stringify(settings));
-      
-      // Save to backend
       await settingsAPI.saveMLSettings(settings);
-      
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (error) {
@@ -228,48 +303,34 @@ const MLCenter: React.FC = () => {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'ready':
-        return 'text-green-400';
-      case 'training':
-        return 'text-yellow-400';
-      case 'error':
-        return 'text-red-400';
-      default:
-        return 'text-slate-400';
+      case 'ready': return 'text-green-400';
+      case 'training': return 'text-yellow-400';
+      case 'error': return 'text-red-400';
+      default: return 'text-slate-400';
     }
   };
 
   const getStatusBg = (status: string) => {
     switch (status) {
-      case 'ready':
-        return 'bg-green-500/10 border border-green-500/30';
-      case 'training':
-        return 'bg-yellow-500/10 border border-yellow-500/30';
-      case 'error':
-        return 'bg-red-500/10 border border-red-500/30';
-      default:
-        return 'bg-slate-500/10 border border-slate-500/30';
+      case 'ready': return 'bg-green-500/10 border border-green-500/30';
+      case 'training': return 'bg-yellow-500/10 border border-yellow-500/30';
+      case 'error': return 'bg-red-500/10 border border-red-500/30';
+      default: return 'bg-slate-500/10 border border-slate-500/30';
     }
   };
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-white mb-2">ML Model Center</h1>
-          <p className="text-slate-400">Monitor and control your machine learning models</p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            onClick={loadMLMetrics}
-            disabled={refreshing}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh Metrics
-          </button>
-        </div>
+    <div className="space-y-6">
+      {/* Refresh button */}
+      <div className="flex justify-end">
+        <button
+          onClick={loadMLMetrics}
+          disabled={refreshing}
+          className="btn-secondary flex items-center gap-2"
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          Refresh Metrics
+        </button>
       </div>
 
       {/* Success Message */}
@@ -288,6 +349,7 @@ const MLCenter: React.FC = () => {
         </div>
       )}
 
+      {/* Status + Metrics cards */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Model Status */}
         <div className={`card-glass p-6 rounded-xl ${getStatusBg(metrics.model_status)}`}>
@@ -621,6 +683,10 @@ const MLCenter: React.FC = () => {
           <li className="flex gap-2">
             <span className="text-cyan-400 font-bold">•</span>
             <span>Target: Accuracy 60%+, F1 55%+ — realistic for swing trading signal classification</span>
+          </li>
+          <li className="flex gap-2">
+            <span className="text-purple-400 font-bold">•</span>
+            <span>Use the Ensemble, SHAP, Walk-Forward tabs above for advanced analysis</span>
           </li>
         </ul>
       </div>

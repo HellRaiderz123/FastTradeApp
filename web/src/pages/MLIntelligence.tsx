@@ -76,21 +76,21 @@ const MLIntelligence: React.FC = () => {
 };
 
 // ========================= SHARED =================================
-const Card: React.FC<{ title: string; children: React.ReactNode; className?: string }> = ({ title, children, className = '' }) => (
+export const Card: React.FC<{ title: string; children: React.ReactNode; className?: string }> = ({ title, children, className = '' }) => (
   <div className={`bg-slate-900 border border-slate-800 rounded-xl p-5 ${className}`}>
     <h3 className="text-white font-semibold mb-4">{title}</h3>
     {children}
   </div>
 );
 
-const Metric: React.FC<{ label: string; value: string | number; color?: string }> = ({ label, value, color = 'text-white' }) => (
+export const Metric: React.FC<{ label: string; value: string | number; color?: string }> = ({ label, value, color = 'text-white' }) => (
   <div className="bg-slate-800 rounded-lg p-3">
     <p className="text-slate-400 text-xs mb-1">{label}</p>
     <p className={`text-lg font-bold ${color}`}>{value}</p>
   </div>
 );
 
-const LoadingSpinner: React.FC<{ text?: string }> = ({ text = 'Loading…' }) => (
+export const LoadingSpinner: React.FC<{ text?: string }> = ({ text = 'Loading…' }) => (
   <div className="flex flex-col items-center justify-center py-16 gap-3">
     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500" />
     <p className="text-slate-400 text-sm">{text}</p>
@@ -98,7 +98,7 @@ const LoadingSpinner: React.FC<{ text?: string }> = ({ text = 'Loading…' }) =>
 );
 
 // ========================= #15  ENSEMBLE TAB =============================
-const EnsembleTab: React.FC = () => {
+export const EnsembleTab: React.FC = () => {
   const { showToast } = useToast();
   const [info, setInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -228,7 +228,7 @@ const EnsembleTab: React.FC = () => {
 };
 
 // ========================= #16  SHAP TAB ==================================
-const ShapTab: React.FC = () => {
+export const ShapTab: React.FC = () => {
   const [globalData, setGlobalData] = useState<any>(null);
   const [symbolShap, setSymbolShap] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -346,7 +346,7 @@ const ShapTab: React.FC = () => {
 const _resultCache: Record<string, any> = {};
 
 // Polling hook — polls a job until completed/failed, restores latest on mount
-function useAsyncJob(jobType: string) {
+export function useAsyncJob(jobType: string) {
   const [result, setResult] = useState<any>(_resultCache[jobType] || null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'pending' | 'running' | 'completed' | 'failed'>('idle');
@@ -419,7 +419,7 @@ function useAsyncJob(jobType: string) {
 }
 
 // ========================= #17  SIGNAL BACKTEST TAB =======================
-const SignalBacktestTab: React.FC = () => {
+export const SignalBacktestTab: React.FC = () => {
   const { result, status, error, isRunning, start } = useAsyncJob('signal-backtest');
   const [symbol, setSymbol] = useState('RELIANCE');
   const [horizon, setHorizon] = useState(5);
@@ -560,7 +560,7 @@ const SignalBacktestTab: React.FC = () => {
 };
 
 // ========================= #18  NEWS SENTIMENT TAB ========================
-const NewsSentimentTab: React.FC = () => {
+export const NewsSentimentTab: React.FC = () => {
   const [symbol, setSymbol] = useState('RELIANCE');
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -666,7 +666,7 @@ const NewsSentimentTab: React.FC = () => {
 };
 
 // ========================= #19  CORRELATION TAB ===========================
-const CorrelationTab: React.FC = () => {
+export const CorrelationTab: React.FC = () => {
   const [symbols, setSymbols] = useState('RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK');
   const [days, setDays] = useState(90);
   const [result, setResult] = useState<any>(null);
@@ -814,7 +814,7 @@ const CorrelationTab: React.FC = () => {
 };
 
 // ========================= #20  WALK-FORWARD TAB ==========================
-const WalkForwardTab: React.FC = () => {
+export const WalkForwardTab: React.FC = () => {
   const { result, status, error, isRunning, start } = useAsyncJob('walk-forward');
   const [modelName, setModelName] = useState('gbm');
   const [optimize, setOptimize] = useState(false);

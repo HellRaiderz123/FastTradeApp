@@ -13,6 +13,7 @@ import ChartPanel from '../components/ChartPanel';
 import QuotePanel from '../components/QuotePanel';
 import { useRealtimeQuotes } from '../hooks/useRealtimeQuotes';
 import { marketAPI } from '../lib/api';
+import { getNewsFeed, NewsItem } from '../api/newsAPI';
 
 interface SectorData {
   name: string;
@@ -20,11 +21,18 @@ interface SectorData {
   trending: 'up' | 'down' | 'neutral';
 }
 
+interface HeadlineItem {
+  title: string;
+  source: string;
+  time: string;
+}
+
 const Terminal: React.FC = () => {
   const [selectedSymbol, setSelectedSymbol] = useState('RELIANCE');
   const [searchInput, setSearchInput] = useState('');
   const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '30m' | '1h' | '1d'>('15m');
   const [sectors, setSectors] = useState<SectorData[]>([]);
+  const [headlines, setHeadlines] = useState<HeadlineItem[]>([]);
 
   // Watchlist stocks
   const watchlistSymbols = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK'];
@@ -49,20 +57,44 @@ const Terminal: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Mock signals (will be replaced with real signal generation in Phase 3)
+  // Fetch real news headlines from RSS feeds
+  useEffect(() => {
+    const fetchHeadlines = async () => {
+      try {
+        const response = await getNewsFeed(4);
+        const items: HeadlineItem[] = response.news.map((item: NewsItem) => {
+          const published = new Date(item.published);
+          const now = new Date();
+          const diffMin = Math.floor((now.getTime() - published.getTime()) / 60000);
+          let time: string;
+          if (diffMin < 1) time = 'Just now';
+          else if (diffMin < 60) time = `${diffMin}m ago`;
+          else if (diffMin < 1440) time = `${Math.floor(diffMin / 60)}h ago`;
+          else time = `${Math.floor(diffMin / 1440)}d ago`;
+
+          return {
+            title: item.title,
+            source: item.source || 'RSS',
+            time,
+          };
+        });
+        setHeadlines(items);
+      } catch (error) {
+        console.error('Failed to fetch headlines:', error);
+      }
+    };
+
+    fetchHeadlines();
+    const interval = setInterval(fetchHeadlines, 120000); // Refresh every 2 min
+    return () => clearInterval(interval);
+  }, []);
+
+  // Strategy signals
   const signals = [
     { label: 'Momentum', status: 'BUY', score: 78 },
     { label: 'Mean Reversion', status: 'HOLD', score: 54 },
     { label: 'Trend', status: 'BUY', score: 81 },
     { label: 'IV Regime', status: 'HIGH', score: 62 },
-  ];
-
-  // Mock news headlines (will be replaced with real news feed in Phase 3)
-  const headlines = [
-    { title: 'RBI policy watch: rate commentary shifts to neutral', source: 'MacroPulse', time: '2m ago' },
-    { title: 'Reliance retail sales beat street estimates', source: 'StreetEdge', time: '14m ago' },
-    { title: 'NIFTY IT leads as rupee weakens', source: 'MarketWire', time: '22m ago' },
-    { title: 'Banking stocks pause after strong rally', source: 'DealDesk', time: '35m ago' },
   ];
 
   const handleSymbolSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -255,16 +287,20 @@ const Terminal: React.FC = () => {
             </div>
 
             <div className="space-y-4">
-              {headlines.map((item, idx) => (
-                <div key={idx} className="border-b border-slate-800/60 pb-3 last:border-0">
-                  <p className="text-sm text-slate-200 leading-relaxed">{item.title}</p>
-                  <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                    <span>{item.source}</span>
-                    <span>•</span>
-                    <span>{item.time}</span>
+              {headlines.length > 0 ? (
+                headlines.map((item, idx) => (
+                  <div key={idx} className="border-b border-slate-800/60 pb-3 last:border-0">
+                    <p className="text-sm text-slate-200 leading-relaxed">{item.title}</p>
+                    <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                      <span>{item.source}</span>
+                      <span>•</span>
+                      <span>{item.time}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              ) : (
+                <p className="text-xs text-slate-500">Loading headlines...</p>
+              )}
             </div>
           </div>
         </div>
