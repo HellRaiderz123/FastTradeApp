@@ -57,11 +57,13 @@ from app.api.routes import auto_trader as auto_trader_routes
 from app.api.routes import auth
 from app.api.routes import trade_costs
 from app.api.routes import watchlists
+from app.api.routes import condition_scanner
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
     start_candle_scheduler,
     start_daily_candles_scheduler,
+    start_intraday_candles_scheduler,
     start_vix_scheduler,
     start_auto_exit_scheduler,
     start_expiry_exit_scheduler,
@@ -118,6 +120,7 @@ async def lifespan(app: FastAPI):
         start_vix_scheduler(delay_minutes=vix_backfill_delay)
         start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
         start_expiry_exit_scheduler()  # Auto-exit options near expiry
+        start_intraday_candles_scheduler(delay_minutes=3)  # 5m + 1h candles
         logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
@@ -137,6 +140,13 @@ async def lifespan(app: FastAPI):
         _db.close()
     except Exception as e:
         logger.warning(f"⚠️ Auto-trader resume failed: {e}")
+
+    # Resume condition-scanner scheduler if any strategies have auto_scan_enabled
+    try:
+        from app.core.condition_scanner_scheduler import resume_scanner_on_startup
+        resume_scanner_on_startup()
+    except Exception as e:
+        logger.warning(f"⚠️ Condition scanner resume failed: {e}")
     
     # Start WebSocket background tasks
     # FIX: Initialize to None before try block — prevents NameError on shutdown
@@ -290,5 +300,6 @@ app.include_router(position_suggestions.router)
 app.include_router(auto_trader_routes.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(trade_costs.router)
 app.include_router(watchlists.router)
+app.include_router(condition_scanner.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

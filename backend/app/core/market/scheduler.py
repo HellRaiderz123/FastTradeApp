@@ -2,7 +2,7 @@ import logging
 import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.db.session import SessionLocal
-from app.core.market.candles import fetch_15m_candles, fetch_daily_candles
+from app.core.market.candles import fetch_15m_candles, fetch_daily_candles, fetch_5m_candles, fetch_1h_candles
 from app.core.market.zerodha_historic_fetcher import (
     fetch_and_store_daily_vix,
     initialize_vix_historic_data,
@@ -132,6 +132,42 @@ def _auto_exit_check():
             logger.info(f"🚪 Auto-exited {len(exited)} position(s): {exited}")
     except Exception:
         logger.exception("❌ Auto-exit check failed")
+    finally:
+        db.close()
+
+
+def _update_5m_candles():
+    """Update 5-minute candles for intraday strategies."""
+    logger.info("⏱️ Running 5m candle update")
+    db = SessionLocal()
+    try:
+        symbols = _get_daily_symbols()[:30]  # Top 30 liquid stocks
+        for sym in ["NIFTY", "BANKNIFTY", "FINNIFTY"] + symbols:
+            try:
+                fetch_5m_candles(db, sym, days=30)
+            except Exception as e:
+                logger.warning(f"⚠️ Skip 5m {sym}: {e}")
+        logger.info("✅ 5m candles updated")
+    except Exception:
+        logger.exception("❌ 5m candle update failed")
+    finally:
+        db.close()
+
+
+def _update_1h_candles():
+    """Update 1-hour candles for swing/intraday strategies."""
+    logger.info("⏱️ Running 1h candle update")
+    db = SessionLocal()
+    try:
+        symbols = _get_daily_symbols()
+        for sym in ["NIFTY", "BANKNIFTY", "FINNIFTY"] + symbols:
+            try:
+                fetch_1h_candles(db, sym, days=60)
+            except Exception as e:
+                logger.warning(f"⚠️ Skip 1h {sym}: {e}")
+        logger.info("✅ 1h candles updated")
+    except Exception:
+        logger.exception("❌ 1h candle update failed")
     finally:
         db.close()
 
@@ -349,6 +385,64 @@ def start_ml_training_scheduler():
     )
     
     logger.info("🟢 ML training scheduler started (Sundays at 4 AM IST)")
+
+
+def start_intraday_candles_scheduler(delay_minutes: int = 3):
+    """Start 5m and 1h candle update schedulers.
+    - 5m candles: every 10 minutes during market hours (top 30 stocks + indices)
+    - 1h candles: every hour during market hours (all NIFTY100 + indices)
+    """
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start intraday candles scheduler: main scheduler not running")
+        return
+
+    # 5-minute candles: fetch every 10 minutes during market hours
+    scheduler.add_job(
+        func=_update_5m_candles,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",
+        minute="*/10",
+        id="candle_5m_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # 1-hour candles: fetch every hour during market hours
+    scheduler.add_job(
+        func=_update_1h_candles,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",
+        minute=5,  # 5 minutes past each hour
+        id="candle_1h_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Initial backfill after delay
+    if delay_minutes > 0:
+        from datetime import datetime, timedelta
+        run_5m = datetime.now() + timedelta(minutes=delay_minutes)
+        run_1h = datetime.now() + timedelta(minutes=delay_minutes + 1)
+        scheduler.add_job(
+            func=_update_5m_candles,
+            trigger="date",
+            run_date=run_5m,
+            id="candle_5m_initial_run",
+            replace_existing=True,
+        )
+        scheduler.add_job(
+            func=_update_1h_candles,
+            trigger="date",
+            run_date=run_1h,
+            id="candle_1h_initial_run",
+            replace_existing=True,
+        )
+
+    logger.info("🟢 Intraday candles scheduler started (5m: every 10min, 1h: every hour)")
 
 
 def stop_scheduler():
