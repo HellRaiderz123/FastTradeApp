@@ -40,6 +40,7 @@ from app.core.position_advisor import advise_position, STRATEGY_BIAS
 from app.core.risk.tp_sl_calculator import (
     calculate_tp_sl_from_ticket,
     get_risk_percentage_from_mode,
+    get_risk_percentage_from_settings,
 )
 from app.core.execution.paper import PaperExecutionAdapter
 from app.core.execution.zerodha import ZerodhaExecutionAdapter
@@ -351,7 +352,14 @@ def _auto_enter_position(
     """Create an ExecutionIntent and immediately execute it."""
 
     # Calculate TP/SL
-    risk_pct = get_risk_percentage_from_mode(cfg.risk_mode or "BALANCED")
+    # 💡 Priority: Use database setting (Settings UI) over hardcoded profiles
+    # This respects the "Risk Per Trade (%)" setting configured by the user
+    try:
+        risk_pct = get_risk_percentage_from_settings(db)
+    except Exception:
+        # Fallback to config risk_mode if DB unavailable
+        risk_pct = get_risk_percentage_from_mode(cfg.risk_mode or "BALANCED")
+    
     tp_sl = calculate_tp_sl_from_ticket(
         ticket=ticket,
         capital=cfg.capital or 100000,

@@ -13,6 +13,7 @@ from app.core.risk.system_guard import is_trading_enabled
 from app.core.risk.tp_sl_calculator import (
     calculate_tp_sl_from_ticket,
     get_risk_percentage_from_mode,
+    get_risk_percentage_from_settings,
 )
 from app.core.risk.risk_limits_config import get_risk_limits
 from app.core.broker.zerodha.client import get_kite_client
@@ -54,7 +55,7 @@ def update_tp_sl(
 def create_intent(
     run_id: int,
     capital: Optional[float] = None,
-    risk_mode: str = "BALANCED",
+    risk_mode: Optional[str] = None,
     risk_profile: Optional[str] = None,  # Can override with 'conservative', 'balanced', 'aggressive'
     db: Session = Depends(get_db)
 ):
@@ -64,7 +65,8 @@ def create_intent(
     Args:
         run_id: Strategy run ID
         capital: Available capital for this trade (if None, fetches from Zerodha)
-        risk_mode: Risk mode for TP/SL calculation (CONSERVATIVE/BALANCED/AGGRESSIVE)
+        risk_mode: Risk mode for TP/SL calculation (CONSERVATIVE/BALANCED/AGGRESSIVE).
+                   If not provided, uses risk percentage from Settings
         risk_profile: Risk profile for trade limits (conservative/balanced/aggressive)
         db: Database session
     """
@@ -113,8 +115,14 @@ def create_intent(
             detail=f"Daily trade limit of {risk_config.max_trades_per_day} reached",
         )
 
-    # Calculate dynamic TP/SL based on capital and risk mode
-    risk_pct = get_risk_percentage_from_mode(risk_mode)
+    # 💡 Calculate dynamic TP/SL: Use database setting if risk_mode not explicitly provided
+    if risk_mode:
+        # User explicitly provided a risk mode, use that profile
+        risk_pct = get_risk_percentage_from_mode(risk_mode)
+    else:
+        # No explicit risk mode → use risk percentage from Settings (max_portfolio_loss_pct)
+        risk_pct = get_risk_percentage_from_settings(db)
+    
     tp_sl = calculate_tp_sl_from_ticket(
         ticket=run.ticket,
         capital=capital,

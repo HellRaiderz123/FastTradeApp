@@ -214,6 +214,35 @@ def get_risk_percentage_from_mode(risk_mode: str) -> float:
     return RISK_PROFILES[mode_upper]
 
 
+def get_risk_percentage_from_settings(db=None) -> float:
+    """
+    Get risk percentage from database settings.
+    Falls back to default BALANCED (2%) if DB unavailable.
+    
+    Args:
+        db: SQLAlchemy session (optional)
+        
+    Returns:
+        Risk percentage from max_portfolio_loss_pct (e.g., 13.0 for 13%)
+    """
+    try:
+        from app.db.risk_repo import get_or_create_risk_limits
+        from app.db.session import SessionLocal
+        
+        session = db if db is not None else SessionLocal()
+        try:
+            limits = get_or_create_risk_limits(session)
+            if limits and limits.max_portfolio_loss_pct:
+                return float(limits.max_portfolio_loss_pct)
+        finally:
+            if db is None and session:
+                session.close()
+    except Exception as e:
+        logger.warning(f"Could not load risk percentage from settings: {e}, using BALANCED (2%)")
+    
+    return RISK_PROFILES["BALANCED"]
+
+
 # =========================================
 # EXAMPLE USAGE
 # =========================================
