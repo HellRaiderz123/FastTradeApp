@@ -619,7 +619,8 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": butterfly_middle,
                     "type": "CE",
-                    "quantity": lots * lot_size * 2,  # 2x middle
+                    "qty": 2,
+                    "quantity": 2,
                     "symbol": build_zerodha_option_symbol(
                         underlying=underlying,
                         expiry=expiry,

@@ -17,6 +17,7 @@ from app.core.risk.tp_sl_calculator import (
 )
 from app.core.risk.risk_limits_config import get_risk_limits
 from app.core.broker.zerodha.client import get_kite_client
+from app.core.learning.signal_diagnostics import record_entry_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,17 @@ def create_intent(
         sl=tp_sl["sl"],     # Dynamic SL
         trailing_sl_pct=trailing_sl_pct,  # Will be None unless strategy explicitly sets it
     )
+
+    # 📊 Record signal snapshot for diagnostics
+    # Reconstruct engine_result from StrategyRun signal/context for signal diagnostics
+    try:
+        engine_result = {
+            "signal": run.signal or {},
+            "context": run.context or {},
+        }
+        record_entry_snapshot(db, intent=intent, engine_result=engine_result)
+    except Exception as e:
+        logger.warning(f"Failed to record entry snapshot for intent {intent.intent_id}: {e}")
 
     return {
         "intent_id": intent.intent_id,

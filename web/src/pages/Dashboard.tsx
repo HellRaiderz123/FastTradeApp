@@ -6,6 +6,7 @@ import { accountAPI, journalAPI, marketAPI, watchlistAPI } from '../lib/api';
 import GridLayout from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import CandleChart from '../components/CandleChart';
+import TwitterSentimentWidget from '../components/TwitterSentimentWidget';
 
 const AnyGridLayout = GridLayout as any;
 
@@ -34,7 +35,8 @@ const DEFAULT_LAYOUT = [
   { i: 'marketstats', x: 0, y: 10, w: 4, h: 3 },
   { i: 'watchlist', x: 4, y: 10, w: 4, h: 3 },
   { i: 'stats', x: 8, y: 10, w: 4, h: 3 },
-  { i: 'trades', x: 0, y: 13, w: 12, h: 3 },
+  { i: 'twitter', x: 0, y: 13, w: 6, h: 4 },
+  { i: 'trades', x: 6, y: 13, w: 6, h: 4 },
 ];
 
 const Dashboard: React.FC = () => {
@@ -304,6 +306,10 @@ const Dashboard: React.FC = () => {
             <StatCard label="Losses" value={tradeStats.losses.toString()} valueClass="text-red-400" />
             <StatCard label="Avg Win" value={`₹${Math.round(tradeStats.averageWin).toLocaleString('en-IN')}`} valueClass="text-green-400" />
           </div>
+        </Widget>
+
+        <Widget key="twitter" title="" locked={locked} keyName="twitter" padding="p-0">
+          <TwitterSentimentWidget timeframe="1h" />
         </Widget>
 
         <Widget key="trades" title="Recent Trades" locked={locked} keyName="trades">

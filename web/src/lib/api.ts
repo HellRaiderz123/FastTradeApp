@@ -337,6 +337,12 @@ export const stockSuggestionsAPI = {
 export const settingsAPI = {
   getZerodhaSettings: () =>
     api.get('/settings/zerodha'),
+
+  getBrokerSettings: () =>
+    api.get('/settings/broker'),
+
+  setActiveBroker: (broker: string) =>
+    api.post('/settings/broker', { broker }),
   
   saveZerodhaCredentials: (credentials: { api_key: string; api_secret: string }) =>
     api.post('/settings/zerodha/credentials', credentials),
@@ -652,6 +658,41 @@ export const watchlistAPI = {
   
   getQuotes: (id: number) =>
     api.get(`/watchlists/${id}/quotes`),
+};
+
+// Twitter Sentiment APIs
+export const twitterAPI = {
+  // Get sentiment for a specific symbol
+  getSymbolSentiment: (symbol: string, timeframe: string = '1h') =>
+    api.get(`/twitter/sentiment/${symbol}?timeframe=${timeframe}`),
+  
+  // Get recent tweets with filters
+  getRecentTweets: (params?: { limit?: number; symbol?: string; sentiment?: string; impact_level?: string }) =>
+    api.get('/twitter/recent', { params }),
+  
+  // Get trending symbols
+  getTrending: (timeframe: string = '1h', limit: number = 10) =>
+    api.get(`/twitter/trending?timeframe=${timeframe}&limit=${limit}`),
+  
+  // Get alerts
+  getAlerts: (unread_only: boolean = false, limit: number = 20) =>
+    api.get(`/twitter/alerts?unread_only=${unread_only}&limit=${limit}`),
+  
+  // Mark alert as read
+  markAlertRead: (alertId: number) =>
+    api.post(`/twitter/alerts/${alertId}/mark-read`),
+  
+  // Trigger manual update
+  triggerUpdate: () =>
+    api.post('/twitter/update'),
+  
+  // Get tracked accounts
+  getAccounts: (activeOnly: boolean = true) =>
+    api.get(`/twitter/accounts?active_only=${activeOnly}`),
+  
+  // Add tracked account
+  addAccount: (username: string, accountType: string = 'analyst', credibilityScore: number = 50.0) =>
+    api.post('/twitter/accounts', { username, account_type: accountType, credibility_score: credibilityScore }),
 };
 
 export default api;

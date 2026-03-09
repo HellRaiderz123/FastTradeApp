@@ -220,6 +220,8 @@ class OptionSpreadCustom:
                     "side": leg.side,
                     "strike": leg.strike,
                     "type": leg.option_type,
+                    "qty": leg.quantity,
+                    "quantity": leg.quantity,
                     "symbol": symbol,
                 }
             )

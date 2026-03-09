@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Menu, Settings, Power, Bell, LogOut, ChevronDown } from 'lucide-react';
+import { Menu, Power, Bell, LogOut, ChevronDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTradeStore } from '../lib/store';
 import { systemAPI, settingsAPI, authAPI, authTokenStore } from '../lib/api';
@@ -14,11 +14,13 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSystemToggle }) => {
   const navigate = useNavigate();
   const [executionMode, setExecutionMode] = useState('PAPER_TRADING');
+  const [activeBroker, setActiveBroker] = useState('ZERODHA');
+  const [supportedBrokers, setSupportedBrokers] = useState<string[]>(['ZERODHA', 'INDMONEY']);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   useEffect(() => {
-    loadExecutionMode();
-    const interval = setInterval(loadExecutionMode, 5000);
+    loadHeaderSettings();
+    const interval = setInterval(loadHeaderSettings, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -35,13 +37,30 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [userMenuOpen]);
 
-  const loadExecutionMode = async () => {
+  const loadHeaderSettings = async () => {
     try {
-      const response = await settingsAPI.getZerodhaSettings();
-      const data = response.data || response;
-      setExecutionMode(data.execution_mode || 'PAPER_TRADING');
+      const [modeResponse, brokerResponse] = await Promise.all([
+        settingsAPI.getZerodhaSettings(),
+        settingsAPI.getBrokerSettings(),
+      ]);
+
+      const modeData = modeResponse.data || modeResponse;
+      setExecutionMode(modeData.execution_mode || 'PAPER_TRADING');
+
+      const brokerData = brokerResponse.data || brokerResponse;
+      setActiveBroker(brokerData.active_broker || 'ZERODHA');
+      setSupportedBrokers(brokerData.supported_brokers || ['ZERODHA', 'INDMONEY']);
     } catch (error) {
-      console.error('Error loading execution mode:', error);
+      console.error('Error loading header settings:', error);
+    }
+  };
+
+  const handleBrokerChange = async (broker: string) => {
+    try {
+      await settingsAPI.setActiveBroker(broker);
+      setActiveBroker(broker);
+    } catch (error) {
+      console.error('Failed to set active broker:', error);
     }
   };
 
@@ -107,6 +126,20 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
       </div>
 
       <div className="flex items-center gap-6">
+        <div className="flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-slate-400">Broker</span>
+          <select
+            value={activeBroker}
+            onChange={(e) => handleBrokerChange(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
+            title="Active Broker"
+          >
+            {supportedBrokers.map((broker) => (
+              <option key={broker} value={broker}>{broker}</option>
+            ))}
+          </select>
+        </div>
+
         {/* System Status */}
         <button
           onClick={handleSystemToggle}

@@ -16,6 +16,72 @@ logger = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
 
 
+def _update_twitter_sentiment():
+    """Update Twitter sentiment data from tracked accounts."""
+    logger.info("⏱️ Running Twitter sentiment update")
+    
+    db = SessionLocal()
+    try:
+        from app.services.twitter_service import get_twitter_service
+        from app.db.models_twitter import TwitterSentiment, TwitterAlert
+        from datetime import datetime, timedelta
+        
+        twitter_service = get_twitter_service()
+        
+        if not twitter_service.enabled:
+            logger.debug("⏸️ Twitter API not configured - skipping sentiment update")
+            return
+        
+        # Fetch recent tweets
+        tweets = twitter_service.fetch_tweets_from_accounts(db, max_tweets=50)
+        
+        # Process each tweet
+        processed_count = 0
+        high_impact_count = 0
+        alerts_created = 0
+        
+        for tweet_data in tweets:
+            sentiment = twitter_service.process_tweet(db, tweet_data)
+            if sentiment:
+                processed_count += 1
+                
+                # Create alerts for high-impact tweets
+                if sentiment.high_impact and not sentiment.alert_sent:
+                    alert = TwitterAlert(
+                        tweet_id=sentiment.tweet_id,
+                        symbol=sentiment.primary_symbol or "MARKET",
+                        alert_type="high_impact" if not sentiment.breaking_news else "breaking_news",
+                        title=f"High Impact: {sentiment.primary_symbol} {sentiment.sentiment.upper()}",
+                        message=sentiment.text,
+                        severity="high" if sentiment.engagement_score > 70 else "medium",
+                        username=sentiment.username,
+                        account_credibility=tweet_data.get("credibility", 50.0),
+                        sentiment=sentiment.sentiment,
+                        engagement_score=sentiment.engagement_score,
+                        sent=False
+                    )
+                    db.add(alert)
+                    alerts_created += 1
+                    high_impact_count += 1
+                    
+                    # Mark alert as sent
+                    sentiment.alert_sent = True
+                    db.commit()
+        
+        db.commit()
+        
+        logger.info(
+            f"✅ Twitter sentiment updated: {processed_count} tweets processed, "
+            f"{high_impact_count} high-impact, {alerts_created} alerts created"
+        )
+    except ImportError:
+        logger.debug("⏸️ Twitter service not available - skipping update")
+    except Exception as e:
+        logger.exception(f"❌ Twitter sentiment update failed: {e}")
+    finally:
+        db.close()
+
+
 def _update():
     logger.info("⏱️ Running 15m candle update")
 
@@ -476,4 +542,31 @@ def start_expiry_exit_scheduler():
     )
 
     logger.info("🟢 Expiry-day exit scheduler started (every 1 min, 9:15–3:20 PM IST)")
+
+
+def start_twitter_sentiment_scheduler():
+    """
+    Start Twitter sentiment monitoring (runs every 15 minutes during market hours).
+    
+    Fetches tweets from tracked accounts, analyzes sentiment, and creates alerts
+    for high-impact tweets.
+    """
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start Twitter sentiment scheduler: main scheduler not running")
+        return
+    
+    # Run every 15 minutes during market hours (9:15 AM - 3:30 PM IST)
+    scheduler.add_job(
+        func=_update_twitter_sentiment,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",  # 9 AM to 3 PM
+        minute="*/15",  # Every 15 minutes
+        id="twitter_sentiment_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    
+    logger.info("🟢 Twitter sentiment scheduler started (every 15 min, market hours only)")
 

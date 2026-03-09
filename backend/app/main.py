@@ -42,6 +42,7 @@ from app.api.routes import swing_scanner
 from app.api.routes import sentiment
 from app.api.routes import config_routes
 from app.api.routes import news
+from app.api.routes import twitter
 from app.api.routes import economic_calendar
 from app.api.routes import market_depth
 from app.api.routes import alerts
@@ -67,6 +68,7 @@ from app.core.market.scheduler import (
     start_vix_scheduler,
     start_auto_exit_scheduler,
     start_expiry_exit_scheduler,
+    start_twitter_sentiment_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -121,7 +123,8 @@ async def lifespan(app: FastAPI):
         start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
         start_expiry_exit_scheduler()  # Auto-exit options near expiry
         start_intraday_candles_scheduler(delay_minutes=3)  # 5m + 1h candles
-        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit")
+        start_twitter_sentiment_scheduler()  # Twitter market sentiment
+        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit + Twitter sentiment")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
 
@@ -287,6 +290,7 @@ app.include_router(market_dashboard.router)
 app.include_router(swing_scanner.router)
 app.include_router(sentiment.router)
 app.include_router(news.router)
+app.include_router(twitter.router)
 app.include_router(economic_calendar.router)
 app.include_router(market_depth.router)
 app.include_router(config_routes.router)

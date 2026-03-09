@@ -25,6 +25,21 @@ _SMART_SUGGESTION_INTERVAL = 60
 _BROKER_RECONCILE_INTERVAL = 30
 
 
+def _resolve_leg_qty(leg: Dict[str, Any], ticket_qty: int) -> int:
+    raw = leg.get("qty", leg.get("quantity"))
+    if raw is None:
+        return max(1, int(ticket_qty))
+    try:
+        value = int(raw)
+    except Exception:
+        return max(1, int(ticket_qty))
+    if value <= 0:
+        return max(1, int(ticket_qty))
+    if value <= 10 and ticket_qty > 1:
+        return value * ticket_qty
+    return value
+
+
 def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) -> float:
     """
     Get MTM using adapter, preferring live ticker cache for Zerodha positions.
@@ -60,7 +75,7 @@ def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) 
                 all_cached = False
                 break
             
-            leg_qty = int(leg.get("qty", 0)) or ticket_qty
+            leg_qty = _resolve_leg_qty(leg, ticket_qty)
             sign = 1.0 if leg["side"] == "SELL" else -1.0
             pnl_per_unit += (float(entry_price) - float(current_price)) * sign * leg_qty
         

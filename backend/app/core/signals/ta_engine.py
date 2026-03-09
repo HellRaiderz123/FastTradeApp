@@ -118,30 +118,48 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     quality_score = sum([1 for v in quality_checks.values() if v])
 
     # ================================================================
-    # MARKET BIAS & SIGNAL
+    # MARKET BIAS & SIGNAL (with divergence detection)
     # ================================================================
-    is_bullish = (
-        last["ema_20"] > last["ema_50"]
-        and last["ema_20_slope"] > 0
-        and float(last["rsi"]) > 50
-    )
+    # Separate EMA trend from slope for more nuanced signal detection
+    ema_trend_bullish = last["ema_20"] > last["ema_50"]
+    ema_trend_bearish = last["ema_20"] < last["ema_50"]
+    ema_slope_positive = last["ema_20_slope"] > 0
+    ema_slope_negative = last["ema_20_slope"] < 0
+    rsi_bullish = float(last["rsi"]) > 50
+    rsi_bearish = float(last["rsi"]) < 50
+    adx_strong = float(last["adx"]) >= 25
 
-    is_bearish = (
-        last["ema_20"] < last["ema_50"]
-        and last["ema_20_slope"] < 0
-        and float(last["rsi"]) < 50
-    )
-
-    if is_bullish:
+    # STRONG SIGNALS: EMA trend + slope + RSI all aligned
+    if ema_trend_bullish and ema_slope_positive and rsi_bullish:
         signal = "BULLISH"
         bias = "BULLISH"
-        confidence = 70 + min(10, quality_score * 2)  # Boost confidence with quality
+        confidence = 70 + min(10, quality_score * 2)
         reason = "EMA trend up + RSI > 50 + ADX strong"
-    elif is_bearish:
+    elif ema_trend_bearish and ema_slope_negative and rsi_bearish:
         signal = "BEARISH"
         bias = "BEARISH"
         confidence = 70 + min(10, quality_score * 2)
         reason = "EMA trend down + RSI < 50 + ADX strong"
+    
+    # MEDIUM SIGNALS: EMA trend + ADX strong, but RSI/slope divergence
+    elif adx_strong and ema_trend_bearish:
+        signal = "BEARISH"
+        bias = "BEARISH"
+        confidence = 55 + min(7, quality_score)
+        if rsi_bullish:
+            reason = "EMA bearish + strong ADX but RSI divergence (caution: potential reversal)"
+        else:
+            reason = "EMA bearish + strong ADX but slope divergence (weakening trend)"
+    elif adx_strong and ema_trend_bullish:
+        signal = "BULLISH"
+        bias = "BULLISH"
+        confidence = 55 + min(7, quality_score)
+        if rsi_bearish:
+            reason = "EMA bullish + strong ADX but RSI divergence (caution: potential reversal)"
+        else:
+            reason = "EMA bullish + strong ADX but slope divergence (weakening trend)"
+    
+    # TRUE RANGE: Weak ADX or no clear trend
     else:
         signal = "RANGE"
         bias = "NEUTRAL"
@@ -380,30 +398,48 @@ def _ta_signal_daily_from_df(df: pd.DataFrame) -> Dict:
     quality_score = sum([1 for v in quality_checks.values() if v])
 
     # ================================================================
-    # SWING TRADING BIAS & SIGNAL (EMA 50/200 crossover strategy)
+    # SWING TRADING BIAS & SIGNAL (EMA 50/200 with divergence detection)
     # ================================================================
-    is_bullish = (
-        last["ema_50"] > last["ema_200"]
-        and last["ema_50_slope"] > 0
-        and float(last["rsi"]) > 45  # Slightly lower for swing
-    )
+    # Separate trend from slope for daily timeframe
+    ema_trend_bullish = last["ema_50"] > last["ema_200"]
+    ema_trend_bearish = last["ema_50"] < last["ema_200"]
+    ema_slope_positive = last["ema_50_slope"] > 0
+    ema_slope_negative = last["ema_50_slope"] < 0
+    rsi_bullish = float(last["rsi"]) > 45  # Slightly lower threshold for swing
+    rsi_bearish = float(last["rsi"]) < 55  # Slightly higher threshold for swing
+    adx_strong = float(last["adx"]) >= 20  # Daily timeframe threshold
 
-    is_bearish = (
-        last["ema_50"] < last["ema_200"]
-        and last["ema_50_slope"] < 0
-        and float(last["rsi"]) < 55  # Slightly higher for swing
-    )
-
-    if is_bullish:
+    # STRONG SIGNALS: EMA trend + slope + RSI all aligned
+    if ema_trend_bullish and ema_slope_positive and rsi_bullish:
         signal = "BULLISH"
         bias = "BULLISH"
         confidence = 65 + min(15, quality_score * 2)
         reason = "Daily EMA 50/200 cross up + RSI favorable + ADX strong"
-    elif is_bearish:
+    elif ema_trend_bearish and ema_slope_negative and rsi_bearish:
         signal = "BEARISH"
         bias = "BEARISH"
         confidence = 65 + min(15, quality_score * 2)
         reason = "Daily EMA 50/200 cross down + RSI favorable + ADX strong"
+    
+    # MEDIUM SIGNALS: EMA trend + ADX strong, but RSI/slope divergence
+    elif adx_strong and ema_trend_bearish:
+        signal = "BEARISH"
+        bias = "BEARISH"
+        confidence = 50 + min(10, quality_score)
+        if rsi_bullish:
+            reason = "Daily EMA bearish + strong ADX but RSI divergence (potential reversal watch)"
+        else:
+            reason = "Daily EMA bearish + strong ADX but slope divergence (weakening trend)"
+    elif adx_strong and ema_trend_bullish:
+        signal = "BULLISH"
+        bias = "BULLISH"
+        confidence = 50 + min(10, quality_score)
+        if rsi_bearish:
+            reason = "Daily EMA bullish + strong ADX but RSI divergence (potential reversal watch)"
+        else:
+            reason = "Daily EMA bullish + strong ADX but slope divergence (weakening trend)"
+    
+    # TRUE RANGE: Weak ADX or no clear trend
     else:
         signal = "RANGE"
         bias = "NEUTRAL"

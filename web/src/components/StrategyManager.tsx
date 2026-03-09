@@ -389,6 +389,7 @@ export const StrategyManager: React.FC = () => {
                     {s.ticket?.legs?.map((leg: any, legIdx: number) => (
                       <div key={legIdx} className="text-xs text-slate-200">
                         {leg.side} {leg.strike} {leg.type}
+                        {(Number(leg.qty ?? leg.quantity ?? 1) > 1) ? ` x${Number(leg.qty ?? leg.quantity ?? 1)}` : ''}
                       </div>
                     ))}
                   </div>
@@ -690,6 +691,7 @@ export const StrategyManager: React.FC = () => {
                             {result.ticket.legs.map((leg: any, legIdx: number) => (
                               <div key={legIdx} className="ml-2 text-xs">
                                 <span>{leg.side}</span> {leg.strike} {leg.type}
+                                {(Number(leg.qty ?? leg.quantity ?? 1) > 1) ? ` x${Number(leg.qty ?? leg.quantity ?? 1)}` : ''}
                               </div>
                             ))}
                           </div>

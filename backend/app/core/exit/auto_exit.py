@@ -9,7 +9,9 @@ from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_m
 from app.core.broker.zerodha.client import get_kite_client
 from app.services.notifications import NotificationService
 from app.core.learning.signal_diagnostics import record_exit_outcome
+import logging
 
+logger = logging.getLogger(__name__)
 
 def run_auto_exit(db: Session):
     """
@@ -89,8 +91,9 @@ def run_auto_exit(db: Session):
 
         try:
             record_exit_outcome(db, intent=intent, commit=False)
-        except Exception:
-            pass
+            logger.info(f"📊 Recorded exit outcome for intent {intent.intent_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to record exit outcome for {intent.intent_id}: {e}", exc_info=True)
 
         # Notify based on exit reason (best-effort)
         try:

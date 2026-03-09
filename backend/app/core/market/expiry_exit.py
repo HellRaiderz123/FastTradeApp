@@ -198,8 +198,9 @@ def run_expiry_day_exit(db: Session) -> List[str]:
 
             try:
                 record_exit_outcome(db, intent=intent, commit=False)
-            except Exception:
-                pass
+                logger.info(f"📊 Recorded exit outcome for intent {intent.intent_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to record exit outcome for {intent.intent_id}: {e}", exc_info=True)
 
             exited.append(intent.intent_id)
             logger.info(

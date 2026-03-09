@@ -62,8 +62,9 @@ def manual_exit(intent_id: str, db: Session = Depends(get_db)):
 
     try:
         record_exit_outcome(db, intent=intent, commit=False)
-    except Exception:
-        pass
+        logger.info(f"📊 Recorded exit outcome for intent {intent.intent_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to record exit outcome for {intent.intent_id}: {e}", exc_info=True)
 
     db.commit()
     db.refresh(intent)

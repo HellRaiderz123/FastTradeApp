@@ -28,6 +28,7 @@ import CustomWatchlists from './pages/CustomWatchlists';
 import CreateScanner from './pages/CreateScanner';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
+import TwitterAlertsMonitor from './components/TwitterAlerts';
 
 // Simple Error Boundary to avoid white screen and show errors
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }>{
@@ -95,6 +96,9 @@ function App() {
                   
                   {/* ML Signal Alert Monitor — runs in background */}
                   <SignalAlertMonitor />
+                  
+                  {/* Twitter High-Impact Alert Monitor — runs in background */}
+                  <TwitterAlertsMonitor />
 
                   <main className="flex-1 overflow-auto p-6">
                     <Routes>

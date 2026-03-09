@@ -4,7 +4,7 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 from dotenv import load_dotenv, set_key
 
 from app.core.execution.mode import normalize_execution_mode
@@ -43,6 +43,17 @@ class SettingsResponse(BaseModel):
     access_token_set: bool
     execution_mode: str
 
+
+class BrokerSettingsResponse(BaseModel):
+    """Response for active broker settings"""
+    active_broker: str
+    supported_brokers: List[str]
+
+
+class BrokerUpdateRequest(BaseModel):
+    """Payload for broker switch"""
+    broker: str
+
 class GmailSettings(BaseModel):
     """Model for Gmail notification settings"""
     gmail_user: str
@@ -74,6 +85,21 @@ def get_env_value(key: str) -> str:
     return os.getenv(key, "")
 
 
+SUPPORTED_BROKERS = ["ZERODHA", "INDMONEY"]
+
+
+def normalize_broker_name(broker: str | None) -> str:
+    raw = (broker or "").strip().upper().replace(" ", "")
+    aliases = {
+        "IND_MONEY": "INDMONEY",
+        "IND-MONEY": "INDMONEY",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized in SUPPORTED_BROKERS:
+        return normalized
+    return "ZERODHA"
+
+
 @router.get("/zerodha", response_model=SettingsResponse)
 def get_zerodha_settings():
     """
@@ -89,6 +115,42 @@ def get_zerodha_settings():
         access_token_set=bool(get_env_value("ZERODHA_ACCESS_TOKEN")),
         execution_mode=normalize_execution_mode(get_env_value("EXECUTION_MODE"))
     )
+
+
+@router.get("/broker", response_model=BrokerSettingsResponse)
+def get_broker_settings():
+    """Get currently active broker and supported brokers."""
+    active = normalize_broker_name(get_env_value("ACTIVE_BROKER"))
+    return BrokerSettingsResponse(
+        active_broker=active,
+        supported_brokers=SUPPORTED_BROKERS,
+    )
+
+
+@router.post("/broker")
+def set_active_broker(payload: BrokerUpdateRequest):
+    """Set active broker for execution routing."""
+    raw = (payload.broker or "").strip().upper().replace(" ", "")
+    aliases = {
+        "IND_MONEY": "INDMONEY",
+        "IND-MONEY": "INDMONEY",
+    }
+    broker = aliases.get(raw, raw)
+
+    if broker not in SUPPORTED_BROKERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid broker. Valid brokers: {', '.join(SUPPORTED_BROKERS)}"
+        )
+
+    set_key(str(ENV_FILE), "ACTIVE_BROKER", broker)
+    os.environ["ACTIVE_BROKER"] = broker
+
+    logger.info("Active broker changed to %s", broker)
+    return {
+        "status": "success",
+        "active_broker": broker,
+    }
 
 
 @router.post("/zerodha/credentials")

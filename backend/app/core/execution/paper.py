@@ -11,8 +11,24 @@ class PaperExecutionAdapter(ExecutionAdapter):
     Simulates execution using live LTP.
     """
 
+    @staticmethod
+    def _resolve_leg_qty(leg: Dict[str, Any], ticket_qty: int) -> int:
+        raw = leg.get("qty", leg.get("quantity"))
+        if raw is None:
+            return max(1, int(ticket_qty))
+        try:
+            value = int(raw)
+        except Exception:
+            return max(1, int(ticket_qty))
+        if value <= 0:
+            return max(1, int(ticket_qty))
+        if value <= 10 and ticket_qty > 1:
+            return value * ticket_qty
+        return value
+
     def execute(self, intent):
         ticket = intent.ticket
+        ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 
         # 1️⃣ Build symbol list (prefer stored symbol if exists)
         symbols = []
@@ -34,7 +50,8 @@ class PaperExecutionAdapter(ExecutionAdapter):
                 raise ValueError(f"LTP not found for symbol: {symbol}")
 
             leg["price"] = price            # ✅ THIS LINE FIXES EVERYTHING
-            leg_qty = int(leg.get("qty", 1))
+            leg_qty = self._resolve_leg_qty(leg, ticket_qty)
+            leg["qty"] = leg_qty
 
             if leg["side"] == "SELL":
                 entry_credit += price * leg_qty
@@ -57,6 +74,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
         Unrealized PnL for paper trades.
         """
         ticket = intent.ticket
+        ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 
         symbols = [leg.get("symbol") or f'{leg["strike"]}{leg["type"]}' for leg in ticket["legs"]]
         ltp_map = get_ltp(symbols)
@@ -68,7 +86,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
             entry = leg.get("price")
             if entry is None:
                 raise ValueError("Leg price missing for MTM")
-            leg_qty = int(leg.get("qty", 1))
+            leg_qty = self._resolve_leg_qty(leg, ticket_qty)
             sign = 1.0 if leg["side"] == "SELL" else -1.0
             pnl += (float(entry) - float(current)) * sign * leg_qty
 
@@ -76,6 +94,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
     def exit(self, intent):
         ticket = intent.ticket
+        ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
         symbols = [leg["symbol"] for leg in ticket["legs"]]
 
         ltp_map = get_ltp(symbols)
@@ -85,7 +104,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
             price = ltp_map.get(leg["symbol"])
             if price is None or price == 0.0:
                 raise ValueError(f"LTP not found for symbol: {leg['symbol']}")
-            leg_qty = int(leg.get("qty", 1))
+            leg_qty = self._resolve_leg_qty(leg, ticket_qty)
             if leg["side"] == "SELL":
                 exit_cost += price * leg_qty
             else:

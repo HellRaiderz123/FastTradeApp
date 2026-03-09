@@ -174,10 +174,15 @@ def compute_signal_diagnostics(
     """Return rule-based diagnostics for recent closed trades."""
     query = db.query(SignalOutcome).filter(SignalOutcome.exit_time.isnot(None))
 
+    # Safely convert to string if needed (handles FastAPI Query objects)
     if underlying:
-        query = query.filter(SignalOutcome.underlying == underlying.upper())
+        underlying_str = str(underlying).upper() if underlying else None
+        if underlying_str:
+            query = query.filter(SignalOutcome.underlying == underlying_str)
     if strategy:
-        query = query.filter(SignalOutcome.strategy == strategy.upper())
+        strategy_str = str(strategy).upper() if strategy else None
+        if strategy_str:
+            query = query.filter(SignalOutcome.strategy == strategy_str)
     if lookback_days:
         cutoff = now_ist() - timedelta(days=lookback_days)
         query = query.filter(SignalOutcome.exit_time >= cutoff)

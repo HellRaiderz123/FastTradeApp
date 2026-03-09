@@ -33,6 +33,21 @@ class ZerodhaExecutionAdapter:
         self.kite = kite_client
         self.dry_run = dry_run
 
+    @staticmethod
+    def _resolve_leg_qty(leg: Dict[str, Any], ticket_qty: int) -> int:
+        raw = leg.get("qty", leg.get("quantity"))
+        if raw is None:
+            return max(1, int(ticket_qty))
+        try:
+            value = int(raw)
+        except Exception:
+            return max(1, int(ticket_qty))
+        if value <= 0:
+            return max(1, int(ticket_qty))
+        if value <= 10 and ticket_qty > 1:
+            return value * ticket_qty
+        return value
+
     # ============================
     # EXECUTION (DRY-RUN ONLY)
     # ============================
@@ -135,7 +150,7 @@ class ZerodhaExecutionAdapter:
     # ============================
     def _build_orders(self, intent) -> List[Dict[str, Any]]:
         ticket = intent.ticket
-        qty = ticket["lots"] * ticket["lot_size"]
+        qty = int(ticket["lots"]) * int(ticket["lot_size"])
 
         # Parse expiry string to date object
         expiry_date = _parse_expiry(intent.expiry)
@@ -151,12 +166,13 @@ class ZerodhaExecutionAdapter:
                 strike=leg["strike"],
                 option_type=leg["type"],
             )
+            leg_qty = self._resolve_leg_qty(leg, qty)
 
             orders.append({
                 "tradingsymbol": tradingsymbol,
                 "exchange": "NFO",
                 "transaction_type": "SELL" if leg["side"] == "SELL" else "BUY",
-                "quantity": qty,
+                "quantity": leg_qty,
                 "order_type": "MARKET",
                 "product": "NRML",
                 "validity": "DAY",
@@ -166,7 +182,7 @@ class ZerodhaExecutionAdapter:
 
     def _build_exit_orders(self, intent) -> List[Dict[str, Any]]:
         ticket = intent.ticket
-        qty = ticket["lots"] * ticket["lot_size"]
+        qty = int(ticket["lots"]) * int(ticket["lot_size"])
 
         # Parse expiry string to date object
         expiry_date = _parse_expiry(intent.expiry)
@@ -182,12 +198,13 @@ class ZerodhaExecutionAdapter:
                 strike=leg["strike"],
                 option_type=leg["type"],
             )
+            leg_qty = self._resolve_leg_qty(leg, qty)
 
             exit_orders.append({
                 "tradingsymbol": tradingsymbol,
                 "exchange": "NFO",
                 "transaction_type": "BUY" if leg["side"] == "SELL" else "SELL",
-                "quantity": qty,
+                "quantity": leg_qty,
                 "order_type": "MARKET",
                 "product": "NRML",
                 "validity": "DAY",
@@ -230,7 +247,7 @@ class ZerodhaExecutionAdapter:
                 if entry is None:
                     continue
                 entry_f = float(entry)
-                leg_qty = int(leg.get("qty", 0)) or ticket_qty
+                leg_qty = self._resolve_leg_qty(leg, ticket_qty)
 
                 if leg["side"] == "SELL":
                     pnl += (entry_f - ltp) * leg_qty
@@ -247,7 +264,7 @@ class ZerodhaExecutionAdapter:
                 if not sym:
                     continue
                 ltp = float(ltp_map.get(sym) or 0.0)
-                leg_qty = int(leg.get("qty", 0)) or ticket_qty
+                leg_qty = self._resolve_leg_qty(leg, ticket_qty)
                 
                 if leg["side"] == "SELL":
                     cost_to_close += ltp * leg_qty
@@ -292,11 +309,12 @@ class ZerodhaExecutionAdapter:
             sym = leg.get("symbol")
             px = float(ltp.get(sym) or 0.0)
             leg["price"] = px
-            leg["qty"] = qty  # persist so MTM can use it later
+            leg_qty = self._resolve_leg_qty(leg, qty)
+            leg["qty"] = leg_qty  # persist so MTM can use it later
             if leg.get("side") == "SELL":
-                entry_credit_total += px * qty
+                entry_credit_total += px * leg_qty
             else:
-                entry_credit_total -= px * qty
+                entry_credit_total -= px * leg_qty
 
         return round(entry_credit_total, 2)
 
@@ -306,12 +324,13 @@ class ZerodhaExecutionAdapter:
         ltp = get_ltp(symbols)
 
         exit_cost_total = 0.0
+        ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
         for leg in ticket.get("legs", []):
             sym = leg.get("symbol")
             if not sym:
                 continue
             px = float(ltp.get(sym) or 0.0)
-            leg_qty = int(leg.get("qty", 1))
+            leg_qty = self._resolve_leg_qty(leg, ticket_qty)
             if leg.get("side") == "SELL":
                 exit_cost_total += px * leg_qty
             else:
