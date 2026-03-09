@@ -43,10 +43,8 @@ from sqlalchemy.orm import Session
 from app.core.utils.time import now_ist
 from app.db.models_intent import ExecutionIntent
 from app.db.session import SessionLocal
-from app.core.execution.paper import PaperExecutionAdapter
-from app.core.execution.zerodha import ZerodhaExecutionAdapter
-from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_mode
-from app.core.broker.zerodha.client import get_kite_client
+from app.core.execution.factory import get_execution_adapter
+from app.core.execution.mode import get_execution_mode
 from app.services.notifications import NotificationService
 from app.core.learning.signal_diagnostics import record_exit_outcome
 
@@ -174,14 +172,7 @@ def run_expiry_day_exit(db: Session) -> List[str]:
     )
 
     execution_mode = get_execution_mode()
-    if is_paper_mode(execution_mode):
-        executor = PaperExecutionAdapter()
-    else:
-        kite = get_kite_client()
-        executor = ZerodhaExecutionAdapter(
-            kite_client=kite,
-            dry_run=not is_live_mode(execution_mode),
-        )
+    executor = get_execution_adapter(execution_mode)
 
     notifications = NotificationService(db)
     exited = []

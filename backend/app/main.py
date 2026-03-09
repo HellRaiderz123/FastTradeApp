@@ -53,6 +53,7 @@ from app.api.routes import safety
 from app.api.routes import ml
 from app.api.routes import candles
 from app.api.routes import zerodha_broker
+from app.api.routes import indmoney_broker
 from app.api.routes import position_suggestions
 from app.api.routes import auto_trader as auto_trader_routes
 from app.api.routes import auth
@@ -300,6 +301,7 @@ app.include_router(peer_comparison.router)
 app.include_router(safety.router)
 app.include_router(candles.router)
 app.include_router(zerodha_broker.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(indmoney_broker.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(position_suggestions.router)
 app.include_router(auto_trader_routes.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(trade_costs.router)

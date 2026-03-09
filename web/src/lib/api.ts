@@ -365,6 +365,16 @@ export const settingsAPI = {
   logoutZerodha: () =>
     api.post('/settings/zerodha/logout'),
   
+  // INDMoney settings
+  getINDMoneySettings: () =>
+    api.get('/settings/indmoney'),
+  
+  saveINDMoneyToken: (token: { access_token: string }) =>
+    api.post('/settings/indmoney/token', token),
+
+  resolveINDMoneySecurity: (symbol: string) =>
+    api.post('/settings/indmoney/resolve-security', { symbol }),
+  
   setExecutionMode: (mode: string) =>
     api.post(`/settings/execution-mode`, {}, { params: { mode } }),
 
@@ -587,6 +597,10 @@ export const financeAPI = {
   // ========== ZERODHA POSITIONS SECTION ==========
   getZerodhaPositions: () =>
     api.get('/zerodha/positions'),
+
+  // ========== INDMONEY POSITIONS SECTION ==========
+  getINDMoneyPositions: (params?: { segment?: string; product?: string }) =>
+    api.get('/indmoney/positions', { params }),
 
   getZerodhaOrders: () =>
     api.get('/zerodha/orders'),

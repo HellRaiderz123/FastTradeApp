@@ -42,10 +42,7 @@ from app.core.risk.tp_sl_calculator import (
     get_risk_percentage_from_mode,
     get_risk_percentage_from_settings,
 )
-from app.core.execution.paper import PaperExecutionAdapter
-from app.core.execution.zerodha import ZerodhaExecutionAdapter
-from app.core.execution.mode import normalize_execution_mode, is_live_mode, is_paper_mode
-from app.core.broker.zerodha.client import get_kite_client
+from app.core.execution.factory import get_execution_adapter
 from app.core.learning.signal_diagnostics import record_entry_snapshot, record_exit_outcome
 
 logger = logging.getLogger(__name__)
@@ -91,14 +88,7 @@ def _log(db: Session, config_id: int, **kwargs):
 
 def _get_executor(mode: str):
     """Instantiate the right execution adapter for the given mode."""
-    norm = normalize_execution_mode(mode)
-    if is_paper_mode(norm):
-        return PaperExecutionAdapter()
-    kite = get_kite_client()
-    return ZerodhaExecutionAdapter(
-        kite_client=kite,
-        dry_run=not is_live_mode(norm),
-    )
+    return get_execution_adapter(mode)
 
 
 def _open_positions_for(db: Session, underlying: str) -> List[ExecutionIntent]:

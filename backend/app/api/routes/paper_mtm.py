@@ -5,12 +5,10 @@ from typing import List
 
 from app.db.session import SessionLocal
 from app.db.models_intent import ExecutionIntent
-from app.core.execution.paper import PaperExecutionAdapter
-from app.core.execution.zerodha import ZerodhaExecutionAdapter
+from app.core.execution.factory import get_execution_adapter
 from app.core.utils.time import now_ist
 from app.core.market.ltp import get_ltp
-from app.core.broker.zerodha.client import get_kite_client
-from app.core.execution.mode import get_execution_mode, is_live_mode, is_paper_mode
+from app.core.execution.mode import get_execution_mode
 
 router = APIRouter(prefix="/paper", tags=["Paper Trading"])
 
@@ -28,12 +26,7 @@ def get_db():
 @router.post("/mtm/update")
 def update_mtm(db: Session = Depends(get_db)):
     execution_mode = get_execution_mode()
-
-    if is_paper_mode(execution_mode):
-        executor = PaperExecutionAdapter()
-    else:
-        kite = get_kite_client()
-        executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=not is_live_mode(execution_mode))
+    executor = get_execution_adapter(execution_mode)
 
     intents = (
         db.query(ExecutionIntent)

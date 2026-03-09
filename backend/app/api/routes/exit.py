@@ -1,16 +1,17 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.db.models_intent import ExecutionIntent
-from app.core.execution.paper import PaperExecutionAdapter
-from app.core.execution.zerodha import ZerodhaExecutionAdapter
+from app.core.execution.factory import get_execution_adapter
 from app.core.utils.time import now_ist
-from app.core.broker.zerodha.client import get_kite_client
-from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode
+from app.core.execution.mode import get_execution_mode
 from app.core.learning.signal_diagnostics import record_exit_outcome
 
 router = APIRouter(prefix="/exit", tags=["Exit"])
+logger = logging.getLogger(__name__)
 
 
 def get_db():
@@ -40,11 +41,7 @@ def manual_exit(intent_id: str, db: Session = Depends(get_db)):
 
     # ✅ Adapter selection
     mode = get_execution_mode()
-    if is_paper_mode(mode):
-        executor = PaperExecutionAdapter()
-    else:
-        kite = get_kite_client()
-        executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=not is_live_mode(mode))
+    executor = get_execution_adapter(mode)
 
     # 🔒 EXIT EXECUTION (single source of truth)
     exit_result = executor.exit(intent)

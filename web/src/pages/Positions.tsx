@@ -4,6 +4,7 @@ import { exitAPI, journalAPI, smartSuggestionsAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 import { useToast } from '../components/Toast';
 import ZerodhaPositionsWidget from '../components/ZerodhaPositionsWidget';
+import INDMoneyPositionsWidget from '../components/INDMoneyPositionsWidget';
 import SpreadGrouping from '../components/SpreadGrouping';
 
 const Positions: React.FC = () => {
@@ -15,6 +16,7 @@ const Positions: React.FC = () => {
   const pollRef = useRef<number | null>(null);
 
   const [spreadData, setSpreadData] = useState<any>(null);
+  const [brokerView, setBrokerView] = useState<'ALL' | 'ZERODHA' | 'INDMONEY'>('ALL');
   // Smart suggestions state (keyed by intent_id)
   const [smartSuggestions, setSmartSuggestions] = useState<Record<string, any>>({});
 
@@ -325,7 +327,31 @@ const Positions: React.FC = () => {
       </div>
 
       {/* Zerodha Positions */}
-      <ZerodhaPositionsWidget />
+      <div className="card-glass p-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h3 className="text-lg font-semibold text-white">Broker Positions View</h3>
+          <div className="inline-flex rounded-lg border border-slate-700 overflow-hidden">
+            {(['ALL', 'ZERODHA', 'INDMONEY'] as const).map((view) => (
+              <button
+                key={view}
+                onClick={() => setBrokerView(view)}
+                className={`px-3 py-1.5 text-sm font-medium transition ${
+                  brokerView === view
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                {view === 'ALL' ? 'All' : view}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {(brokerView === 'ALL' || brokerView === 'ZERODHA') && <ZerodhaPositionsWidget />}
+
+      {/* INDMoney Positions */}
+      {(brokerView === 'ALL' || brokerView === 'INDMONEY') && <INDMoneyPositionsWidget />}
     </div>
   );
 };

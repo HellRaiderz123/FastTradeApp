@@ -6,13 +6,12 @@ from datetime import date
 
 from app.db.session import SessionLocal
 from app.db.intent_query import get_intent_by_id
-from app.core.execution.paper import PaperExecutionAdapter
-from app.core.execution.zerodha import ZerodhaExecutionAdapter
+from app.core.execution.factory import get_execution_adapter
 from app.core.utils.time import now_ist
 from app.core.execution.credit import compute_entry_credit_total
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.risk.risk_limits_config import get_risk_limits
-from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode, is_zerodha_dry_run
+from app.core.execution.mode import get_execution_mode
 from app.db.models_intent import ExecutionIntent
 from app.db.models import DailyCapital
 from app.services.notifications import NotificationService
@@ -149,11 +148,7 @@ def execute_paper(
     db.commit()
 
     mode = get_execution_mode()
-    if is_paper_mode(mode):
-        executor = PaperExecutionAdapter()
-    else:
-        kite = get_kite_client()
-        executor = ZerodhaExecutionAdapter(kite_client=kite, dry_run=not is_live_mode(mode))
+    executor = get_execution_adapter(mode)
 
     try:
         result = executor.execute(intent)

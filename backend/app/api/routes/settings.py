@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, List
 from dotenv import load_dotenv, set_key
 
+from app.core.broker.indmoney.client import INDMoneyClient
+from app.core.broker.indmoney.instruments import INDMoneyInstrumentsResolver
 from app.core.execution.mode import normalize_execution_mode
 from app.services.notifications import NotificationService
 from app.db.session import SessionLocal
@@ -53,6 +55,16 @@ class BrokerSettingsResponse(BaseModel):
 class BrokerUpdateRequest(BaseModel):
     """Payload for broker switch"""
     broker: str
+
+class INDMoneyAccessToken(BaseModel):
+    """Model for INDMoney access token"""
+    access_token: str
+
+
+class INDMoneySecurityLookupRequest(BaseModel):
+    """Model for INDMoney symbol lookup"""
+    symbol: str
+
 
 class GmailSettings(BaseModel):
     """Model for Gmail notification settings"""
@@ -493,6 +505,121 @@ def zerodha_logout():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error logging out: {str(e)}"
+        )
+
+
+# ─── INDMoney Settings ────────────────────────────────────────────────────
+
+@router.get("/indmoney", response_model=SettingsResponse)
+def get_indmoney_settings():
+    """
+    Get current INDMoney settings status.
+    
+    Returns:
+        - api_key_set: Boolean indicating if API key is configured (always False for INDMoney)
+        - access_token_set: Boolean indicating if access token is set
+        - execution_mode: Current execution mode
+    """
+    return SettingsResponse(
+        api_key_set=bool(get_env_value("INDMONEY_API_KEY")),
+        access_token_set=bool(get_env_value("INDMONEY_ACCESS_TOKEN")),
+        execution_mode=normalize_execution_mode(get_env_value("EXECUTION_MODE"))
+    )
+
+
+@router.post("/indmoney/token")
+def save_indmoney_token(token: INDMoneyAccessToken):
+    """
+    Save INDMoney access token to .env file.
+    
+    Get your token from: https://indstocks.com/app/api-trading
+    
+    Args:
+        access_token: The access token from INDstocks API portal
+        
+    Returns:
+        {"status": "success", "message": "Token saved"}
+    """
+    try:
+        if not token.access_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Access token cannot be empty"
+            )
+        
+        # Save to .env file
+        set_key(str(ENV_FILE), "INDMONEY_ACCESS_TOKEN", token.access_token)
+        
+        # Update environment variable
+        os.environ["INDMONEY_ACCESS_TOKEN"] = token.access_token
+        
+        logger.info("INDMoney access token updated successfully")
+        return {
+            "status": "success",
+            "message": "INDMoney access token saved successfully"
+        }
+    except Exception as e:
+        logger.error(f"Error saving INDMoney token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error saving token: {str(e)}"
+        )
+
+
+@router.post("/indmoney/resolve-security")
+def resolve_indmoney_security(payload: INDMoneySecurityLookupRequest):
+    """Resolve INDMoney security_id from a trading symbol using instruments API cache."""
+    symbol = (payload.symbol or "").strip()
+    if not symbol:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Symbol is required"
+        )
+
+    try:
+        normalized = symbol.upper().replace(" ", "")
+
+        env_map_raw = os.getenv("INDMONEY_SECURITY_MAP_JSON", "{}")
+        env_map: Dict[str, str] = {}
+        try:
+            parsed = json.loads(env_map_raw)
+            if isinstance(parsed, dict):
+                env_map = {str(k).upper().replace(" ", ""): str(v) for k, v in parsed.items()}
+        except Exception:
+            env_map = {}
+
+        if normalized in env_map:
+            return {
+                "symbol": symbol,
+                "normalized_symbol": normalized,
+                "security_id": env_map[normalized],
+                "source": "env_map",
+            }
+
+        resolver = INDMoneyInstrumentsResolver(INDMoneyClient())
+        security_id = resolver.resolve_security_id(symbol)
+        if security_id:
+            return {
+                "symbol": symbol,
+                "normalized_symbol": normalized,
+                "security_id": str(security_id),
+                "source": "instruments_api",
+            }
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No security_id found for symbol '{symbol}'. "
+                "Check symbol spelling or add it in INDMONEY_SECURITY_MAP_JSON."
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error resolving INDMoney security_id for symbol %s: %s", symbol, str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error resolving security_id: {str(e)}"
         )
 
 
