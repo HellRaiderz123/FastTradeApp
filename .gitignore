@@ -29,6 +29,8 @@ coverage.xml
 dist/
 build/
 
+.venv/
+.backend/.venv/
 # ================================
 # FastAPI / Uvicorn
 # ================================

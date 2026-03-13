@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Plus, Trash2, Play, Save, ChevronRight, ChevronDown,
   Zap, Filter, Star, Search, MoreVertical, Activity,
@@ -7,7 +7,7 @@ import {
   BarChart3, Calendar
 } from 'lucide-react';
 import { useToast } from '../components/Toast';
-import api from '../lib/api';
+import api, { tradeCostAPI } from '../lib/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +57,8 @@ interface Strategy {
   last_signal_count?: number;
   auto_scan_enabled?: boolean;
   auto_amount?: number;
+  last_backtest_result?: BacktestResult;
+  last_backtest_at?: string;
 }
 
 interface PrebuiltStrategy {
@@ -146,6 +148,24 @@ interface BacktestResult {
   all_trades: BacktestTrade[];
 }
 
+interface BrokerageConfig {
+  equity_delivery_brokerage_pct: number;
+  equity_delivery_brokerage_flat: number;
+  equity_intraday_brokerage_pct: number;
+  equity_intraday_brokerage_cap: number;
+  fno_brokerage_flat: number;
+  stt_equity_delivery: number;
+  stt_equity_intraday: number;
+  stt_fno_options: number;
+  stt_fno_futures: number;
+  nse_equity_charge: number;
+  nse_fno_charge: number;
+  gst_pct: number;
+  sebi_charges_per_crore: number;
+  stamp_duty_pct: number;
+  stamp_duty_cap: number;
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const COMPARATORS = [
@@ -163,6 +183,27 @@ const TYPE_COLORS: Record<string, string> = {
   'Equity Intraday': 'bg-purple-500/20 text-purple-300 border-purple-500/40',
   'Options Buying': 'bg-green-500/20 text-green-300 border-green-500/40',
   'Options Selling': 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+};
+
+const LAST_SELECTED_SCANNER_STRATEGY_KEY = 'scanner:lastSelectedStrategyId';
+const BACKTEST_POSITION_SIZE_PCT = 10;
+
+const DEFAULT_ZERODHA_CONFIG: BrokerageConfig = {
+  equity_delivery_brokerage_pct: 0,
+  equity_delivery_brokerage_flat: 0,
+  equity_intraday_brokerage_pct: 0.03,
+  equity_intraday_brokerage_cap: 20,
+  fno_brokerage_flat: 20,
+  stt_equity_delivery: 0.1,
+  stt_equity_intraday: 0.025,
+  stt_fno_options: 0.0625,
+  stt_fno_futures: 0.0125,
+  nse_equity_charge: 0.00297,
+  nse_fno_charge: 0.00173,
+  gst_pct: 18,
+  sebi_charges_per_crore: 10,
+  stamp_duty_pct: 0.003,
+  stamp_duty_cap: 300,
 };
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -206,6 +247,9 @@ const CreateScanner: React.FC = () => {
   // Backtest state
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const [backtesting, setBacktesting] = useState(false);
+  const [applyZerodhaCharges, setApplyZerodhaCharges] = useState(false);
+  const [brokerageConfig, setBrokerageConfig] = useState<BrokerageConfig>(DEFAULT_ZERODHA_CONFIG);
+  const [loadingBrokerageConfig, setLoadingBrokerageConfig] = useState(false);
   const [btStartDate, setBtStartDate] = useState(() => {
     const d = new Date(); d.setFullYear(d.getFullYear() - 1);
     return d.toISOString().slice(0, 10);
@@ -224,6 +268,7 @@ const CreateScanner: React.FC = () => {
   const [editorAutoQty, setEditorAutoQty] = useState(10000);
   const [togglingAutoScan, setTogglingAutoScan] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [restoredSelection, setRestoredSelection] = useState(false);
 
   // ── Data loading ───────────────────────────────────────────────────────
 
@@ -246,6 +291,29 @@ const CreateScanner: React.FC = () => {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    if (restoredSelection || selectedId !== null || strategies.length === 0) return;
+
+    const raw = localStorage.getItem(LAST_SELECTED_SCANNER_STRATEGY_KEY);
+    if (!raw) {
+      setRestoredSelection(true);
+      return;
+    }
+
+    const id = Number(raw);
+    if (!Number.isFinite(id)) {
+      localStorage.removeItem(LAST_SELECTED_SCANNER_STRATEGY_KEY);
+      setRestoredSelection(true);
+      return;
+    }
+
+    const strategy = strategies.find(s => s.id === id);
+    if (strategy) {
+      selectStrategy(strategy);
+    }
+    setRestoredSelection(true);
+  }, [restoredSelection, selectedId, strategies]);
 
   // ── Select a strategy ─────────────────────────────────────────────────
 
@@ -273,8 +341,204 @@ const CreateScanner: React.FC = () => {
     }).catch(() => {});
   }, [editorTimeframe, editorUniverse]);
 
+  useEffect(() => {
+    if (!applyZerodhaCharges || loadingBrokerageConfig) return;
+    if (brokerageConfig !== DEFAULT_ZERODHA_CONFIG) return;
+
+    setLoadingBrokerageConfig(true);
+    tradeCostAPI.getConfig()
+      .then(res => {
+        const cfg = res?.data;
+        if (!cfg || cfg.error) return;
+        setBrokerageConfig({
+          equity_delivery_brokerage_pct: Number(cfg.equity_delivery_brokerage_pct ?? DEFAULT_ZERODHA_CONFIG.equity_delivery_brokerage_pct),
+          equity_delivery_brokerage_flat: Number(cfg.equity_delivery_brokerage_flat ?? DEFAULT_ZERODHA_CONFIG.equity_delivery_brokerage_flat),
+          equity_intraday_brokerage_pct: Number(cfg.equity_intraday_brokerage_pct ?? DEFAULT_ZERODHA_CONFIG.equity_intraday_brokerage_pct),
+          equity_intraday_brokerage_cap: Number(cfg.equity_intraday_brokerage_cap ?? DEFAULT_ZERODHA_CONFIG.equity_intraday_brokerage_cap),
+          fno_brokerage_flat: Number(cfg.fno_brokerage_flat ?? DEFAULT_ZERODHA_CONFIG.fno_brokerage_flat),
+          stt_equity_delivery: Number(cfg.stt_equity_delivery ?? DEFAULT_ZERODHA_CONFIG.stt_equity_delivery),
+          stt_equity_intraday: Number(cfg.stt_equity_intraday ?? DEFAULT_ZERODHA_CONFIG.stt_equity_intraday),
+          stt_fno_options: Number(cfg.stt_fno_options ?? DEFAULT_ZERODHA_CONFIG.stt_fno_options),
+          stt_fno_futures: Number(cfg.stt_fno_futures ?? DEFAULT_ZERODHA_CONFIG.stt_fno_futures),
+          nse_equity_charge: Number(cfg.nse_equity_charge ?? DEFAULT_ZERODHA_CONFIG.nse_equity_charge),
+          nse_fno_charge: Number(cfg.nse_fno_charge ?? DEFAULT_ZERODHA_CONFIG.nse_fno_charge),
+          gst_pct: Number(cfg.gst_pct ?? DEFAULT_ZERODHA_CONFIG.gst_pct),
+          sebi_charges_per_crore: Number(cfg.sebi_charges_per_crore ?? DEFAULT_ZERODHA_CONFIG.sebi_charges_per_crore),
+          stamp_duty_pct: Number(cfg.stamp_duty_pct ?? DEFAULT_ZERODHA_CONFIG.stamp_duty_pct),
+          stamp_duty_cap: Number(cfg.stamp_duty_cap ?? DEFAULT_ZERODHA_CONFIG.stamp_duty_cap),
+        });
+      })
+      .catch(() => {})
+      .finally(() => setLoadingBrokerageConfig(false));
+  }, [applyZerodhaCharges, brokerageConfig, loadingBrokerageConfig]);
+
+  const adjustedBacktestResult = useMemo(() => {
+    if (!backtestResult || !applyZerodhaCharges) return null;
+
+    const currentStrategy = strategies.find(s => s.id === selectedId);
+    const strategyType = currentStrategy?.strategy_type || editorType;
+    const segment = strategyType.includes('Options') ? 'FNO' : 'EQUITY';
+    const productType: 'DELIVERY' | 'INTRADAY' | 'OPTIONS' | 'FUTURES' = strategyType === 'Equity Intraday'
+      ? 'INTRADAY'
+      : strategyType === 'Options Selling' || strategyType === 'Options Buying'
+      ? 'OPTIONS'
+      : 'DELIVERY';
+
+    const computeSideCharge = (tradeValue: number, side: 'BUY' | 'SELL') => {
+      let brokerage = 0;
+      if (segment === 'EQUITY') {
+        if (productType === 'DELIVERY') {
+          brokerage = Math.max(
+            tradeValue * (brokerageConfig.equity_delivery_brokerage_pct / 100),
+            brokerageConfig.equity_delivery_brokerage_flat,
+          );
+        } else {
+          brokerage = Math.min(
+            tradeValue * (brokerageConfig.equity_intraday_brokerage_pct / 100),
+            brokerageConfig.equity_intraday_brokerage_cap,
+          );
+        }
+      } else {
+        brokerage = brokerageConfig.fno_brokerage_flat;
+      }
+
+      let stt = 0;
+      if (side === 'SELL') {
+        if (segment === 'EQUITY') {
+          stt = tradeValue * ((productType === 'DELIVERY' ? brokerageConfig.stt_equity_delivery : brokerageConfig.stt_equity_intraday) / 100);
+        } else {
+          stt = tradeValue * (brokerageConfig.stt_fno_options / 100);
+        }
+      }
+
+      const exchangeCharge = tradeValue * ((segment === 'EQUITY' ? brokerageConfig.nse_equity_charge : brokerageConfig.nse_fno_charge) / 100);
+      const gst = (brokerage + exchangeCharge) * (brokerageConfig.gst_pct / 100);
+      const sebi = (tradeValue / 10000000) * brokerageConfig.sebi_charges_per_crore;
+      const stamp = side === 'BUY'
+        ? Math.min(tradeValue * (brokerageConfig.stamp_duty_pct / 100), brokerageConfig.stamp_duty_cap)
+        : 0;
+
+      return brokerage + stt + exchangeCharge + gst + sebi + stamp;
+    };
+
+    const daysSpan = Math.max(1, Math.round((new Date(backtestResult.end_date).getTime() - new Date(backtestResult.start_date).getTime()) / (1000 * 60 * 60 * 24)));
+    let capital = backtestResult.initial_capital;
+    let totalCharges = 0;
+    const adjustedTrades: (BacktestTrade & { charges: number })[] = [];
+    const netCurve: { date: string; equity: number; symbol?: string; pnl_pct?: number }[] = [
+      { date: backtestResult.start_date, equity: capital },
+    ];
+
+    for (const trade of backtestResult.all_trades) {
+      const tradeCapital = capital * (BACKTEST_POSITION_SIZE_PCT / 100);
+      const quantity = trade.entry_price > 0 ? tradeCapital / trade.entry_price : 0;
+      const entryValue = quantity * trade.entry_price;
+      const exitValue = quantity * trade.exit_price;
+
+      const entrySide = backtestResult.direction === 'BUY' ? 'BUY' : 'SELL';
+      const exitSide = backtestResult.direction === 'BUY' ? 'SELL' : 'BUY';
+      const charges = computeSideCharge(entryValue, entrySide) + computeSideCharge(exitValue, exitSide);
+      totalCharges += charges;
+
+      const grossPnlAmount = tradeCapital * (trade.pnl_pct / 100);
+      const netPnlAmount = grossPnlAmount - charges;
+      const netPnlPct = tradeCapital > 0 ? (netPnlAmount / tradeCapital) * 100 : 0;
+      capital += netPnlAmount;
+
+      adjustedTrades.push({
+        ...trade,
+        pnl_pct: Number(netPnlPct.toFixed(2)),
+        charges: Number(charges.toFixed(2)),
+      });
+
+      netCurve.push({
+        date: trade.exit_date,
+        equity: Number(capital.toFixed(2)),
+        symbol: trade.symbol,
+        pnl_pct: Number(netPnlPct.toFixed(2)),
+      });
+    }
+
+    const winners = adjustedTrades.filter(t => t.pnl_pct > 0);
+    const losers = adjustedTrades.filter(t => t.pnl_pct <= 0);
+    const totalTrades = adjustedTrades.length;
+    const totalReturn = ((capital - backtestResult.initial_capital) / backtestResult.initial_capital) * 100;
+    const annualReturn = totalReturn * (365 / daysSpan);
+    const grossProfit = winners.reduce((sum, t) => sum + t.pnl_pct, 0);
+    const grossLoss = Math.abs(losers.reduce((sum, t) => sum + t.pnl_pct, 0));
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 999 : 0);
+    const avgPnl = totalTrades > 0 ? adjustedTrades.reduce((sum, t) => sum + t.pnl_pct, 0) / totalTrades : 0;
+    const avgWin = winners.length > 0 ? winners.reduce((sum, t) => sum + t.pnl_pct, 0) / winners.length : 0;
+    const avgLoss = losers.length > 0 ? losers.reduce((sum, t) => sum + t.pnl_pct, 0) / losers.length : 0;
+    const maxWin = totalTrades > 0 ? Math.max(...adjustedTrades.map(t => t.pnl_pct)) : 0;
+    const maxLoss = totalTrades > 0 ? Math.min(...adjustedTrades.map(t => t.pnl_pct)) : 0;
+    const winRate = totalTrades > 0 ? (winners.length / totalTrades) * 100 : 0;
+
+    let peak = netCurve[0]?.equity || backtestResult.initial_capital;
+    let maxDrawdown = 0;
+    for (const p of netCurve) {
+      if (p.equity > peak) peak = p.equity;
+      const dd = peak > 0 ? ((peak - p.equity) / peak) * 100 : 0;
+      if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+
+    const grouped = new Map<string, BacktestTrade[]>();
+    for (const trade of adjustedTrades) {
+      if (!grouped.has(trade.symbol)) grouped.set(trade.symbol, []);
+      grouped.get(trade.symbol)!.push(trade);
+    }
+    const perSymbolAdjusted: BacktestSymbolResult[] = Array.from(grouped.entries()).map(([symbol, trades]) => {
+      const w = trades.filter(t => t.pnl_pct > 0);
+      const l = trades.filter(t => t.pnl_pct <= 0);
+      const total = trades.length;
+      const totalPnl = trades.reduce((sum, t) => sum + t.pnl_pct, 0);
+      const avg = total > 0 ? totalPnl / total : 0;
+      const avgHolding = total > 0 ? trades.reduce((sum, t) => sum + (t.holding_bars || 0), 0) / total : 0;
+      return {
+        symbol,
+        total_trades: total,
+        win_rate: Number((total > 0 ? (w.length / total) * 100 : 0).toFixed(1)),
+        total_pnl_pct: Number(totalPnl.toFixed(2)),
+        avg_pnl_pct: Number(avg.toFixed(2)),
+        max_win_pct: Number((total > 0 ? Math.max(...trades.map(t => t.pnl_pct)) : 0).toFixed(2)),
+        max_loss_pct: Number((total > 0 ? Math.min(...trades.map(t => t.pnl_pct)) : 0).toFixed(2)),
+        avg_holding_bars: Number(avgHolding.toFixed(1)),
+      };
+    });
+
+    return {
+      ...backtestResult,
+      final_capital: Number(capital.toFixed(2)),
+      equity_curve: netCurve,
+      per_symbol: perSymbolAdjusted,
+      all_trades: adjustedTrades,
+      summary: {
+        ...backtestResult.summary,
+        total_trades: totalTrades,
+        winners: winners.length,
+        losers: losers.length,
+        win_rate: Number(winRate.toFixed(1)),
+        total_return_pct: Number(totalReturn.toFixed(2)),
+        annual_return_pct: Number(annualReturn.toFixed(2)),
+        max_drawdown_pct: Number(maxDrawdown.toFixed(2)),
+        profit_factor: Number((profitFactor === 999 ? 999 : profitFactor).toFixed(2)),
+        avg_pnl_pct: Number(avgPnl.toFixed(2)),
+        avg_win_pct: Number(avgWin.toFixed(2)),
+        avg_loss_pct: Number(avgLoss.toFixed(2)),
+        max_win_pct: Number(maxWin.toFixed(2)),
+        max_loss_pct: Number(maxLoss.toFixed(2)),
+      },
+      charges_summary: {
+        total_charges: Number(totalCharges.toFixed(2)),
+      },
+    } as BacktestResult & { charges_summary: { total_charges: number } };
+  }, [applyZerodhaCharges, backtestResult, brokerageConfig, editorType, strategies, selectedId]);
+
+  const displayedBacktestResult = adjustedBacktestResult || backtestResult;
+
   const selectStrategy = (strategy: Strategy) => {
     setSelectedId(strategy.id);
+    localStorage.setItem(LAST_SELECTED_SCANNER_STRATEGY_KEY, String(strategy.id));
     setEditorName(strategy.name);
     setEditorDescription(strategy.description);
     setEditorType(strategy.strategy_type);
@@ -287,14 +551,27 @@ const CreateScanner: React.FC = () => {
     setEditorAutoQty(strategy.auto_amount || 10000);
     setEditing(true);
     setScanResult(null);
-    setBacktestResult(null);
-    setShowBacktestPanel(false);
+
+    if (strategy.last_backtest_result) {
+      setBacktestResult(strategy.last_backtest_result);
+      setShowBacktestPanel(true);
+      if (strategy.last_backtest_result.start_date) {
+        setBtStartDate(strategy.last_backtest_result.start_date);
+      }
+      if (strategy.last_backtest_result.end_date) {
+        setBtEndDate(strategy.last_backtest_result.end_date);
+      }
+    } else {
+      setBacktestResult(null);
+      setShowBacktestPanel(false);
+    }
   };
 
   // ── New strategy ──────────────────────────────────────────────────────
 
   const newStrategy = () => {
     setSelectedId(null);
+    localStorage.removeItem(LAST_SELECTED_SCANNER_STRATEGY_KEY);
     setEditorName('');
     setEditorDescription('');
     setEditorType('Equity Swing');
@@ -416,6 +693,7 @@ const CreateScanner: React.FC = () => {
       showToast('success', 'Strategy deleted');
       if (selectedId === id) {
         setSelectedId(null);
+        localStorage.removeItem(LAST_SELECTED_SCANNER_STRATEGY_KEY);
         setEditing(false);
       }
       await loadData();
@@ -488,6 +766,15 @@ const CreateScanner: React.FC = () => {
         max_open_trades: 5,
       });
       setBacktestResult(res.data);
+      setStrategies(prev => prev.map(strategy => (
+        strategy.id === selectedId
+          ? {
+              ...strategy,
+              last_backtest_result: res.data,
+              last_backtest_at: new Date().toISOString(),
+            }
+          : strategy
+      )));
       const s = res.data.summary;
       if (s.total_trades === 0) {
         showToast('info', 'No trades generated in backtest period');
@@ -1267,26 +1554,48 @@ const CreateScanner: React.FC = () => {
                         </span>
                       )}
                     </div>
+                    <div className="flex items-center justify-between mb-3 bg-slate-800/40 border border-slate-700 rounded-lg px-2.5 py-2">
+                      <div className="text-[10px] text-slate-400">
+                        {applyZerodhaCharges ? 'Net after Zerodha charges' : 'Gross (without brokerage/charges)'}
+                      </div>
+                      <button
+                        onClick={() => setApplyZerodhaCharges(v => !v)}
+                        className={`relative w-10 h-5 rounded-full transition-colors ${
+                          applyZerodhaCharges ? 'bg-green-500' : 'bg-slate-700'
+                        }`}
+                        title="Toggle Zerodha charges in backtest metrics"
+                      >
+                        <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                          applyZerodhaCharges ? 'translate-x-5' : 'translate-x-0.5'
+                        }`} />
+                      </button>
+                    </div>
+                    {applyZerodhaCharges && (displayedBacktestResult as any)?.charges_summary && (
+                      <div className="mb-3 text-[10px] text-orange-300 bg-orange-500/10 border border-orange-500/20 rounded-lg px-2.5 py-2">
+                        Total estimated charges: ₹{((displayedBacktestResult as any).charges_summary.total_charges || 0).toLocaleString()}
+                        {loadingBrokerageConfig ? ' (loading config...)' : ''}
+                      </div>
+                    )}
 
                     {/* Summary metrics */}
                     <div className="grid grid-cols-2 gap-2 mb-3">
                       <div className="bg-slate-800/70 rounded-lg p-2.5 text-center">
                         <p className="text-[10px] text-slate-500 uppercase">Total Return</p>
-                        <p className={`text-base font-bold ${backtestResult.summary.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {backtestResult.summary.total_return_pct >= 0 ? '+' : ''}{backtestResult.summary.total_return_pct}%
+                        <p className={`text-base font-bold ${displayedBacktestResult!.summary.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {displayedBacktestResult!.summary.total_return_pct >= 0 ? '+' : ''}{displayedBacktestResult!.summary.total_return_pct}%
                         </p>
                       </div>
                       <div className="bg-slate-800/70 rounded-lg p-2.5 text-center">
                         <p className="text-[10px] text-slate-500 uppercase">Win Rate</p>
-                        <p className="text-base font-bold text-white">{backtestResult.summary.win_rate}%</p>
+                        <p className="text-base font-bold text-white">{displayedBacktestResult!.summary.win_rate}%</p>
                       </div>
                       <div className="bg-slate-800/70 rounded-lg p-2.5 text-center">
                         <p className="text-[10px] text-slate-500 uppercase">Total Trades</p>
-                        <p className="text-base font-bold text-white">{backtestResult.summary.total_trades}</p>
+                        <p className="text-base font-bold text-white">{displayedBacktestResult!.summary.total_trades}</p>
                       </div>
                       <div className="bg-slate-800/70 rounded-lg p-2.5 text-center">
                         <p className="text-[10px] text-slate-500 uppercase">Max Drawdown</p>
-                        <p className="text-base font-bold text-red-400">-{backtestResult.summary.max_drawdown_pct}%</p>
+                        <p className="text-base font-bold text-red-400">-{displayedBacktestResult!.summary.max_drawdown_pct}%</p>
                       </div>
                     </div>
 
@@ -1294,7 +1603,7 @@ const CreateScanner: React.FC = () => {
                     <div className="bg-slate-800/50 rounded-lg p-2.5 mb-3 flex items-center justify-between">
                       <span className="text-xs text-slate-400">Capital</span>
                       <span className="text-xs text-white">
-                        ₹{backtestResult.initial_capital.toLocaleString()} → ₹{backtestResult.final_capital.toLocaleString()}
+                        ₹{displayedBacktestResult!.initial_capital.toLocaleString()} → ₹{displayedBacktestResult!.final_capital.toLocaleString()}
                       </span>
                     </div>
 
@@ -1302,37 +1611,37 @@ const CreateScanner: React.FC = () => {
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 mb-3 text-xs">
                       <div className="flex justify-between">
                         <span className="text-slate-500">Sharpe</span>
-                        <span className="text-white">{backtestResult.summary.sharpe_ratio}</span>
+                        <span className="text-white">{displayedBacktestResult!.summary.sharpe_ratio}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">P. Factor</span>
-                        <span className="text-white">{backtestResult.summary.profit_factor}</span>
+                        <span className="text-white">{displayedBacktestResult!.summary.profit_factor}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Avg Win</span>
-                        <span className="text-green-400">+{backtestResult.summary.avg_win_pct}%</span>
+                        <span className="text-green-400">+{displayedBacktestResult!.summary.avg_win_pct}%</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Avg Loss</span>
-                        <span className="text-red-400">{backtestResult.summary.avg_loss_pct}%</span>
+                        <span className="text-red-400">{displayedBacktestResult!.summary.avg_loss_pct}%</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Max Win</span>
-                        <span className="text-green-400">+{backtestResult.summary.max_win_pct}%</span>
+                        <span className="text-green-400">+{displayedBacktestResult!.summary.max_win_pct}%</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Max Loss</span>
-                        <span className="text-red-400">{backtestResult.summary.max_loss_pct}%</span>
+                        <span className="text-red-400">{displayedBacktestResult!.summary.max_loss_pct}%</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Annual Ret</span>
-                        <span className={backtestResult.summary.annual_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}>
-                          {backtestResult.summary.annual_return_pct}%
+                        <span className={displayedBacktestResult!.summary.annual_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}>
+                          {displayedBacktestResult!.summary.annual_return_pct}%
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Symbols</span>
-                        <span className="text-white">{backtestResult.summary.symbols_traded}/{backtestResult.summary.symbols_scanned}</span>
+                        <span className="text-white">{displayedBacktestResult!.summary.symbols_traded}/{displayedBacktestResult!.summary.symbols_scanned}</span>
                       </div>
                     </div>
 
@@ -1354,12 +1663,12 @@ const CreateScanner: React.FC = () => {
                     </div>
 
                     {/* Tab: Equity Curve Summary */}
-                    {btTab === 'summary' && backtestResult.equity_curve.length > 1 && (
+                    {btTab === 'summary' && displayedBacktestResult!.equity_curve.length > 1 && (
                       <div className="space-y-2">
                         <p className="text-[10px] text-slate-500 uppercase">Equity Curve</p>
                         <div className="h-28 bg-slate-800/50 rounded-lg p-2 relative">
                           {(() => {
-                            const curve = backtestResult.equity_curve;
+                            const curve = displayedBacktestResult!.equity_curve;
                             const minEq = Math.min(...curve.map(c => c.equity));
                             const maxEq = Math.max(...curve.map(c => c.equity));
                             const range = maxEq - minEq || 1;
@@ -1381,16 +1690,16 @@ const CreateScanner: React.FC = () => {
                         <div className="flex items-center gap-1">
                           <div
                             className="h-2 bg-green-500 rounded-l"
-                            style={{ width: `${backtestResult.summary.win_rate}%` }}
+                            style={{ width: `${displayedBacktestResult!.summary.win_rate}%` }}
                           />
                           <div
                             className="h-2 bg-red-500 rounded-r"
-                            style={{ width: `${100 - backtestResult.summary.win_rate}%` }}
+                            style={{ width: `${100 - displayedBacktestResult!.summary.win_rate}%` }}
                           />
                         </div>
                         <div className="flex justify-between text-[10px]">
-                          <span className="text-green-400">{backtestResult.summary.winners}W</span>
-                          <span className="text-red-400">{backtestResult.summary.losers}L</span>
+                          <span className="text-green-400">{displayedBacktestResult!.summary.winners}W</span>
+                          <span className="text-red-400">{displayedBacktestResult!.summary.losers}L</span>
                         </div>
                       </div>
                     )}
@@ -1398,7 +1707,7 @@ const CreateScanner: React.FC = () => {
                     {/* Tab: Per Symbol */}
                     {btTab === 'symbols' && (
                       <div className="max-h-[400px] overflow-y-auto custom-scrollbar space-y-1.5">
-                        {backtestResult.per_symbol.length > 0 ? backtestResult.per_symbol.map(ps => (
+                        {displayedBacktestResult!.per_symbol.length > 0 ? displayedBacktestResult!.per_symbol.map(ps => (
                           <div key={ps.symbol} className="bg-slate-800/50 rounded-lg p-2.5 border border-slate-700/50">
                             <div className="flex items-center justify-between mb-1">
                               <span className="text-xs font-semibold text-white">{ps.symbol}</span>
@@ -1421,7 +1730,7 @@ const CreateScanner: React.FC = () => {
                     {/* Tab: Trade Log */}
                     {btTab === 'trades' && (
                       <div className="max-h-[400px] overflow-y-auto custom-scrollbar space-y-1">
-                        {backtestResult.all_trades.length > 0 ? backtestResult.all_trades.map((t, i) => (
+                        {displayedBacktestResult!.all_trades.length > 0 ? displayedBacktestResult!.all_trades.map((t: any, i) => (
                           <div key={i} className="bg-slate-800/50 rounded p-2 border border-slate-700/30 text-[10px]">
                             <div className="flex items-center justify-between mb-0.5">
                               <span className="font-semibold text-white">{t.symbol}</span>
@@ -1438,6 +1747,11 @@ const CreateScanner: React.FC = () => {
                                 'bg-blue-500/20 text-blue-300'
                               }`}>{t.exit_reason}</span>
                             </div>
+                            {applyZerodhaCharges && t.charges !== undefined && (
+                              <div className="text-orange-300 mt-0.5">
+                                Charges: ₹{Number(t.charges).toFixed(2)}
+                              </div>
+                            )}
                             <div className="text-slate-600 mt-0.5">
                               {t.entry_date} → {t.exit_date} ({t.holding_bars} bars)
                             </div>

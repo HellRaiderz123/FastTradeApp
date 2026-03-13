@@ -34,8 +34,19 @@ from sqlalchemy.orm import Session
 
 from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode
 from app.core.indicators.technical import TechnicalIndicators
+from app.core.condition_strategy_lab import (
+    expand_strategies_with_exit_variants,
+    generate_candidate_strategies,
+    generate_exit_param_combinations,
+    score_backtest_summary,
+    select_diverse_top,
+    strategy_family,
+)
+from app.core.learning.scanner_signal_history import mark_signal_execution, record_scanner_signal
+from app.core.utils.time import now_ist
 from app.config.market_config import get_symbols
 from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily
+from app.db.models_scanner_signal import ScannerSignalHistory
 from app.db.session import SessionLocal
 from app.services.zerodha import KiteConnectService
 
@@ -130,6 +141,36 @@ def _next_id(strategies: List[dict]) -> int:
     if not strategies:
         return 1
     return max(s.get("id", 0) for s in strategies) + 1
+
+
+def _serialize_signal_history(row: ScannerSignalHistory) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "strategy_id": row.strategy_id,
+        "strategy_name": row.strategy_name,
+        "symbol": row.symbol,
+        "direction": row.direction,
+        "timeframe": row.timeframe,
+        "universe": row.universe,
+        "source": row.source,
+        "status": row.status,
+        "signal_date": row.signal_date.isoformat() if row.signal_date else None,
+        "first_seen_at": row.first_seen_at,
+        "last_seen_at": row.last_seen_at,
+        "executed_at": row.executed_at,
+        "trigger_count": row.trigger_count,
+        "auto_execute": row.auto_execute,
+        "execution_mode": row.execution_mode,
+        "quantity": row.quantity,
+        "ltp": row.ltp,
+        "change_percent": row.change_percent,
+        "order_id": row.order_id,
+        "indicators": row.indicators_json,
+        "signal_payload": row.signal_payload,
+        "execution_payload": row.execution_payload,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
 
 
 # ── Indicator evaluation engine ─────────────────────────────────────────────
@@ -918,12 +959,29 @@ async def scan_strategy(
     _save_strategies(strategies)
 
     mode = get_execution_mode()
+    history_rows = []
+    for signal in signals:
+        history = record_scanner_signal(
+            db,
+            strategy_id=strategy_id,
+            strategy_name=strategy["name"],
+            symbol=signal["symbol"],
+            direction=strategy.get("direction", "BUY"),
+            timeframe=strategy.get("timeframe"),
+            universe=universe,
+            signal_payload=signal,
+            auto_execute=bool(strategy.get("auto_scan_enabled")),
+            execution_mode=mode,
+        )
+        if history:
+            history_rows.append(_serialize_signal_history(history))
 
     return {
         "strategy_id": strategy_id,
         "strategy_name": strategy["name"],
         "direction": strategy.get("direction", "BUY"),
         "signals": signals,
+        "signal_history": history_rows,
         "total_scanned": scanned,
         "matches_found": len(signals),
         "execution_mode": mode,
@@ -941,8 +999,12 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
     symbol = body.get("symbol")
     direction = body.get("direction", "BUY")
     strategy_name = body.get("strategy_name", "Condition Scanner")
+    strategy_id = body.get("strategy_id")
     exit_config = body.get("exit_config", {})
     quantity = body.get("quantity", 1)
+    timeframe = body.get("timeframe")
+    universe = body.get("universe")
+    signal_history_id = body.get("signal_history_id")
 
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol required")
@@ -981,6 +1043,27 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
         "mode": mode,
         "timestamp": datetime.now().isoformat(),
     }
+
+    history = record_scanner_signal(
+        db,
+        strategy_id=strategy_id,
+        strategy_name=strategy_name,
+        symbol=symbol,
+        direction=direction,
+        timeframe=timeframe,
+        universe=universe,
+        signal_payload={
+            "symbol": symbol,
+            "ltp": ltp,
+            "change_percent": body.get("change_percent"),
+            "indicators": body.get("indicators"),
+            "timestamp": order["timestamp"],
+        },
+        auto_execute=bool(body.get("auto_executed", False)),
+        execution_mode=mode,
+    )
+    if history and not signal_history_id:
+        signal_history_id = history.id
 
     if is_paper_mode(mode):
         # Paper trade — just log it
@@ -1023,6 +1106,20 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
         order["fill_price"] = ltp
         logger.info(f"🟡 Dry-run trade: {direction} {symbol} @ ₹{ltp}")
 
+    mark_signal_execution(
+        db,
+        history_id=signal_history_id,
+        strategy_id=strategy_id,
+        strategy_name=strategy_name,
+        symbol=symbol,
+        direction=direction,
+        status=order.get("status", "SIGNAL_GENERATED"),
+        execution_payload=order,
+        quantity=quantity,
+        execution_mode=mode,
+        order_id=order.get("order_id"),
+    )
+
     # Persist to execution log
     try:
         from app.db.models_auto_trader import AutoTraderLog
@@ -1045,7 +1142,42 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
     return {
         "order": order,
         "execution_mode": mode,
-        "message": f"{'Paper' if is_paper_mode(mode) else 'Live' if is_live_mode(mode) else 'Dry-run'} order for {direction} {symbol} @ ₹{ltp}"
+        "message": f"{'Paper' if is_paper_mode(mode) else 'Live' if is_live_mode(mode) else 'Dry-run'} order for {direction} {symbol} @ ₹{ltp}",
+        "signal_history_id": signal_history_id,
+    }
+
+
+@router.get("/history")
+async def get_signal_history(
+    limit: int = Query(50, ge=1, le=500),
+    days: int = Query(30, ge=1, le=365),
+    strategy_id: Optional[int] = None,
+    symbol: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return recent persistent condition-scanner signal history."""
+    query = db.query(ScannerSignalHistory).order_by(
+        ScannerSignalHistory.signal_date.desc(),
+        ScannerSignalHistory.last_seen_at.desc(),
+    )
+
+    cutoff_date = now_ist().date() - timedelta(days=days - 1)
+    query = query.filter(ScannerSignalHistory.signal_date >= cutoff_date)
+
+    if strategy_id is not None:
+        query = query.filter(ScannerSignalHistory.strategy_id == strategy_id)
+    if symbol:
+        query = query.filter(ScannerSignalHistory.symbol == symbol.upper())
+    if status:
+        query = query.filter(ScannerSignalHistory.status == status.upper())
+
+    rows = query.limit(limit).all()
+    return {
+        "history": [_serialize_signal_history(row) for row in rows],
+        "count": len(rows),
+        "days": days,
+        "limit": limit,
     }
 
 
@@ -1144,6 +1276,28 @@ class BacktestRequest(BaseModel):
     initial_capital: float = 100000.0
     position_size_pct: float = 10.0    # % of capital per trade
     max_open_trades: int = 5
+
+
+class StrategyDiscoveryRequest(BaseModel):
+    timeframe: str = "Day"
+    universe: str = "NIFTY50"
+    max_candidates: int = Field(default=120, ge=10, le=250)
+    top_n: int = Field(default=5, ge=1, le=20)
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    initial_capital: float = 100000.0
+    position_size_pct: float = 10.0
+    max_open_trades: int = 5
+    max_per_family: int = Field(default=1, ge=1, le=10)
+    fill_remaining: bool = False
+    min_annual_return: float = Field(default=0.0, ge=0.0, le=500.0)
+    optimize_exits: bool = False
+    exit_optimize_on_top: int = Field(default=20, ge=1, le=200)
+    sl_grid: List[float] = Field(default_factory=lambda: [1.5, 2.0, 2.5, 3.0, 4.0, 5.0])
+    tp_grid: List[float] = Field(default_factory=lambda: [4.0, 6.0, 8.0, 10.0, 12.0, 15.0, 18.0])
+    tsl_grid: List[float] = Field(default_factory=lambda: [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0])
+    max_exit_combos: int = Field(default=50, ge=1, le=500)
+    save_top_strategies: bool = False
 
 
 def _backtest_symbol(
@@ -1304,30 +1458,19 @@ def _backtest_symbol(
     }
 
 
-@router.post("/backtest/{strategy_id}")
-async def run_backtest(
-    strategy_id: int,
-    req: BacktestRequest = BacktestRequest(),
-    db: Session = Depends(get_db),
-):
-    """
-    Backtest a condition-based strategy across its universe.
-    Uses the candle timeframe matching the strategy (1m/5m/15m/1h/daily),
-    evaluates entry conditions bar-by-bar, and applies SL/TP/TSL exits.
-    Returns per-symbol and aggregate results.
-    """
-    strategies = _load_strategies()
-    strategy = next((s for s in strategies if s["id"] == strategy_id), None)
-    if not strategy:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-
+def _run_backtest_for_strategy_payload(
+    strategy: Dict[str, Any],
+    req: BacktestRequest,
+    db: Session,
+) -> Dict[str, Any]:
+    """Run the condition-scanner backtest for an in-memory strategy payload."""
+    strategy_id = strategy.get("id")
     conditions = strategy.get("entry_conditions", [])
     direction = strategy.get("direction", "BUY")
     exit_config = strategy.get("exit_config", {})
     universe = strategy.get("universe", "NIFTY50")
     timeframe = strategy.get("timeframe", "Day")
 
-    # ── Resolve candle model from strategy timeframe ───────────────────
     candle_info = TIMEFRAME_CANDLE_MAP.get(timeframe)
     if not candle_info:
         raise HTTPException(
@@ -1335,9 +1478,8 @@ async def run_backtest(
             detail=f"Unsupported timeframe '{timeframe}'. Supported: {list(TIMEFRAME_CANDLE_MAP.keys())}",
         )
     CandleModel, date_attr, table_label = candle_info
-    date_col = getattr(CandleModel, date_attr)  # the SQLAlchemy column
+    date_col = getattr(CandleModel, date_attr)
 
-    # Parse date range
     if req.end_date:
         end_date = datetime.strptime(req.end_date, "%Y-%m-%d").date()
     else:
@@ -1346,13 +1488,8 @@ async def run_backtest(
     if req.start_date:
         start_date = datetime.strptime(req.start_date, "%Y-%m-%d").date()
     else:
-        # Intraday tables typically have less history — default shorter
-        if date_attr == "timestamp":
-            start_date = end_date - timedelta(days=30)
-        else:
-            start_date = end_date - timedelta(days=365)
+        start_date = end_date - timedelta(days=30 if date_attr == "timestamp" else 365)
 
-    # For intraday candles, convert date boundaries to datetimes
     if date_attr == "timestamp":
         start_dt = datetime.combine(start_date, datetime.min.time())
         end_dt = datetime.combine(end_date, datetime.max.time())
@@ -1360,20 +1497,18 @@ async def run_backtest(
             start_date - timedelta(days=30), datetime.min.time()
         )
     else:
-        start_dt = start_date  # type: ignore
-        end_dt = end_date      # type: ignore
-        lookback_start_dt = start_date - timedelta(days=120)  # type: ignore
+        start_dt = start_date
+        end_dt = end_date
+        lookback_start_dt = start_date - timedelta(days=120)
 
-    # Resolve symbols
-    symbols = get_symbols(universe)
+    instruments = strategy.get("instruments", [])
+    symbols = instruments if instruments else get_symbols(universe)
 
     symbol_results = []
-    equity_curve: List[Dict[str, Any]] = []
     total_candles_used = 0
     symbols_with_data = 0
 
     for symbol in symbols:
-        # Fetch candles within date range (plus lookback for indicator warmup)
         candles = (
             db.query(CandleModel)
             .filter(
@@ -1385,22 +1520,20 @@ async def run_backtest(
             .all()
         )
 
-        min_bars = 60 if date_attr == "date" else 20  # fewer bars needed for intraday
+        min_bars = 60 if date_attr == "date" else 20
         if len(candles) < min_bars:
             continue
 
         total_candles_used += len(candles)
         symbols_with_data += 1
 
-        # Find the index where actual start_date begins (after lookback warmup)
         start_idx = 0
-        for idx, c in enumerate(candles):
-            bar_d = _get_bar_date(c, date_attr)
+        for idx, candle in enumerate(candles):
+            bar_d = _get_bar_date(candle, date_attr)
             if bar_d >= start_date:
                 start_idx = idx
                 break
 
-        # Only backtest from start_idx onwards, but keep full candle array for indicator calc
         lookback = max(start_idx, min_bars)
 
         result = _backtest_symbol(
@@ -1418,7 +1551,6 @@ async def run_backtest(
         if result["total_trades"] > 0:
             symbol_results.append(result)
 
-    # If no data at all for this timeframe, return helpful error
     if symbols_with_data == 0:
         return {
             "strategy_id": strategy_id,
@@ -1429,9 +1561,7 @@ async def run_backtest(
             "end_date": str(end_date),
             "initial_capital": req.initial_capital,
             "final_capital": req.initial_capital,
-            "error": f"No {timeframe} candle data found in table '{table_label}'. "
-                     f"Available data: candles_daily (54K rows), candles_15m (4.7K rows). "
-                     f"Load {timeframe} candles first or change strategy timeframe.",
+            "error": f"No {timeframe} candle data found in table '{table_label}'. Load {timeframe} candles first or change strategy timeframe.",
             "summary": {
                 "total_trades": 0, "winners": 0, "losers": 0, "win_rate": 0,
                 "total_return_pct": 0, "annual_return_pct": 0, "max_drawdown_pct": 0,
@@ -1447,38 +1577,34 @@ async def run_backtest(
             "all_trades": [],
         }
 
-    # ── Aggregate metrics ──────────────────────────────────────────────
     all_trades = []
     for sr in symbol_results:
-        for t in sr["trades"]:
-            all_trades.append({**t, "symbol": sr["symbol"]})
+        for trade in sr["trades"]:
+            all_trades.append({**trade, "symbol": sr["symbol"]})
 
-    # Sort all trades by entry date for equity curve
     all_trades.sort(key=lambda t: t.get("entry_date", ""))
 
     total_trades = len(all_trades)
     winners = [t for t in all_trades if t["pnl_pct"] > 0]
     losers = [t for t in all_trades if t["pnl_pct"] <= 0]
 
-    # Build equity curve
     capital = req.initial_capital
     curves = [{"date": str(start_date), "equity": capital}]
-    for t in all_trades:
+    for trade in all_trades:
         trade_capital = capital * (req.position_size_pct / 100)
-        pnl_amount = trade_capital * (t["pnl_pct"] / 100)
+        pnl_amount = trade_capital * (trade["pnl_pct"] / 100)
         capital += pnl_amount
         curves.append({
-            "date": t.get("exit_date", t.get("entry_date", "")),
+            "date": trade.get("exit_date", trade.get("entry_date", "")),
             "equity": round(capital, 2),
-            "symbol": t.get("symbol", ""),
-            "pnl_pct": t["pnl_pct"],
+            "symbol": trade.get("symbol", ""),
+            "pnl_pct": trade["pnl_pct"],
         })
 
-    # Max drawdown
     peak_equity = req.initial_capital
-    max_dd = 0
-    for pt in curves:
-        eq = pt["equity"]
+    max_dd = 0.0
+    for point in curves:
+        eq = point["equity"]
         if eq > peak_equity:
             peak_equity = eq
         dd = ((peak_equity - eq) / peak_equity) * 100 if peak_equity > 0 else 0
@@ -1489,12 +1615,10 @@ async def run_backtest(
     days_span = (end_date - start_date).days or 1
     annual_return = total_return * (365 / days_span)
 
-    # Profit factor
     gross_profit = sum(t["pnl_pct"] for t in winners)
     gross_loss = abs(sum(t["pnl_pct"] for t in losers))
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf') if gross_profit > 0 else 0
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float("inf") if gross_profit > 0 else 0
 
-    # Sharpe ratio (using trade returns)
     if total_trades > 1:
         returns = [t["pnl_pct"] for t in all_trades]
         mean_r = sum(returns) / len(returns)
@@ -1520,7 +1644,7 @@ async def run_backtest(
             "total_return_pct": round(total_return, 2),
             "annual_return_pct": round(annual_return, 2),
             "max_drawdown_pct": round(max_dd, 2),
-            "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else 999,
+            "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else 999,
             "sharpe_ratio": round(sharpe, 2),
             "avg_pnl_pct": round(sum(t["pnl_pct"] for t in all_trades) / total_trades, 2) if total_trades > 0 else 0,
             "avg_win_pct": round(sum(t["pnl_pct"] for t in winners) / len(winners), 2) if winners else 0,
@@ -1560,6 +1684,213 @@ async def run_backtest(
             }
             for t in all_trades
         ],
+    }
+
+
+@router.post("/backtest/{strategy_id}")
+async def run_backtest(
+    strategy_id: int,
+    req: BacktestRequest = BacktestRequest(),
+    db: Session = Depends(get_db),
+):
+    """
+    Backtest a condition-based strategy across its universe.
+    Uses the candle timeframe matching the strategy (1m/5m/15m/1h/daily),
+    evaluates entry conditions bar-by-bar, and applies SL/TP/TSL exits.
+    Returns per-symbol and aggregate results.
+    """
+    strategies = _load_strategies()
+    strategy = next((s for s in strategies if s["id"] == strategy_id), None)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    result = _run_backtest_for_strategy_payload(strategy, req, db)
+
+    strategy["last_backtest_result"] = result
+    strategy["last_backtest_at"] = datetime.now().isoformat()
+    strategy["updated_at"] = datetime.now().isoformat()
+    _save_strategies(strategies)
+
+    return result
+
+
+@router.post("/discover")
+async def discover_strategies(
+    req: StrategyDiscoveryRequest,
+    db: Session = Depends(get_db),
+):
+    """Generate many condition strategies, backtest them, and return the top-ranked ones."""
+    if req.timeframe not in TIMEFRAME_CANDLE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported timeframe '{req.timeframe}'. Supported: {list(TIMEFRAME_CANDLE_MAP.keys())}",
+        )
+
+    backtest_req = BacktestRequest(
+        start_date=req.start_date,
+        end_date=req.end_date,
+        initial_capital=req.initial_capital,
+        position_size_pct=req.position_size_pct,
+        max_open_trades=req.max_open_trades,
+    )
+
+    candidates = generate_candidate_strategies(
+        timeframe=req.timeframe,
+        universe=req.universe,
+        max_candidates=req.max_candidates,
+    )
+
+    ranked_results: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        result = _run_backtest_for_strategy_payload(candidate, backtest_req, db)
+        summary = result.get("summary") or {}
+        score = score_backtest_summary(summary)
+        ranked_results.append(
+            {
+                "strategy": candidate,
+                "summary": summary,
+                "score": score,
+                "final_capital": result.get("final_capital"),
+                "error": result.get("error"),
+            }
+        )
+
+    ranked_results.sort(
+        key=lambda item: (
+            item["score"],
+            float((item.get("summary") or {}).get("total_return_pct") or 0.0),
+            float((item.get("summary") or {}).get("sharpe_ratio") or 0.0),
+        ),
+        reverse=True,
+    )
+
+    exit_optimization = {
+        "enabled": bool(req.optimize_exits),
+        "base_tested": len(ranked_results),
+        "shortlisted": 0,
+        "combos_per_base": 0,
+        "variants_tested": 0,
+    }
+
+    if req.optimize_exits and ranked_results:
+        shortlisted_items = ranked_results[: req.exit_optimize_on_top]
+        shortlisted_strategies = [item["strategy"] for item in shortlisted_items]
+        exit_combos = generate_exit_param_combinations(
+            sl_values=req.sl_grid,
+            tp_values=req.tp_grid,
+            tsl_values=req.tsl_grid,
+            max_combos=req.max_exit_combos,
+        )
+        variant_strategies = expand_strategies_with_exit_variants(
+            shortlisted_strategies,
+            exit_combos=exit_combos,
+        )
+
+        ranked_variants: List[Dict[str, Any]] = []
+        for variant in variant_strategies:
+            result = _run_backtest_for_strategy_payload(variant, backtest_req, db)
+            summary = result.get("summary") or {}
+            score = score_backtest_summary(summary)
+            ranked_variants.append(
+                {
+                    "strategy": variant,
+                    "summary": summary,
+                    "score": score,
+                    "final_capital": result.get("final_capital"),
+                    "error": result.get("error"),
+                }
+            )
+
+        ranked_variants.sort(
+            key=lambda item: (
+                item["score"],
+                float((item.get("summary") or {}).get("annual_return_pct") or 0.0),
+                -float((item.get("summary") or {}).get("max_drawdown_pct") or 0.0),
+                float((item.get("summary") or {}).get("sharpe_ratio") or 0.0),
+            ),
+            reverse=True,
+        )
+        ranked_results = ranked_variants
+        exit_optimization = {
+            "enabled": True,
+            "base_tested": len(shortlisted_items),
+            "shortlisted": len(shortlisted_strategies),
+            "combos_per_base": len(exit_combos),
+            "variants_tested": len(ranked_variants),
+        }
+
+    if req.min_annual_return > 0:
+        ranked_results = [
+            item
+            for item in ranked_results
+            if float((item.get("summary") or {}).get("annual_return_pct") or 0.0) >= req.min_annual_return
+        ]
+
+    top_results = select_diverse_top(
+        ranked_results,
+        top_n=req.top_n,
+        max_per_family=req.max_per_family,
+        fill_remaining=req.fill_remaining,
+    )
+    saved = []
+    if req.save_top_strategies and top_results:
+        existing = _load_strategies()
+        existing_names = {s.get("name") for s in existing}
+        next_id = _next_id(existing)
+
+        for rank, item in enumerate(top_results, start=1):
+            strategy = dict(item["strategy"])
+            base_name = strategy["name"]
+            save_name = base_name
+            suffix = 2
+            while save_name in existing_names:
+                save_name = f"{base_name} #{suffix}"
+                suffix += 1
+
+            strategy["id"] = next_id
+            next_id += 1
+            strategy["name"] = save_name
+            strategy["description"] = (
+                f"Auto-discovered candidate ranked #{rank}. "
+                f"Score={item['score']}, Return={item['summary'].get('total_return_pct', 0)}%, "
+                f"Sharpe={item['summary'].get('sharpe_ratio', 0)}"
+            )
+            strategy["created_at"] = datetime.now().isoformat()
+            strategy["last_scan"] = None
+            strategy["last_signal_count"] = 0
+            strategy["discovery_metadata"] = {
+                "rank": rank,
+                "score": item["score"],
+                "summary": item["summary"],
+                "generated_at": datetime.now().isoformat(),
+            }
+            existing.append(strategy)
+            existing_names.add(save_name)
+            saved.append({"id": strategy["id"], "name": save_name, "rank": rank})
+
+        _save_strategies(existing)
+
+    return {
+        "generated_count": len(candidates),
+        "tested_count": len(ranked_results),
+        "top_n": req.top_n,
+        "timeframe": req.timeframe,
+        "universe": req.universe,
+        "min_annual_return": req.min_annual_return,
+        "fill_remaining": req.fill_remaining,
+        "exit_optimization": exit_optimization,
+        "top_strategies": [
+            {
+                "rank": index,
+                "score": item["score"],
+                "strategy": item["strategy"],
+                "family": strategy_family(item["strategy"]),
+                "summary": item["summary"],
+                "final_capital": item["final_capital"],
+                "error": item["error"],
+            }
+            for index, item in enumerate(top_results, start=1)
+        ],
+        "saved_strategies": saved,
     }
 
 

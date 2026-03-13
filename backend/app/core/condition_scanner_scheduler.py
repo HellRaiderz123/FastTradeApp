@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode
 from app.core.indicators.technical import TechnicalIndicators
+from app.core.learning.scanner_signal_history import mark_signal_execution, record_scanner_signal
 from app.config.market_config import get_symbols
 from app.db.models_candles import CandleDaily
 from app.db.session import SessionLocal
@@ -118,6 +119,7 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
     name = strategy.get("name", "unknown")
     conditions = strategy.get("entry_conditions", [])
     direction = strategy.get("direction", "BUY")
+    timeframe = strategy.get("timeframe")
     exit_config = strategy.get("exit_config", {})
     universe = strategy.get("universe", "NIFTY50")
     instruments = strategy.get("instruments", [])
@@ -163,27 +165,60 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
         quantity = max(1, int(auto_amount // ltp)) if ltp and ltp > 0 else 1
         logger.info(f"    💰 Amount=₹{auto_amount:,.0f}, LTP=₹{ltp:.2f} → qty={quantity}")
 
+        history = record_scanner_signal(
+            db,
+            strategy_id=strategy_id,
+            strategy_name=name,
+            symbol=sig["symbol"],
+            direction=direction,
+            timeframe=timeframe,
+            universe=universe,
+            signal_payload=sig,
+            auto_execute=True,
+            execution_mode=mode,
+        )
+
         try:
             _auto_execute_signal(
+                history_id=history.id if history else None,
+                strategy_id=strategy_id,
                 symbol=sig["symbol"],
                 ltp=ltp,
                 direction=direction,
                 strategy_name=name,
                 exit_config=exit_config,
+                timeframe=timeframe,
+                universe=universe,
                 quantity=quantity,
                 mode=mode,
                 db=db,
             )
         except Exception as exec_err:
             logger.error(f"    ❌ Auto-execute {sig['symbol']} failed: {exec_err}")
+            mark_signal_execution(
+                db,
+                history_id=history.id if history else None,
+                strategy_id=strategy_id,
+                strategy_name=name,
+                symbol=sig["symbol"],
+                direction=direction,
+                status="FAILED",
+                execution_payload={"error": str(exec_err), "auto_executed": True},
+                quantity=quantity,
+                execution_mode=mode,
+            )
 
 
 def _auto_execute_signal(
+    history_id: Optional[int],
+    strategy_id: Optional[int],
     symbol: str,
     ltp: float,
     direction: str,
     strategy_name: str,
     exit_config: dict,
+    timeframe: Optional[str],
+    universe: Optional[str],
     quantity: int,
     mode: str,
     db: Session,
@@ -233,6 +268,24 @@ def _auto_execute_signal(
         order["order_id"] = f"AUTO-DRY-{datetime.now().strftime('%Y%m%d%H%M%S')}-{symbol}"
         order["fill_price"] = ltp
         logger.info(f"    🟡 Auto dry-run: {direction} {symbol} @ ₹{ltp}")
+
+    mark_signal_execution(
+        db,
+        history_id=history_id,
+        strategy_id=strategy_id,
+        strategy_name=strategy_name,
+        symbol=symbol,
+        direction=direction,
+        status=order.get("status", "SIGNAL_GENERATED"),
+        execution_payload={
+            **order,
+            "timeframe": timeframe,
+            "universe": universe,
+        },
+        quantity=quantity,
+        execution_mode=mode,
+        order_id=order.get("order_id"),
+    )
 
     # Log to DB
     try:

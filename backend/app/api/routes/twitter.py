@@ -206,7 +206,10 @@ async def get_recent_tweets(
         query = query.filter(and_(*filters))
     
     # Get recent tweets
-    tweets = query.order_by(desc(TwitterSentiment.created_at)).limit(limit).all()
+    tweets = query.order_by(
+        desc(TwitterSentiment.created_at_twitter),
+        desc(TwitterSentiment.created_at)
+    ).limit(limit).all()
     
     # Format response
     tweet_list = [

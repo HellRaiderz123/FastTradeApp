@@ -383,6 +383,12 @@ class TwitterSentimentService:
         db.add(sentiment_record)
         db.commit()
         db.refresh(sentiment_record)
+
+        self._create_alert_for_sentiment(
+            db=db,
+            sentiment_record=sentiment_record,
+            account_credibility=account_credibility
+        )
         
         logger.info(
             f"Processed tweet {sentiment_record.tweet_id}: "
@@ -391,6 +397,69 @@ class TwitterSentimentService:
         )
         
         return sentiment_record
+
+    def _create_alert_for_sentiment(
+        self,
+        db: Session,
+        sentiment_record: TwitterSentiment,
+        account_credibility: float
+    ) -> None:
+        """Create alert records for high-impact or actionable tweets."""
+        if not (sentiment_record.high_impact or sentiment_record.breaking_news or sentiment_record.price_target):
+            return
+
+        if sentiment_record.breaking_news and sentiment_record.high_impact:
+            alert_type = "breaking_news"
+            severity = "critical"
+        elif sentiment_record.high_impact:
+            alert_type = "high_impact"
+            severity = "high"
+        elif sentiment_record.price_target:
+            alert_type = "price_target"
+            severity = "medium"
+        else:
+            alert_type = "high_impact"
+            severity = "low"
+
+        existing_alert = db.query(TwitterAlert).filter(
+            and_(
+                TwitterAlert.tweet_id == sentiment_record.tweet_id,
+                TwitterAlert.symbol == (sentiment_record.primary_symbol or "UNKNOWN"),
+                TwitterAlert.alert_type == alert_type
+            )
+        ).first()
+
+        if existing_alert:
+            if not sentiment_record.alert_sent:
+                sentiment_record.alert_sent = True
+                sentiment_record.alerted_at = datetime.utcnow()
+                db.commit()
+            return
+
+        title = f"{(sentiment_record.primary_symbol or 'MARKET')} {sentiment_record.sentiment.upper()} signal"
+        message = sentiment_record.text[:280]
+
+        alert = TwitterAlert(
+            tweet_id=sentiment_record.tweet_id,
+            symbol=sentiment_record.primary_symbol or "UNKNOWN",
+            alert_type=alert_type,
+            title=title,
+            message=message,
+            severity=severity,
+            username=sentiment_record.username,
+            account_credibility=account_credibility,
+            sentiment=sentiment_record.sentiment,
+            engagement_score=sentiment_record.engagement_score,
+            sent=False,
+            read=False,
+            dismissed=False
+        )
+
+        sentiment_record.alert_sent = True
+        sentiment_record.alerted_at = datetime.utcnow()
+
+        db.add(alert)
+        db.commit()
     
     def _get_mock_tweets(self) -> List[Dict[str, Any]]:
         """Generate mock tweets for testing without API access"""

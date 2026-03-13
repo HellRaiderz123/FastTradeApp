@@ -20,9 +20,10 @@ interface TwitterAlert {
 
 const TwitterAlertsMonitor: React.FC = () => {
   const [alerts, setAlerts] = useState<TwitterAlert[]>([]);
-  const [lastAlertId, setLastAlertId] = useState<number>(0);
   const { showToast } = useToast();
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
+  const lastAlertIdRef = useRef<number>(0);
+  const hasInitializedRef = useRef<boolean>(false);
 
   useEffect(() => {
     // Initial fetch
@@ -43,8 +44,17 @@ const TwitterAlertsMonitor: React.FC = () => {
       const response = await twitterAPI.getAlerts(true, 20); // Unread only
       const newAlerts: TwitterAlert[] = response.data.alerts || [];
 
+      const newestAlertId = newAlerts.length > 0 ? Math.max(...newAlerts.map(a => a.id)) : lastAlertIdRef.current;
+
+      if (!hasInitializedRef.current) {
+        lastAlertIdRef.current = newestAlertId;
+        hasInitializedRef.current = true;
+        setAlerts(newAlerts);
+        return;
+      }
+
       // Check for new high-impact alerts
-      const unseenAlerts = newAlerts.filter(alert => alert.id > lastAlertId);
+      const unseenAlerts = newAlerts.filter(alert => alert.id > lastAlertIdRef.current);
 
       if (unseenAlerts.length > 0) {
         // Show toast notifications for new alerts
@@ -63,8 +73,11 @@ const TwitterAlertsMonitor: React.FC = () => {
         });
 
         // Update last alert ID
-        const maxId = Math.max(...newAlerts.map(a => a.id));
-        setLastAlertId(maxId);
+        lastAlertIdRef.current = newestAlertId;
+      }
+
+      if (newAlerts.length > 0 && newestAlertId > lastAlertIdRef.current) {
+        lastAlertIdRef.current = newestAlertId;
       }
 
       setAlerts(newAlerts);
