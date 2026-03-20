@@ -43,11 +43,7 @@ debug.log
 # Jupyter / ML
 # ================================
 .ipynb_checkpoints/
-*.joblib
-*.pkl
-*.h5
-*.onnx
-models/
+# *.joblib, *.pkl, *.h5, *.onnx are tracked via Git LFS (see .gitattributes)
 artifacts/
 checkpoints/
 *.ipynb

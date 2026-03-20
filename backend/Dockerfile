@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system deps needed by some Python packages (lightgbm, psycopg2, etc.)
+# System deps: gcc/g++ for XGBoost/LightGBM, libgomp1 for LightGBM OpenMP
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
@@ -15,12 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
-
-# Create data directory for SQLite persistence
-RUN mkdir -p /data
-
-# Default DB path inside container (overridable via env)
-ENV DATABASE_URL=sqlite:////data/trading.db
 
 EXPOSE 8000
 
