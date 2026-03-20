@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
-import GridLayout from 'react-grid-layout';
+import GridLayoutLib from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import { Lock, Unlock, Save } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import CandleChart from '../components/CandleChart';
 import { marketAPI } from '../lib/api';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const GridLayout = GridLayoutLib as any;
 
 const DraggableDashboard: React.FC = () => {
   const { showToast } = useToast();

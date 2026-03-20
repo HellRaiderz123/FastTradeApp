@@ -1117,7 +1117,7 @@ const Settings: React.FC = () => {
                 type={showIndmoneyToken ? 'text' : 'password'}
                 placeholder="Paste your INDstocks access token here"
                 value={indmoneyForm.accessToken}
-                onChange={(e) => setIndmoneyForm({ accessToken: e.target.value })}
+                onChange={(e) => setIndmoneyForm(prev => ({ ...prev, accessToken: e.target.value }))}
                 disabled={indmoneyLoading}
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50 pr-10"
               />
