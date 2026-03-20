@@ -1,24 +1,48 @@
-version: '3.8'
+version: "3.9"
 
 services:
-  fasttrade:
+
+  # ─────────────────────────────────────────
+  # FastAPI Backend
+  # ─────────────────────────────────────────
+  backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
-    container_name: fasttrade-app
+    container_name: fasttrade-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Override DB path to use the mounted volume
+      DATABASE_URL: sqlite:////data/trading.db
+    volumes:
+      # Persist SQLite database across restarts
+      - trading_data:/data
     ports:
       - "8000:8000"
-    environment:
-      - ENVIRONMENT=production
-      # Add other environment variables as needed
-    volumes:
-      # Mount only necessary runtime data, not source code
-      - ./backend/trading.db:/app/backend/trading.db
-      - ./backend/logs:/app/backend/logs
-    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 20s
+
+  # ─────────────────────────────────────────
+  # React Web UI (Nginx)
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: fasttrade-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  trading_data:
+    driver: local
