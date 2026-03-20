@@ -1,8 +1,19 @@
+import json as _json
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, JSON, Date
 from datetime import datetime
 
 from app.db.session import Base
 from app.core.utils.time import now_ist
+
+
+def _parse_json_field(value):
+    """Return value as dict/list, parsing string if needed (migration guard)."""
+    if isinstance(value, str):
+        try:
+            return _json.loads(value)
+        except Exception:
+            return {}
+    return value if value is not None else {}
 
 
 class StrategyRun(Base):
@@ -34,6 +45,18 @@ class StrategyRun(Base):
     mtm = Column(Float, nullable=True)
     last_mtm_at = Column(DateTime(timezone=True), nullable=True)
     pnl = Column(Float, nullable=True)
+
+    @property
+    def signal_dict(self) -> dict:
+        return _parse_json_field(self.signal)
+
+    @property
+    def context_dict(self) -> dict:
+        return _parse_json_field(self.context)
+
+    @property
+    def ticket_dict(self) -> dict:
+        return _parse_json_field(self.ticket)
 
 
 class DailyCapital(Base):

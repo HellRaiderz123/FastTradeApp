@@ -49,9 +49,13 @@ class ZerodhaTickerManager:
         self._symbol_to_token: Dict[str, int] = {}
         self._ticker: Optional[object] = None
         self._state = _State()
+        self._reconnect_attempts: int = 0
+        self._max_reconnect_attempts: int = 5  # stop after 5 failures (token likely expired)
 
     def _can_start(self) -> bool:
         if KiteTicker is None:
+            return False
+        if self._reconnect_attempts >= self._max_reconnect_attempts:
             return False
         return bool(os.getenv("ZERODHA_API_KEY") and os.getenv("ZERODHA_ACCESS_TOKEN"))
 
@@ -120,6 +124,16 @@ class ZerodhaTickerManager:
 
             def on_error(_ws, code, reason):
                 logger.warning(f"⚠️  ZerodhaTicker error {code}: {reason}")
+                # 403 = token expired — stop reconnecting immediately
+                if code == 1006 and "403" in str(reason):
+                    with self._lock:
+                        self._reconnect_attempts += 1
+                    if self._reconnect_attempts >= self._max_reconnect_attempts:
+                        logger.error(
+                            "❌ ZerodhaTicker: too many 403 failures — "
+                            "Zerodha access token is expired. "
+                            "Update ZERODHA_ACCESS_TOKEN in .env and restart."
+                        )
 
             def on_close(_ws, code, reason):
                 logger.warning(f"⚠️  ZerodhaTicker closed {code}: {reason}")
@@ -143,6 +157,13 @@ class ZerodhaTickerManager:
                         self._state.started = False
                         self._state.connecting = False
                         self._ticker = None
+                        self._reconnect_attempts += 1
+                    # Exponential backoff: 2s, 4s, 8s, 16s, 32s then give up
+                    import time
+                    backoff = min(32, 2 ** self._reconnect_attempts)
+                    if self._reconnect_attempts < self._max_reconnect_attempts:
+                        logger.info(f"ZerodhaTicker will retry in {backoff}s (attempt {self._reconnect_attempts}/{self._max_reconnect_attempts})")
+                        time.sleep(backoff)
 
             t = threading.Thread(target=_run, name="zerodha-ticker", daemon=True)
             with self._lock:

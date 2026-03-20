@@ -1,7 +1,18 @@
+import json as _json
 from sqlalchemy import Boolean, Column, Date, DateTime, Float, Integer, JSON, String
 
 from app.core.utils.time import now_ist
 from app.db.session import Base
+
+
+def _parse_json_field(value):
+    """Return value as dict/list, parsing string if needed (migration guard)."""
+    if isinstance(value, str):
+        try:
+            return _json.loads(value)
+        except Exception:
+            return {}
+    return value if value is not None else {}
 
 
 class ScannerSignalHistory(Base):

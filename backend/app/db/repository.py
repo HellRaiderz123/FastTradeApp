@@ -56,8 +56,19 @@ def _record_strategy_run_diagnostics(
     Captures signal quality at decision time, even if trade is rejected.
     """
     try:
-        sig = signal or {}
-        ctx = context or {}
+        import json as _json
+
+        # Guard: JSON columns may come back as strings from DB (migration artifact)
+        def _ensure_dict(v):
+            if isinstance(v, str):
+                try:
+                    return _json.loads(v)
+                except Exception:
+                    return {}
+            return v if isinstance(v, dict) else {}
+
+        sig = _ensure_dict(signal)
+        ctx = _ensure_dict(context)
 
         outcome = SignalOutcome(
             intent_id=f"strategy_run_{run.id}",

@@ -1,5 +1,17 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any
+import json as _json
+
+
+def get_ticket(intent) -> dict:
+    """Safely get intent.ticket as a dict, handling string migration artifact."""
+    ticket = getattr(intent, "ticket", None) or {}
+    if isinstance(ticket, str):
+        try:
+            return _json.loads(ticket)
+        except Exception:
+            return {}
+    return ticket if isinstance(ticket, dict) else {}
 
 
 class ExecutionAdapter(ABC):

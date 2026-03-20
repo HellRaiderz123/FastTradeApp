@@ -6,6 +6,7 @@ from app.core.market.ltp import get_ltp
 from app.core.utils.time import now_ist
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 from app.services.zerodha_ticker import subscribe_symbols as subscribe_to_ticker
+from app.core.execution.base import get_ticket
 
 
 def _parse_expiry(expiry_str: str | None) -> date | None:
@@ -62,7 +63,8 @@ class ZerodhaExecutionAdapter:
 
         # Subscribe symbols to live ticker WebSocket for MTM updates
         try:
-            symbols = [leg.get("symbol") for leg in intent.ticket.get("legs", []) if leg.get("symbol")]
+            ticket_for_sub = get_ticket(intent)
+            symbols = [leg.get("symbol") for leg in ticket_for_sub.get("legs", []) if leg.get("symbol")]
             if symbols:
                 subscribe_to_ticker(symbols)
         except Exception as e:
@@ -149,7 +151,7 @@ class ZerodhaExecutionAdapter:
     # ORDER BUILDERS
     # ============================
     def _build_orders(self, intent) -> List[Dict[str, Any]]:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         qty = int(ticket["lots"]) * int(ticket["lot_size"])
 
         # Parse expiry string to date object
@@ -181,7 +183,7 @@ class ZerodhaExecutionAdapter:
         return orders
 
     def _build_exit_orders(self, intent) -> List[Dict[str, Any]]:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         qty = int(ticket["lots"]) * int(ticket["lot_size"])
 
         # Parse expiry string to date object
@@ -221,7 +223,7 @@ class ZerodhaExecutionAdapter:
         Uses entry_credit if leg prices are not available.
         """
 
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
 
         symbols = [leg.get("symbol") for leg in ticket.get("legs", []) if leg.get("symbol")]
         if not symbols:
@@ -277,7 +279,7 @@ class ZerodhaExecutionAdapter:
         return pnl
 
     def _estimate_entry_credit_and_store_leg_prices(self, intent) -> float:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
 
         # Parse expiry string to date object
         expiry_date = _parse_expiry(intent.expiry)
@@ -319,7 +321,7 @@ class ZerodhaExecutionAdapter:
         return round(entry_credit_total, 2)
 
     def _estimate_exit_cost_and_pnl(self, intent) -> tuple[float, float]:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         symbols = [leg.get("symbol") for leg in ticket.get("legs", []) if leg.get("symbol")]
         ltp = get_ltp(symbols)
 
@@ -364,7 +366,7 @@ class ZerodhaExecutionAdapter:
         """
         metrics: List[Dict[str, Any]] = []
         try:
-            ticket = intent.ticket or {}
+            ticket = get_ticket(intent)
             qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 
             # Ensure symbols are present; build if needed

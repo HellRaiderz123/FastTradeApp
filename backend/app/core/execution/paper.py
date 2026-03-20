@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict, Any
 
-from app.core.execution.base import ExecutionAdapter
+from app.core.execution.base import ExecutionAdapter, get_ticket
 from app.core.market.ltp import get_ltp
 from app.core.utils.time import now_ist
 
@@ -27,7 +27,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
         return value
 
     def execute(self, intent):
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 
         # 1️⃣ Build symbol list (prefer stored symbol if exists)
@@ -73,7 +73,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
         """
         Unrealized PnL for paper trades.
         """
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 
         symbols = [leg.get("symbol") or f'{leg["strike"]}{leg["type"]}' for leg in ticket["legs"]]
@@ -93,7 +93,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
         return round(pnl, 2)
 
     def exit(self, intent):
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
         symbols = [leg["symbol"] for leg in ticket["legs"]]
 

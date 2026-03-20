@@ -174,7 +174,7 @@ def calculate_costs_from_intent(intent) -> TradeCosts:
     Convenience wrapper — takes an ExecutionIntent and extracts leg data.
     Handles missing prices gracefully (returns zero costs).
     """
-    ticket = intent.ticket or {}
+    ticket = intent.ticket_dict
     lots = int(ticket.get("lots", 1))
     lot_size = int(ticket.get("lot_size", 1))
     quantity = lots * lot_size

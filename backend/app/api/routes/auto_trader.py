@@ -38,9 +38,16 @@ def get_db():
 def get_config(db: Session = Depends(get_db)):
     """Get current auto-trader configuration."""
     cfg = get_or_create_config(db)
+    import json as _json
+    underlyings = cfg.underlyings
+    if isinstance(underlyings, str):
+        try:
+            underlyings = _json.loads(underlyings)
+        except Exception:
+            underlyings = ["NIFTY"]
     return {
         "id": cfg.id,
-        "underlyings": cfg.underlyings or ["NIFTY"],
+        "underlyings": underlyings or ["NIFTY"],
         "capital": cfg.capital,
         "lots": cfg.lots,
         "risk_mode": cfg.risk_mode,
@@ -213,6 +220,14 @@ def get_status(db: Session = Depends(get_db)):
         .count()
     )
 
+    import json as _json
+    underlyings = cfg.underlyings
+    if isinstance(underlyings, str):
+        try:
+            underlyings = _json.loads(underlyings)
+        except Exception:
+            underlyings = ["NIFTY"]
+
     return {
         "status": cfg.status,
         "mode": cfg.mode,
@@ -225,7 +240,7 @@ def get_status(db: Session = Depends(get_db)):
         "max_positions": cfg.max_open_positions,
         "today_entries": today_entries,
         "today_exits": today_exits,
-        "underlyings": cfg.underlyings or ["NIFTY"],
+        "underlyings": underlyings or ["NIFTY"],
         "capital": cfg.capital,
         "scan_interval_sec": cfg.scan_interval_sec,
     }

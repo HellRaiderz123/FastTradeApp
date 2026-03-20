@@ -229,12 +229,16 @@ def generate_signal_from_candles(
         vix_rank=vix_rank,
         iv_regime=iv_regime,
     )
-    ta_sig.setdefault("context", {})
-    ta_sig["context"].update({
+    # Guard: context may be a string
+    existing_ctx = ta_sig.get("context")
+    if not isinstance(existing_ctx, dict):
+        existing_ctx = {}
+    existing_ctx.update({
         "india_vix": india_vix,
         "vix_rank": vix_rank,
         "iv_regime": iv_regime,
     })
+    ta_sig["context"] = existing_ctx
     return ta_sig
 
 
@@ -334,12 +338,16 @@ def generate_signal(
     # =====================================================
     # STEP 6: Ensure IV fields are present in response
     # =====================================================
-    final_sig.setdefault("context", {})
-    final_sig["context"].update({
+    # Guard: context may be a string (e.g. from DB JSON deserialization)
+    existing_ctx = final_sig.get("context")
+    if not isinstance(existing_ctx, dict):
+        existing_ctx = {}
+    existing_ctx.update({
         "india_vix": india_vix,
         "vix_rank": vix_rank,
         "iv_regime": iv_regime,
     })
+    final_sig["context"] = existing_ctx
 
     return final_sig
 

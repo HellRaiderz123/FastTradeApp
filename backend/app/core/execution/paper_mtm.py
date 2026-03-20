@@ -5,6 +5,7 @@ from app.core.market.ltp import get_ltp
 from sqlalchemy.orm import Session
 
 from app.db.models_intent import ExecutionIntent
+from app.core.execution.base import get_ticket
 from app.core.utils.time import now_ist
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 
@@ -84,7 +85,7 @@ def update_paper_mtm(db: Session):
         return []
 
     for intent in intents:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
 
         # ---- VALIDATION (FAIL FAST) ----
         if not ticket or "legs" not in ticket:

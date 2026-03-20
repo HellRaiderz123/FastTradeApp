@@ -18,7 +18,15 @@ def get_or_create_risk_limits(db: Session) -> RiskLimitConfig:
         db.commit()
         db.refresh(record)
 
-    # Ensure iv_regime_limits is always a dict
+    # Ensure iv_regime_limits is always a dict (guard against string from migration)
+    if isinstance(record.iv_regime_limits, str):
+        import json
+        try:
+            record.iv_regime_limits = json.loads(record.iv_regime_limits)
+            flag_modified(record, "iv_regime_limits")
+            db.commit()
+        except Exception:
+            record.iv_regime_limits = default_iv_limits()
     if not record.iv_regime_limits:
         record.iv_regime_limits = default_iv_limits()
         db.commit()

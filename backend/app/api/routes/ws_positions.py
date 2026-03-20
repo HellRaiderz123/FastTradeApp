@@ -51,7 +51,16 @@ def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) 
     
     # For Zerodha, try to use live ticker cache for faster updates
     try:
+        import json as _json
+
+        # Guard: ticket may be a string from DB (JSON migration artifact)
         ticket = intent.ticket or {}
+        if isinstance(ticket, str):
+            try:
+                ticket = _json.loads(ticket)
+            except Exception:
+                ticket = {}
+
         # Compute correct quantity: prefer leg-level qty, fallback to ticket-level lots × lot_size
         ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 

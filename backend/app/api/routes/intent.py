@@ -165,8 +165,8 @@ def create_intent(
     # Reconstruct engine_result from StrategyRun signal/context for signal diagnostics
     try:
         engine_result = {
-            "signal": run.signal or {},
-            "context": run.context or {},
+            "signal": run.signal_dict,
+            "context": run.context_dict,
         }
         record_entry_snapshot(db, intent=intent, engine_result=engine_result)
     except Exception as e:

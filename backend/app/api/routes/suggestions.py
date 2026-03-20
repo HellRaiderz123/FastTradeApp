@@ -52,21 +52,24 @@ class SuggestionItem(BaseModel):
 
 
 def _compute_score(result: Dict[str, Any]) -> float:
-    """Higher score = better candidate.
+    """Higher score = better candidate."""
+    import json as _json
 
-    Heuristic (simple, explainable):
-    - Reward confidence and quality.
-    - Penalize higher risk % of capital.
-    - Hard drop if not approved.
-    """
+    def _ensure_dict(v):
+        if isinstance(v, str):
+            try:
+                return _json.loads(v)
+            except Exception:
+                return {}
+        return v if isinstance(v, dict) else {}
 
     approved = bool(result.get("approved"))
     if not approved:
         return 0.0
 
-    sig = result.get("signal") or {}
-    ctx = result.get("context") or {}
-    risk = result.get("risk_metrics") or {}
+    sig = _ensure_dict(result.get("signal"))
+    ctx = _ensure_dict(result.get("context"))
+    risk = _ensure_dict(result.get("risk_metrics"))
 
     confidence = float(sig.get("confidence", 0.0))  # 0-100 in TA engine
     quality_score = float(ctx.get("quality_score", 0.0))  # 0-8

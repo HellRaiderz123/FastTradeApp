@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from app.core.broker.indmoney.client import INDMoneyClient
 from app.core.broker.indmoney.instruments import INDMoneyInstrumentsResolver
+from app.core.execution.base import get_ticket
 from app.core.market.ltp import get_ltp
 from app.core.utils.time import now_ist
 
@@ -170,7 +171,7 @@ class INDMoneyExecutionAdapter:
         }
 
     def mtm(self, intent) -> float:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         symbols = [leg.get("symbol") for leg in ticket.get("legs", []) if leg.get("symbol")]
         if not symbols:
             return 0.0
@@ -213,7 +214,7 @@ class INDMoneyExecutionAdapter:
         return round(entry_credit - cost_to_close, 2)
 
     def _build_orders(self, intent) -> List[Dict[str, Any]]:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         qty = int(ticket.get("lots", 1)) * int(ticket.get("lot_size", 1))
 
         orders: List[Dict[str, Any]] = []
@@ -238,7 +239,7 @@ class INDMoneyExecutionAdapter:
         return orders
 
     def _build_exit_orders(self, intent) -> List[Dict[str, Any]]:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         qty = int(ticket.get("lots", 1)) * int(ticket.get("lot_size", 1))
 
         orders: List[Dict[str, Any]] = []
@@ -263,7 +264,7 @@ class INDMoneyExecutionAdapter:
         return orders
 
     def _estimate_entry_credit_and_store_leg_prices(self, intent) -> float:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         symbols: List[str] = []
         for leg in ticket.get("legs", []):
             sym = leg.get("symbol")
@@ -288,7 +289,7 @@ class INDMoneyExecutionAdapter:
         return round(entry_credit_total, 2)
 
     def _estimate_exit_cost_and_pnl(self, intent) -> tuple[float, float]:
-        ticket = intent.ticket
+        ticket = get_ticket(intent)
         symbols = [leg.get("symbol") for leg in ticket.get("legs", []) if leg.get("symbol")]
         ltp = get_ltp(symbols)
 

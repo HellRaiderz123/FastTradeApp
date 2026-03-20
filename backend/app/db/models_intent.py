@@ -1,8 +1,18 @@
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, ForeignKey
 from app.db.session import Base
 from sqlalchemy import Float
+import json as _json
 
 from app.core.utils.time import now_ist
+
+def _parse_json_field(value):
+    """Parse a JSON field that may be a string (migration artifact) or already a dict/list."""
+    if isinstance(value, str):
+        try:
+            return _json.loads(value)
+        except Exception:
+            return {}
+    return value if value is not None else {}
 
 class ExecutionIntent(Base):
     __tablename__ = "execution_intents"
@@ -41,3 +51,13 @@ class ExecutionIntent(Base):
     unrealized_pnl = Column(Float, nullable=True)
     margin_required = Column(Float, nullable=True)  # Margin blocked by broker (Zerodha)
     max_unrealized_pnl = Column(Float, nullable=True)  # Highest profit reached (for trailing stops)
+
+    @property
+    def ticket_dict(self) -> dict:
+        """Always returns ticket as a dict, parsing string if needed."""
+        return _parse_json_field(self.ticket)
+
+    @property
+    def execution_result_dict(self) -> dict:
+        """Always returns execution_result as a dict, parsing string if needed."""
+        return _parse_json_field(self.execution_result)

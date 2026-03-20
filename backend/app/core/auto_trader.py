@@ -567,6 +567,15 @@ def get_or_create_config(db: Session) -> AutoTraderConfig:
         db.add(cfg)
         db.commit()
         db.refresh(cfg)
+
+    # Guard: JSON column may come back as string from DB (migration artifact)
+    if isinstance(cfg.underlyings, str):
+        import json as _json
+        try:
+            cfg.underlyings = _json.loads(cfg.underlyings)
+        except Exception:
+            cfg.underlyings = ["NIFTY"]
+
     return cfg
 
 
