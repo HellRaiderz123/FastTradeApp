@@ -47,6 +47,7 @@ from app.core.utils.time import now_ist
 from app.config.market_config import get_symbols
 from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily
 from app.db.models_scanner_signal import ScannerSignalHistory
+from app.db.models_condition_strategy import ConditionStrategy, ConditionStrategyBacktest
 from app.db.session import SessionLocal
 from app.services.zerodha import KiteConnectService
 
@@ -110,34 +111,40 @@ class StrategyUpdate(BaseModel):
     auto_amount: Optional[float] = None
 
 
-# ── In-memory strategy store (backed by JSON file) ─────────────────────────
-# In a production system this would be a DB table. For now, JSON file is fine.
+# ── DB-backed strategy helpers ─────────────────────────────────────────────
 
-STRATEGIES_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "..", "data", "condition_strategies.json"
-)
+def _get_strategy_or_404(db: Session, strategy_id: int) -> ConditionStrategy:
+    row = db.query(ConditionStrategy).filter(ConditionStrategy.id == strategy_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return row
 
-def _ensure_data_dir():
-    d = os.path.dirname(STRATEGIES_FILE)
-    os.makedirs(d, exist_ok=True)
+def _strategy_with_backtest(db: Session, row: ConditionStrategy) -> dict:
+    """Serialize strategy dict, attaching last backtest result if available."""
+    d = row.to_dict()
+    if row.last_backtest_id:
+        bt = db.query(ConditionStrategyBacktest).filter(
+            ConditionStrategyBacktest.id == row.last_backtest_id
+        ).first()
+        if bt:
+            d["last_backtest_result"] = bt.result_dict
+    return d
 
+# Legacy shim — used by condition_scanner_scheduler (will be updated separately)
 def _load_strategies() -> List[dict]:
-    _ensure_data_dir()
-    if not os.path.exists(STRATEGIES_FILE):
-        return []
+    db = SessionLocal()
     try:
-        with open(STRATEGIES_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return []
+        rows = db.query(ConditionStrategy).order_by(ConditionStrategy.id).all()
+        return [r.to_dict() for r in rows]
+    finally:
+        db.close()
 
 def _save_strategies(strategies: List[dict]):
-    _ensure_data_dir()
-    with open(STRATEGIES_FILE, "w") as f:
-        json.dump(strategies, f, indent=2, default=str)
+    """No-op shim — DB writes happen inline now. Kept for scheduler compatibility."""
+    pass
 
 def _next_id(strategies: List[dict]) -> int:
+    """Unused — DB auto-increments. Kept for discover endpoint compatibility."""
     if not strategies:
         return 1
     return max(s.get("id", 0) for s in strategies) + 1
@@ -798,117 +805,127 @@ async def list_prebuilt():
 
 
 @router.post("/prebuilt/{key}/install")
-async def install_prebuilt(key: str):
+async def install_prebuilt(key: str, db: Session = Depends(get_db)):
     """Install a pre-built strategy template as a user strategy."""
     template = PREBUILT_STRATEGIES.get(key)
     if not template:
         raise HTTPException(status_code=404, detail=f"Pre-built strategy '{key}' not found")
 
-    strategies = _load_strategies()
-
-    # Check if already installed
-    if any(s["name"] == template["name"] for s in strategies):
+    if db.query(ConditionStrategy).filter_by(name=template["name"]).first():
         raise HTTPException(status_code=409, detail=f"Strategy '{template['name']}' already exists")
 
-    strategy = {
-        "id": _next_id(strategies),
-        "name": template["name"],
-        "description": template["description"],
-        "strategy_type": template["strategy_type"],
-        "direction": template["direction"],
-        "timeframe": template["timeframe"],
-        "instruments": [],
-        "universe": "NIFTY50",
-        "entry_conditions": template["entry_conditions"],
-        "exit_config": template["exit_config"],
-        "is_active": True,
-        "created_at": datetime.now().isoformat(),
-        "last_scan": None,
-        "last_signal_count": 0,
-        "auto_scan_enabled": False,
-        "auto_amount": 10000.0,
-    }
-
-    strategies.append(strategy)
-    _save_strategies(strategies)
-
-    return {"message": f"Installed '{template['name']}'", "strategy": strategy}
+    row = ConditionStrategy(
+        name=template["name"],
+        description=template["description"],
+        strategy_type=template["strategy_type"],
+        direction=template["direction"],
+        timeframe=template["timeframe"],
+        instruments=[],
+        universe="NIFTY50",
+        entry_conditions=template["entry_conditions"],
+        exit_config=template["exit_config"],
+        is_active=True,
+        auto_scan_enabled=False,
+        auto_amount=10000.0,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"message": f"Installed '{template['name']}'", "strategy": row.to_dict()}
 
 
 @router.post("/strategies")
-async def create_strategy(data: StrategyCreate):
+async def create_strategy(data: StrategyCreate, db: Session = Depends(get_db)):
     """Create a new condition-based strategy."""
-    strategies = _load_strategies()
-
-    if any(s["name"] == data.name for s in strategies):
+    if db.query(ConditionStrategy).filter_by(name=data.name).first():
         raise HTTPException(status_code=409, detail=f"Strategy '{data.name}' already exists")
 
-    strategy = {
-        "id": _next_id(strategies),
-        **data.model_dump(),
-        "entry_conditions": [c.model_dump() for c in data.entry_conditions],
-        "exit_config": data.exit_config.model_dump(),
-        "created_at": datetime.now().isoformat(),
-        "last_scan": None,
-        "last_signal_count": 0,
-        "auto_scan_enabled": data.auto_scan_enabled,
-        "auto_amount": data.auto_amount,
-    }
-
-    strategies.append(strategy)
-    _save_strategies(strategies)
-    return {"message": "Strategy created", "strategy": strategy}
+    row = ConditionStrategy(
+        name=data.name,
+        description=data.description,
+        strategy_type=data.strategy_type,
+        direction=data.direction,
+        timeframe=data.timeframe,
+        universe=data.universe,
+        instruments=data.instruments,
+        entry_conditions=[c.model_dump() for c in data.entry_conditions],
+        exit_config=data.exit_config.model_dump(),
+        is_active=data.is_active,
+        auto_scan_enabled=data.auto_scan_enabled,
+        auto_amount=data.auto_amount,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"message": "Strategy created", "strategy": row.to_dict()}
 
 
 @router.get("/strategies")
-async def list_strategies(strategy_type: Optional[str] = None):
+async def list_strategies(strategy_type: Optional[str] = None, db: Session = Depends(get_db)):
     """List all user strategies."""
-    strategies = _load_strategies()
+    q = db.query(ConditionStrategy).order_by(ConditionStrategy.id)
     if strategy_type:
-        strategies = [s for s in strategies if s.get("strategy_type") == strategy_type]
-    return {"strategies": strategies}
+        q = q.filter(ConditionStrategy.strategy_type == strategy_type)
+    rows = q.all()
+    return {"strategies": [_strategy_with_backtest(db, r) for r in rows]}
 
 
 @router.get("/strategies/{strategy_id}")
-async def get_strategy(strategy_id: int):
-    strategies = _load_strategies()
-    strategy = next((s for s in strategies if s["id"] == strategy_id), None)
-    if not strategy:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-    return strategy
+async def get_strategy(strategy_id: int, db: Session = Depends(get_db)):
+    row = _get_strategy_or_404(db, strategy_id)
+    return _strategy_with_backtest(db, row)
 
 
 @router.put("/strategies/{strategy_id}")
-async def update_strategy(strategy_id: int, data: StrategyUpdate):
-    strategies = _load_strategies()
-    idx = next((i for i, s in enumerate(strategies) if s["id"] == strategy_id), None)
-    if idx is None:
-        raise HTTPException(status_code=404, detail="Strategy not found")
+async def update_strategy(strategy_id: int, data: StrategyUpdate, db: Session = Depends(get_db)):
+    row = _get_strategy_or_404(db, strategy_id)
 
-    updates = data.model_dump(exclude_none=True)
-    if "entry_conditions" in updates:
-        updates["entry_conditions"] = [
+    if data.name is not None:
+        row.name = data.name
+    if data.description is not None:
+        row.description = data.description
+    if data.strategy_type is not None:
+        row.strategy_type = data.strategy_type
+    if data.direction is not None:
+        row.direction = data.direction
+    if data.timeframe is not None:
+        row.timeframe = data.timeframe
+    if data.instruments is not None:
+        row.instruments = data.instruments
+    if data.universe is not None:
+        row.universe = data.universe
+    if data.entry_conditions is not None:
+        row.entry_conditions = [
             c.model_dump() if hasattr(c, "model_dump") else c
-            for c in updates["entry_conditions"]
+            for c in data.entry_conditions
         ]
-    if "exit_config" in updates:
-        updates["exit_config"] = (
-            updates["exit_config"].model_dump()
-            if hasattr(updates["exit_config"], "model_dump")
-            else updates["exit_config"]
+    if data.exit_config is not None:
+        row.exit_config = (
+            data.exit_config.model_dump()
+            if hasattr(data.exit_config, "model_dump")
+            else data.exit_config
         )
+    if data.is_active is not None:
+        row.is_active = data.is_active
+    if data.auto_scan_enabled is not None:
+        row.auto_scan_enabled = data.auto_scan_enabled
+    if data.auto_amount is not None:
+        row.auto_amount = data.auto_amount
 
-    strategies[idx].update(updates)
-    strategies[idx]["updated_at"] = datetime.now().isoformat()
-    _save_strategies(strategies)
-    return {"message": "Updated", "strategy": strategies[idx]}
+    db.commit()
+    db.refresh(row)
+    return {"message": "Updated", "strategy": _strategy_with_backtest(db, row)}
 
 
 @router.delete("/strategies/{strategy_id}")
-async def delete_strategy(strategy_id: int):
-    strategies = _load_strategies()
-    strategies = [s for s in strategies if s["id"] != strategy_id]
-    _save_strategies(strategies)
+async def delete_strategy(strategy_id: int, db: Session = Depends(get_db)):
+    row = _get_strategy_or_404(db, strategy_id)
+    # Also delete associated backtest records
+    db.query(ConditionStrategyBacktest).filter(
+        ConditionStrategyBacktest.strategy_id == strategy_id
+    ).delete()
+    db.delete(row)
+    db.commit()
     return {"message": "Deleted"}
 
 
@@ -921,18 +938,15 @@ async def scan_strategy(
     Run a strategy scan against the configured universe.
     Returns symbols where ALL entry conditions are met.
     """
-    strategies = _load_strategies()
-    strategy = next((s for s in strategies if s["id"] == strategy_id), None)
-    if not strategy:
-        raise HTTPException(status_code=404, detail="Strategy not found")
+    row = _get_strategy_or_404(db, strategy_id)
+    strategy = row.to_dict()
 
-    conditions = strategy.get("entry_conditions", [])
+    conditions = row.entry_conditions_list
     if not conditions:
         raise HTTPException(status_code=400, detail="No entry conditions defined")
 
-    universe = strategy.get("universe", "NIFTY50")
-    instruments = strategy.get("instruments", [])
-    symbols = instruments if instruments else get_symbols(universe)
+    universe = row.universe
+    symbols = row.instruments_list or get_symbols(universe)
 
     # Try to get live quotes for LTP
     quotes_data = kite_service.get_bulk_quotes(symbols) or {}
@@ -954,9 +968,9 @@ async def scan_strategy(
             signals.append(result)
 
     # Update strategy scan metadata
-    strategy["last_scan"] = datetime.now().isoformat()
-    strategy["last_signal_count"] = len(signals)
-    _save_strategies(strategies)
+    row.last_scan = now_ist()
+    row.last_signal_count = len(signals)
+    db.commit()
 
     mode = get_execution_mode()
     history_rows = []
@@ -964,13 +978,13 @@ async def scan_strategy(
         history = record_scanner_signal(
             db,
             strategy_id=strategy_id,
-            strategy_name=strategy["name"],
+            strategy_name=row.name,
             symbol=signal["symbol"],
-            direction=strategy.get("direction", "BUY"),
-            timeframe=strategy.get("timeframe"),
+            direction=row.direction,
+            timeframe=row.timeframe,
             universe=universe,
             signal_payload=signal,
-            auto_execute=bool(strategy.get("auto_scan_enabled")),
+            auto_execute=bool(row.auto_scan_enabled),
             execution_mode=mode,
         )
         if history:
@@ -978,14 +992,14 @@ async def scan_strategy(
 
     return {
         "strategy_id": strategy_id,
-        "strategy_name": strategy["name"],
-        "direction": strategy.get("direction", "BUY"),
+        "strategy_name": row.name,
+        "direction": row.direction,
         "signals": signals,
         "signal_history": history_rows,
         "total_scanned": scanned,
         "matches_found": len(signals),
         "execution_mode": mode,
-        "exit_config": strategy.get("exit_config", {}),
+        "exit_config": row.exit_config_dict,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -1699,16 +1713,25 @@ async def run_backtest(
     evaluates entry conditions bar-by-bar, and applies SL/TP/TSL exits.
     Returns per-symbol and aggregate results.
     """
-    strategies = _load_strategies()
-    strategy = next((s for s in strategies if s["id"] == strategy_id), None)
-    if not strategy:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-    result = _run_backtest_for_strategy_payload(strategy, req, db)
+    row = _get_strategy_or_404(db, strategy_id)
+    result = _run_backtest_for_strategy_payload(row.to_dict(), req, db)
 
-    strategy["last_backtest_result"] = result
-    strategy["last_backtest_at"] = datetime.now().isoformat()
-    strategy["updated_at"] = datetime.now().isoformat()
-    _save_strategies(strategies)
+    # Save backtest result to its own table
+    bt = ConditionStrategyBacktest(
+        strategy_id=strategy_id,
+        strategy_name=row.name,
+        start_date=req.start_date or "",
+        end_date=req.end_date or "",
+        initial_capital=req.initial_capital,
+        final_capital=result.get("final_capital"),
+        result=result,
+    )
+    db.add(bt)
+    db.flush()
+
+    row.last_backtest_at = now_ist()
+    row.last_backtest_id = bt.id
+    db.commit()
 
     return result
 
@@ -1833,9 +1856,9 @@ async def discover_strategies(
     )
     saved = []
     if req.save_top_strategies and top_results:
-        existing = _load_strategies()
-        existing_names = {s.get("name") for s in existing}
-        next_id = _next_id(existing)
+        existing_names = {
+            name for (name,) in db.query(ConditionStrategy.name).all()
+        }
 
         for rank, item in enumerate(top_results, start=1):
             strategy = dict(item["strategy"])
@@ -1846,28 +1869,47 @@ async def discover_strategies(
                 save_name = f"{base_name} #{suffix}"
                 suffix += 1
 
-            strategy["id"] = next_id
-            next_id += 1
-            strategy["name"] = save_name
-            strategy["description"] = (
+            description = (
                 f"Auto-discovered candidate ranked #{rank}. "
                 f"Score={item['score']}, Return={item['summary'].get('total_return_pct', 0)}%, "
                 f"Sharpe={item['summary'].get('sharpe_ratio', 0)}"
             )
-            strategy["created_at"] = datetime.now().isoformat()
-            strategy["last_scan"] = None
-            strategy["last_signal_count"] = 0
-            strategy["discovery_metadata"] = {
-                "rank": rank,
-                "score": item["score"],
-                "summary": item["summary"],
-                "generated_at": datetime.now().isoformat(),
-            }
-            existing.append(strategy)
-            existing_names.add(save_name)
-            saved.append({"id": strategy["id"], "name": save_name, "rank": rank})
+            new_row = ConditionStrategy(
+                name=save_name,
+                description=description,
+                strategy_type=strategy.get("strategy_type", "Equity Swing"),
+                direction=strategy.get("direction", "BUY"),
+                timeframe=strategy.get("timeframe", "1 Hour"),
+                universe=strategy.get("universe", "NIFTY50"),
+                instruments=strategy.get("instruments", []),
+                entry_conditions=strategy.get("entry_conditions", []),
+                exit_config=strategy.get("exit_config", {}),
+                is_active=True,
+                auto_scan_enabled=False,
+                auto_amount=10000.0,
+            )
+            db.add(new_row)
+            db.flush()
 
-        _save_strategies(existing)
+            # Also persist the backtest result so it shows up in the UI
+            bt = ConditionStrategyBacktest(
+                strategy_id=new_row.id,
+                strategy_name=save_name,
+                start_date=req.start_date or "",
+                end_date=req.end_date or "",
+                initial_capital=req.initial_capital,
+                final_capital=item.get("final_capital"),
+                result={**item.get("summary", {}), "strategy": strategy, "summary": item.get("summary")},
+            )
+            db.add(bt)
+            db.flush()
+            new_row.last_backtest_at = now_ist()
+            new_row.last_backtest_id = bt.id
+
+            existing_names.add(save_name)
+            saved.append({"id": new_row.id, "name": save_name, "rank": rank})
+
+        db.commit()
 
     return {
         "generated_count": len(candidates),
@@ -1897,33 +1939,23 @@ async def discover_strategies(
 # ── Auto-scan scheduler endpoints ──────────────────────────────────────────
 
 @router.post("/scheduler/start/{strategy_id}")
-async def start_auto_scan(strategy_id: int):
+async def start_auto_scan(strategy_id: int, db: Session = Depends(get_db)):
     """Enable auto-scanning for a strategy. Starts the background scheduler."""
-    strategies = _load_strategies()
-    idx = next((i for i, s in enumerate(strategies) if s["id"] == strategy_id), None)
-    if idx is None:
-        raise HTTPException(status_code=404, detail="Strategy not found")
+    row = _get_strategy_or_404(db, strategy_id)
+    row.auto_scan_enabled = True
+    db.commit()
 
-    strategies[idx]["auto_scan_enabled"] = True
-    _save_strategies(strategies)
-
-    # Compute interval from timeframe
     from app.core.condition_scanner_scheduler import (
         ensure_scanner_scheduler, _get_interval_for_timeframe,
     )
-    timeframe = strategies[idx].get("timeframe", "1 Hour")
-    interval = _get_interval_for_timeframe(timeframe)
-    interval = max(interval, 60)  # min 60s
-
-    # Check all active strategies to find the shortest interval
-    active = [s for s in strategies if s.get("auto_scan_enabled")]
-    intervals = [_get_interval_for_timeframe(s.get("timeframe", "1 Hour")) for s in active]
+    timeframe = row.timeframe or "1 Hour"
+    active = db.query(ConditionStrategy).filter_by(auto_scan_enabled=True).all()
+    intervals = [_get_interval_for_timeframe(s.timeframe or "1 Hour") for s in active]
     min_interval = max(min(intervals), 60) if intervals else 300
-
     ensure_scanner_scheduler(min_interval)
 
     return {
-        "message": f"Auto-scan enabled for '{strategies[idx]['name']}'",
+        "message": f"Auto-scan enabled for '{row.name}'",
         "interval_sec": min_interval,
         "strategy_timeframe": timeframe,
         "active_strategies": len(active),
@@ -1931,32 +1963,26 @@ async def start_auto_scan(strategy_id: int):
 
 
 @router.post("/scheduler/stop/{strategy_id}")
-async def stop_auto_scan(strategy_id: int):
+async def stop_auto_scan(strategy_id: int, db: Session = Depends(get_db)):
     """Disable auto-scanning for a strategy. Removes scheduler if no active strategies."""
-    strategies = _load_strategies()
-    idx = next((i for i, s in enumerate(strategies) if s["id"] == strategy_id), None)
-    if idx is None:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-
-    strategies[idx]["auto_scan_enabled"] = False
-    _save_strategies(strategies)
+    row = _get_strategy_or_404(db, strategy_id)
+    row.auto_scan_enabled = False
+    db.commit()
 
     from app.core.condition_scanner_scheduler import (
         ensure_scanner_scheduler, remove_scanner_scheduler,
         _get_interval_for_timeframe,
     )
-
-    # Check if any strategies are still active
-    active = [s for s in strategies if s.get("auto_scan_enabled")]
+    active = db.query(ConditionStrategy).filter_by(auto_scan_enabled=True).all()
     if not active:
         remove_scanner_scheduler()
         return {"message": "Auto-scan disabled. No active strategies — scheduler stopped."}
     else:
-        intervals = [_get_interval_for_timeframe(s.get("timeframe", "1 Hour")) for s in active]
+        intervals = [_get_interval_for_timeframe(s.timeframe or "1 Hour") for s in active]
         min_interval = max(min(intervals), 60)
         ensure_scanner_scheduler(min_interval)
         return {
-            "message": f"Auto-scan disabled for '{strategies[idx]['name']}'",
+            "message": f"Auto-scan disabled for '{row.name}'",
             "remaining_active": len(active),
         }
 
@@ -1969,15 +1995,11 @@ async def get_auto_scan_status():
 
 
 @router.put("/scheduler/amount/{strategy_id}")
-async def set_auto_amount(strategy_id: int, amount: float = Query(default=10000, ge=100, le=10000000)):
+async def set_auto_amount(strategy_id: int, amount: float = Query(default=10000, ge=100, le=10000000), db: Session = Depends(get_db)):
     """Set the auto-execution amount (₹) for a strategy. Quantity is calculated as floor(amount / stock_price)."""
-    strategies = _load_strategies()
-    idx = next((i for i, s in enumerate(strategies) if s["id"] == strategy_id), None)
-    if idx is None:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-
-    strategies[idx]["auto_amount"] = amount
-    _save_strategies(strategies)
+    row = _get_strategy_or_404(db, strategy_id)
+    row.auto_amount = amount
+    db.commit()
     return {"message": f"Auto amount set to ₹{amount:,.0f}", "strategy_id": strategy_id}
 
 
@@ -1992,13 +2014,9 @@ async def backfill_candles_for_strategy(
     Load candle data for all symbols in a strategy's universe,
     using the correct timeframe.  Fetches from Zerodha historical API.
     """
-    strategies = _load_strategies()
-    strategy = next((s for s in strategies if s["id"] == strategy_id), None)
-    if not strategy:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-
-    timeframe = strategy.get("timeframe", "Day")
-    universe = strategy.get("universe", "NIFTY50")
+    row = _get_strategy_or_404(db, strategy_id)
+    timeframe = row.timeframe or "Day"
+    universe = row.universe or "NIFTY50"
     symbols = get_symbols(universe)
 
     from app.core.market.candles import TIMEFRAME_FETCHER, aggregate_15m_to_1h

@@ -50,3 +50,15 @@ class ScannerSignalHistory(Base):
 
     created_at = Column(DateTime(timezone=True), default=now_ist)
     updated_at = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
+
+    @property
+    def indicators_dict(self) -> dict:
+        return _parse_json_field(self.indicators_json)
+
+    @property
+    def signal_payload_dict(self) -> dict:
+        return _parse_json_field(self.signal_payload)
+
+    @property
+    def execution_payload_dict(self) -> dict:
+        return _parse_json_field(self.execution_payload)

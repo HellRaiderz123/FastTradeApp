@@ -85,30 +85,29 @@ def condition_scanner_auto_scan():
 
 def _run_all_strategies(db: Session):
     """Iterate all strategies with auto_scan_enabled=True and run them."""
-    from app.api.routes.condition_scanner import (
-        _load_strategies, _save_strategies, _scan_symbol,
-    )
+    from app.api.routes.condition_scanner import _scan_symbol
+    from app.db.models_condition_strategy import ConditionStrategy
 
     if not _is_market_hours():
         logger.debug("Condition scanner: outside market hours, skipping")
         return
 
-    strategies = _load_strategies()
-    auto_strategies = [s for s in strategies if s.get("auto_scan_enabled")]
+    auto_strategies = (
+        db.query(ConditionStrategy)
+        .filter(ConditionStrategy.auto_scan_enabled == True)
+        .all()
+    )
 
     if not auto_strategies:
         return
 
     logger.info(f"🔍 Condition scanner auto-scan: {len(auto_strategies)} active strategies")
 
-    for strategy in auto_strategies:
+    for row in auto_strategies:
         try:
-            _scan_and_execute_strategy(strategy, strategies, db)
+            _scan_and_execute_strategy(row.to_dict(), [], db)
         except Exception as exc:
-            logger.error(f"Condition scanner: strategy '{strategy.get('name')}' failed: {exc}")
-
-    # Save updated metadata
-    _save_strategies(strategies)
+            logger.error(f"Condition scanner: strategy '{row.name}' failed: {exc}")
 
 
 def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session):
@@ -349,13 +348,17 @@ def remove_scanner_scheduler():
 def get_scheduler_status() -> Dict[str, Any]:
     """Return current scheduler job status."""
     from app.core.market.scheduler import scheduler
-    from app.api.routes.condition_scanner import _load_strategies
+    from app.db.session import SessionLocal
+    from app.db.models_condition_strategy import ConditionStrategy
 
     job_id = _get_job_id()
     job = scheduler.get_job(job_id)
 
-    strategies = _load_strategies()
-    active_strategies = [s for s in strategies if s.get("auto_scan_enabled")]
+    db = SessionLocal()
+    try:
+        active_strategies = db.query(ConditionStrategy).filter_by(auto_scan_enabled=True).all()
+    finally:
+        db.close()
 
     return {
         "scheduler_running": job is not None,
@@ -364,12 +367,12 @@ def get_scheduler_status() -> Dict[str, Any]:
         "active_strategies": len(active_strategies),
         "strategies": [
             {
-                "id": s["id"],
-                "name": s["name"],
-                "timeframe": s.get("timeframe", ""),
-                "last_scan": s.get("last_scan"),
-                "last_signal_count": s.get("last_signal_count", 0),
-                "auto_amount": s.get("auto_amount", 10000.0),
+                "id": s.id,
+                "name": s.name,
+                "timeframe": s.timeframe or "",
+                "last_scan": s.last_scan.isoformat() if s.last_scan else None,
+                "last_signal_count": s.last_signal_count or 0,
+                "auto_amount": s.auto_amount or 10000.0,
             }
             for s in active_strategies
         ],
@@ -378,20 +381,22 @@ def get_scheduler_status() -> Dict[str, Any]:
 
 def resume_scanner_on_startup():
     """Called at server startup — resumes scheduler if any strategies are auto-enabled."""
-    from app.api.routes.condition_scanner import _load_strategies
+    from app.db.session import SessionLocal
+    from app.db.models_condition_strategy import ConditionStrategy
 
     try:
-        strategies = _load_strategies()
-        active = [s for s in strategies if s.get("auto_scan_enabled")]
+        db = SessionLocal()
+        try:
+            active = db.query(ConditionStrategy).filter_by(auto_scan_enabled=True).all()
+        finally:
+            db.close()
+
         if active:
-            # Use the shortest interval among active strategies
             intervals = [
-                _get_interval_for_timeframe(s.get("timeframe", "1 Hour"))
+                _get_interval_for_timeframe(s.timeframe or "1 Hour")
                 for s in active
             ]
-            min_interval = min(intervals) if intervals else 300
-            # Use at least 60 seconds to not overload
-            min_interval = max(min_interval, 60)
+            min_interval = max(min(intervals), 60)
             ensure_scanner_scheduler(min_interval)
             logger.info(f"✅ Condition scanner resumed: {len(active)} strategies, interval={min_interval}s")
         else:
