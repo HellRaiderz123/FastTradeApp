@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, RefreshCw } from 'lucide-react';
 import { journalAPI } from '../lib/api';
+import { useToast } from './Toast';
 
 interface RawIntent {
   id: number;
@@ -34,24 +35,33 @@ const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 const TradeCalendar: React.FC = () => {
   const today = new Date();
+  const { showToast } = useToast();
   const [year, setYear] = useState(today.getFullYear());
-  const [month, setMonth] = useState(today.getMonth()); // 0-indexed
+  const [month, setMonth] = useState(today.getMonth());
   const [dayMap, setDayMap] = useState<Record<string, DayData>>({});
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadTrades = () => {
     setLoading(true);
-    journalAPI.getExecutionIntents(500).then((res) => {
+    journalAPI.getExecutionIntents(1000).then((res) => {
       const data: RawIntent[] = Array.isArray(res.data) ? res.data : [];
       const map: Record<string, DayData> = {};
 
       data.forEach((item) => {
-        // Use closed_at for closed trades, created_at for open/dry-run
+        const pnl = Number(item.pnl ?? 0);
+        // Use closed_at date for closed trades, created_at for open positions
         const dateStr = item.closed_at || item.created_at;
         if (!dateStr) return;
-        const pnl = Number(item.pnl ?? 0);
-        const key = dateStr.slice(0, 10); // YYYY-MM-DD
+
+        // Normalise to YYYY-MM-DD — handle both ISO strings and date-only strings
+        let key: string;
+        try {
+          key = new Date(dateStr).toISOString().slice(0, 10);
+        } catch {
+          key = String(dateStr).slice(0, 10);
+        }
 
         if (!map[key]) map[key] = { pnl: 0, trades: 0, wins: 0, losses: 0, items: [] };
         map[key].pnl += pnl;
@@ -63,7 +73,24 @@ const TradeCalendar: React.FC = () => {
 
       setDayMap(map);
     }).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { loadTrades(); }, []);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await journalAPI.syncZerodha();
+      const { imported, paired_trades, open_positions } = res.data;
+      showToast('success', 'Zerodha Synced',
+        `${imported} imported — ${paired_trades ?? 0} paired trades, ${open_positions ?? 0} open positions`);
+      loadTrades();
+    } catch (err: any) {
+      showToast('error', 'Sync Failed', err?.response?.data?.detail || 'Could not reach Zerodha');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const prevMonth = () => {
     if (month === 0) { setMonth(11); setYear(y => y - 1); }
@@ -113,9 +140,19 @@ const TradeCalendar: React.FC = () => {
           <ChevronLeft className="w-5 h-5" />
         </button>
         <h2 className="text-xl font-bold text-white">{MONTHS[month]} {year}</h2>
-        <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-slate-800 transition text-slate-300">
-          <ChevronRight className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-white text-xs font-medium transition"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing...' : 'Sync Zerodha'}
+          </button>
+          <button onClick={nextMonth} className="p-2 rounded-lg hover:bg-slate-800 transition text-slate-300">
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {loading ? (

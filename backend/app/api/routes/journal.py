@@ -156,7 +156,7 @@ def list_strategy_runs(
     response_model=List[ExecutionIntentOut],
 )
 def list_execution_intents(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(200, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     """
@@ -332,129 +332,213 @@ def sync_zerodha_trades(
 ):
     """
     Import actual executed trades from Zerodha orders/trades API.
-    Creates ZERODHA_ACTUAL journal entries for trades not already tracked.
-    Skips duplicates (matched by order_id stored in execution_result).
+    Pairs BUY+SELL orders per symbol to compute realized P&L.
+    Skips duplicates matched by order_id in execution_result.
     """
-    import json as _json
-
     try:
         kite = get_kite_client()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Zerodha not connected: {e}")
 
-    # Fetch orders and trades from Zerodha
     try:
         orders = kite.orders() or []
         trades = kite.trades() or []
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Zerodha API error: {e}")
 
-    # Build a map of order_id → trade fill details
-    trade_map: dict = {}
+    # Build order_id → fill price from trades (more accurate than order avg_price)
+    trade_fill: dict = {}
     for t in trades:
         oid = str(t.get("order_id", ""))
         if oid:
-            trade_map[oid] = t
+            trade_fill[oid] = float(t.get("average_price") or t.get("price") or 0)
 
-    # Collect all existing order_ids already in DB to avoid duplicates
-    existing_intents = db.query(ExecutionIntent).all()
+    # Collect existing order_ids to skip duplicates
     existing_order_ids: set = set()
-    for intent in existing_intents:
+    for intent in db.query(ExecutionIntent).all():
         er = intent.execution_result_dict
         oid = er.get("order_id") or er.get("zerodha_order_id")
         if oid:
             existing_order_ids.add(str(oid))
 
+    # ── Build per-symbol FIFO queue to pair BUY→SELL and compute P&L ──────────
+    # symbol → list of {price, qty, order_id, timestamp, transaction_type, order}
+    from collections import defaultdict
+    symbol_buys: dict = defaultdict(list)   # open buy lots waiting for a sell
+    completed_trades: list = []             # fully paired trades with P&L
+    unpaired_orders: list = []              # BUY orders with no matching SELL yet
+
+    # Sort orders by timestamp so FIFO pairing is correct
+    def _ts(o):
+        ts = o.get("order_timestamp") or o.get("exchange_timestamp")
+        if isinstance(ts, str):
+            try:
+                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                pass
+        if isinstance(ts, datetime):
+            return ts
+        return datetime.min
+
+    complete_orders = [
+        o for o in orders
+        if (o.get("status") or "").upper() == "COMPLETE"
+        and o.get("tradingsymbol")
+        and int(o.get("filled_quantity") or o.get("quantity") or 0) > 0
+    ]
+    complete_orders.sort(key=_ts)
+
+    for order in complete_orders:
+        order_id = str(order.get("order_id", ""))
+        symbol = order.get("tradingsymbol", "").strip()
+        txn = (order.get("transaction_type") or "BUY").upper()
+        qty = int(order.get("filled_quantity") or order.get("quantity") or 0)
+        price = trade_fill.get(order_id) or float(order.get("average_price") or order.get("price") or 0)
+        ts = _ts(order)
+
+        if txn == "BUY":
+            symbol_buys[symbol].append({
+                "price": price, "qty": qty,
+                "order_id": order_id, "ts": ts, "order": order,
+            })
+        elif txn == "SELL":
+            # FIFO match against open buys
+            remaining_sell = qty
+            sell_cost = 0.0
+            buy_cost = 0.0
+            matched_buy_ids = []
+
+            while remaining_sell > 0 and symbol_buys[symbol]:
+                buy = symbol_buys[symbol][0]
+                matched_qty = min(buy["qty"], remaining_sell)
+                buy_cost += buy["price"] * matched_qty
+                sell_cost += price * matched_qty
+                matched_buy_ids.append(buy["order_id"])
+
+                buy["qty"] -= matched_qty
+                remaining_sell -= matched_qty
+                if buy["qty"] == 0:
+                    symbol_buys[symbol].pop(0)
+
+            realized_pnl = sell_cost - buy_cost
+            matched_qty_total = qty - remaining_sell
+
+            if matched_qty_total > 0:
+                completed_trades.append({
+                    "symbol": symbol,
+                    "sell_order_id": order_id,
+                    "buy_order_ids": matched_buy_ids,
+                    "qty": matched_qty_total,
+                    "buy_price": buy_cost / matched_qty_total if matched_qty_total else 0,
+                    "sell_price": price,
+                    "pnl": realized_pnl,
+                    "ts": ts,
+                    "order": order,
+                })
+
+    # Also add remaining unmatched BUY orders (open positions) as individual entries
+    for symbol, buys in symbol_buys.items():
+        for buy in buys:
+            unpaired_orders.append(buy)
+
     added = 0
     skipped = 0
 
-    for order in orders:
-        order_id = str(order.get("order_id", ""))
-        status = (order.get("status") or "").upper()
-
-        # Only import COMPLETE orders
-        if status != "COMPLETE":
+    # ── Insert completed (paired) trades ──────────────────────────────────────
+    for trade in completed_trades:
+        sell_oid = trade["sell_order_id"]
+        if sell_oid in existing_order_ids:
             skipped += 1
             continue
 
-        if order_id in existing_order_ids:
-            skipped += 1
-            continue
-
-        symbol = order.get("tradingsymbol", "").strip()
-        transaction_type = order.get("transaction_type", "BUY").upper()
-        qty = int(order.get("filled_quantity") or order.get("quantity") or 0)
-        avg_price = float(order.get("average_price") or order.get("price") or 0)
-        order_timestamp = order.get("order_timestamp") or order.get("exchange_timestamp")
-
-        if not symbol or qty == 0:
-            skipped += 1
-            continue
-
-        # Get fill price from trades if available
-        fill = trade_map.get(order_id, {})
-        fill_price = float(fill.get("average_price") or avg_price)
-
-        # Determine if this is a closing trade (SELL for equity)
-        # For simplicity, treat each order as its own journal entry
-        entry_value = fill_price * qty
-
-        # Parse order timestamp
-        created = now_ist()
-        if order_timestamp:
-            try:
-                if isinstance(order_timestamp, str):
-                    created = datetime.fromisoformat(order_timestamp.replace("Z", "+00:00"))
-                else:
-                    created = order_timestamp
-            except Exception:
-                pass
-
+        order = trade["order"]
         intent = ExecutionIntent(
             run_id=0,
-            intent_id=f"zerodha_actual_{order_id}",
+            intent_id=f"zerodha_actual_{sell_oid}",
+            strategy="ZERODHA_ACTUAL",
+            underlying=trade["symbol"],
+            status="EXECUTED",
+            executed=True,
+            ticket={
+                "legs": [
+                    {"symbol": trade["symbol"], "side": "BUY",  "price": round(trade["buy_price"], 2),  "qty": trade["qty"]},
+                    {"symbol": trade["symbol"], "side": "SELL", "price": round(trade["sell_price"], 2), "qty": trade["qty"]},
+                ],
+                "lot_size": 1, "lots": 1,
+            },
+            entry_credit=round(trade["buy_price"] * trade["qty"], 2),
+            pnl=round(trade["pnl"], 2),
+            unrealized_pnl=0.0,
+            execution_result={
+                "mode": "ZERODHA_ACTUAL",
+                "order_id": sell_oid,
+                "buy_order_ids": trade["buy_order_ids"],
+                "exchange": order.get("exchange", ""),
+                "product": order.get("product", ""),
+                "transaction_type": "SELL",
+                "source": "zerodha_order_sync",
+                "synced_at": now_ist().isoformat(),
+            },
+            created_at=trade["ts"],
+            closed_at=trade["ts"],
+            last_mtm_at=now_ist(),
+            exit_reason="ZERODHA_ACTUAL",
+        )
+        db.add(intent)
+        existing_order_ids.add(sell_oid)
+        added += 1
+
+    # ── Insert unmatched BUY orders as open positions ─────────────────────────
+    for buy in unpaired_orders:
+        oid = buy["order_id"]
+        if oid in existing_order_ids:
+            skipped += 1
+            continue
+        symbol = buy["order"].get("tradingsymbol", "").strip()
+        order = buy["order"]
+        intent = ExecutionIntent(
+            run_id=0,
+            intent_id=f"zerodha_actual_{oid}",
             strategy="ZERODHA_ACTUAL",
             underlying=symbol,
             status="EXECUTED",
             executed=True,
             ticket={
-                "legs": [{
-                    "symbol": symbol,
-                    "side": transaction_type,
-                    "price": fill_price,
-                    "qty": qty,
-                }],
-                "lot_size": 1,
-                "lots": 1,
+                "legs": [{"symbol": symbol, "side": "BUY", "price": buy["price"], "qty": buy["qty"]}],
+                "lot_size": 1, "lots": 1,
             },
-            entry_credit=entry_value,
-            pnl=0.0,
-            unrealized_pnl=0.0,
+            entry_credit=round(buy["price"] * buy["qty"], 2),
+            pnl=None,
+            unrealized_pnl=None,
             execution_result={
                 "mode": "ZERODHA_ACTUAL",
-                "order_id": order_id,
+                "order_id": oid,
                 "exchange": order.get("exchange", ""),
                 "product": order.get("product", ""),
-                "order_type": order.get("order_type", ""),
-                "transaction_type": transaction_type,
+                "transaction_type": "BUY",
                 "source": "zerodha_order_sync",
                 "synced_at": now_ist().isoformat(),
             },
-            created_at=created,
+            created_at=buy["ts"],
+            closed_at=None,   # still open
             last_mtm_at=now_ist(),
-            # Mark as closed since it's a completed historical order
-            closed_at=created,
-            exit_reason="ZERODHA_ACTUAL",
         )
         db.add(intent)
-        existing_order_ids.add(order_id)
+        existing_order_ids.add(oid)
         added += 1
 
     if added:
         db.commit()
 
-    logger.info(f"✅ Zerodha sync: {added} new trades imported, {skipped} skipped")
-    return {"success": True, "imported": added, "skipped": skipped, "total_orders": len(orders)}
+    logger.info(f"✅ Zerodha sync: {added} trades imported ({len(completed_trades)} paired, {len(unpaired_orders)} open), {skipped} skipped")
+    return {
+        "success": True,
+        "imported": added,
+        "paired_trades": len(completed_trades),
+        "open_positions": len(unpaired_orders),
+        "skipped": skipped,
+        "total_orders": len(orders),
+    }
 
 
 @router.delete("/execution-intents/{intent_id}")
