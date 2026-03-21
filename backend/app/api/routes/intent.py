@@ -132,8 +132,15 @@ def create_intent(
 
     # Extract expiry from context (if available)
     expiry = None
-    if run.context and isinstance(run.context, dict):
-        expiry = run.context.get("expiry")
+    raw_context = run.context or {}
+    if isinstance(raw_context, str):
+        import json as _json
+        try:
+            raw_context = _json.loads(raw_context)
+        except Exception:
+            raw_context = {}
+    if isinstance(raw_context, dict):
+        expiry = raw_context.get("expiry")
     
     # If expiry not in context, try to get current weekly expiry as fallback
     if not expiry:

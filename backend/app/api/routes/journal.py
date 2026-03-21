@@ -76,8 +76,7 @@ def _sync_zerodha_live_positions(db: Session) -> List[ExecutionIntent]:
             
             found = False
             for intent in existing:
-                ticket = intent.ticket or {}
-                legs = ticket.get("legs", [])
+                legs = intent.ticket_dict.get("legs", [])
                 for leg in legs:
                     leg_symbol = leg.get("symbol", "")
                     if leg_symbol and leg_symbol == symbol:
@@ -196,6 +195,12 @@ def list_execution_intents(
             mode = None
             if isinstance(intent.execution_result, dict):
                 mode = intent.execution_result.get("mode")
+            elif isinstance(intent.execution_result, str):
+                import json as _json
+                try:
+                    mode = _json.loads(intent.execution_result).get("mode")
+                except Exception:
+                    pass
             if mode and str(mode).upper() != "PAPER":
                 continue
 
@@ -241,6 +246,16 @@ def analyze_spreads(
         .all()
     )
     
+    def _parse_json(value):
+        """Coerce JSON column to dict — handles string values from PostgreSQL."""
+        if isinstance(value, str):
+            import json as _json
+            try:
+                return _json.loads(value)
+            except Exception:
+                return {}
+        return value if isinstance(value, dict) else {}
+
     # Convert to dicts for the detector
     intent_dicts = [
         {
@@ -248,7 +263,7 @@ def analyze_spreads(
             "strategy": intent.strategy,
             "underlying": intent.underlying,
             "expiry": intent.expiry,
-            "ticket": intent.ticket or {},
+            "ticket": intent.ticket_dict,
             "pnl": intent.pnl,
             "unrealized_pnl": intent.unrealized_pnl,
             "entry_credit": intent.entry_credit,

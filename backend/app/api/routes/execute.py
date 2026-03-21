@@ -123,7 +123,7 @@ def execute_paper(
         )
 
     # ── 4. Adjust lot count for drawdown zone ───────────────────────────────
-    ticket = intent.ticket or {}
+    ticket = intent.ticket_dict
     original_lots = ticket.get("lots", 1)
     adjusted_lots = dd_tracker.get_adjusted_lots(requested_lots=original_lots)
 
@@ -209,7 +209,7 @@ def execute_paper(
             underlying=intent.underlying or "N/A",
             trade_details={
                 "entry_credit": entry_credit,
-                "legs": intent.ticket.get("legs", []),
+                "legs": (intent.ticket if isinstance(intent.ticket, dict) else {}).get("legs", []),
                 "mode": get_execution_mode(),
                 "intent_id": intent.intent_id,
                 "lots_adjusted": adjusted_lots != original_lots,

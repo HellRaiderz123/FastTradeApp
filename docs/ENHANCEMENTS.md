@@ -1,178 +1,309 @@
-# FastTradeApp — Suggested Enhancements & Roadmap
+# FastTradeApp — Enhancements & Roadmap
 
-## Priority 1 — High Impact, Relatively Low Effort
-
-### 1. PostgreSQL Migration
-Currently using SQLite which has write-lock issues under concurrent load.
-- Migrate to PostgreSQL using the existing SQLAlchemy setup (just change DATABASE_URL)
-- Add connection pooling (pgBouncer or SQLAlchemy pool config)
-- Enables horizontal scaling and concurrent writes from scheduler + API
-
-### 2. Strategy P&L Dashboard
-There's trade data in `strategy_runs` but no dedicated analytics page.
-- Equity curve per strategy
-- Win rate, avg win/loss, profit factor per strategy
-- Drawdown chart
-- Monthly/weekly P&L heatmap calendar
-
-### 3. Options Strategy Builder (Visual)
-Currently spreads are configured via forms. Add a visual payoff diagram builder:
-- Drag-and-drop legs (buy/sell call/put at any strike)
-- Real-time payoff diagram at expiry
-- Greeks aggregation for the full position
-- Max profit/loss/breakeven display
-
-### 4. Telegram / WhatsApp Notifications
-Gmail SMTP is already wired in. Add:
-- Telegram Bot API for instant trade alerts
-- WhatsApp via Twilio or Meta Cloud API
-- Push notifications for mobile app (Expo Notifications)
-
-### 5. Zerodha GTT (Good Till Triggered) Orders
-Zerodha supports GTT orders for TP/SL that persist even when the app is offline.
-- Place GTT on entry instead of polling for TP/SL
-- Reduces server load and eliminates missed exits on downtime
+> **Last audited:** Full live codebase scan — `backend/app/`, `web/src/`, `mobile/`, `.env`
+> **Legend:** ✅ Done · 🔧 Partial · ❌ Not started
 
 ---
 
-## Priority 2 — Significant Value, Medium Effort
+## Infrastructure
 
-### 6. Strategy Marketplace / Templates
-- Pre-built strategy templates (Iron Condor, Covered Call, Straddle, etc.)
-- One-click deploy with sensible defaults
-- Community-shared strategies (local JSON import/export to start)
-
-### 7. Live Options Greeks Dashboard
-- Real-time portfolio-level Greeks (total Delta, Gamma, Theta, Vega)
-- Delta-neutral hedging suggestions
-- Theta decay visualization per position
-
-### 8. Backtesting Improvements
-- Walk-forward backtest UI (currently only in ML module)
-- Monte Carlo simulation for strategy robustness
-- Slippage and impact cost modeling
-- Intraday backtest support (currently daily-focused)
-
-### 9. Multi-Account Support
-- Trade across multiple Zerodha sub-accounts or family accounts
-- Consolidated P&L view
-- Per-account risk limits
-
-### 10. Broker Reconciliation Dashboard
-`broker_reconcile.py` exists but there's no UI for it.
-- Show discrepancies between app positions and broker positions
-- One-click sync
-- Audit log of reconciliation events
-
-### 11. Advanced Screener
-Current screener is basic. Add:
-- Fundamental filters (P/E, P/B, ROE, debt/equity, promoter holding)
-- Relative strength vs. index
-- 52-week high/low proximity
-- Earnings date proximity filter
-- Save and schedule screener runs
-
-### 12. Correlation & Portfolio Risk View
-`correlation.py` exists in ML module but isn't surfaced in UI.
-- Correlation matrix heatmap for portfolio holdings
-- VaR (Value at Risk) calculation
-- Portfolio beta vs. NIFTY
+| Item | Status | Evidence |
+|------|--------|----------|
+| PostgreSQL (Neon) migration | ✅ | `DATABASE_URL` in `.env` points to Neon, `session.py` has full PG pool config |
+| SQLite → Postgres migration script | ✅ | `backend/migrate_to_postgres.py` — full table-by-table copy |
+| Connection pooling (PG) | ✅ | `session.py`: `pool_size=5`, `max_overflow=10`, `pool_pre_ping`, `pool_recycle=300` |
+| Dockerfile (backend) | ✅ | `backend/Dockerfile` |
+| Dockerfile (frontend) | ✅ | `web/Dockerfile` |
+| docker-compose.yml | ✅ | Root `docker-compose.yml` |
+| `.env` — all variables documented | ✅ | 60+ vars across 10 sections |
+| Rate limiter | ✅ | `backend/app/core/rate_limiter.py` |
+| Auth (Bearer token) | ✅ | `backend/app/core/auth.py`, `AUTH_ENABLED` flag |
+| Retry handler | ✅ | `backend/app/core/retry_handler.py` |
+| Structured JSON logging | ✅ | `JSON_LOGS` env var, `logging_config.py` |
+| Circuit breaker | ✅ | `backend/app/core/risk/circuit_breaker.py` |
+| Kill switch | ✅ | `backend/app/core/risk/kill_switch.py` |
+| CI/CD pipeline | ❌ | No GitHub Actions |
+| Secrets management (Vault/AWS SM) | ❌ | `.env` file only |
+| Prometheus metrics endpoint | ❌ | No `/metrics` |
+| Grafana / Sentry | ❌ | Not integrated |
 
 ---
 
-## Priority 3 — Advanced Features, Higher Effort
+## Broker Integration
 
-### 13. Reinforcement Learning Agent
-Replace rule-based auto-trader with an RL agent:
-- Train on historical data with reward = risk-adjusted return
-- PPO or SAC algorithm (Stable Baselines3)
-- Paper trade the RL agent before going live
-
-### 14. Order Flow Analysis
-- Tick-by-tick data analysis (requires Zerodha WebSocket full mode)
-- Large order detection (iceberg orders)
-- VWAP deviation alerts
-- Time & Sales view
-
-### 15. Options Expiry Analytics
-- Historical expiry analysis (where does NIFTY close relative to max pain?)
-- Expiry week volatility patterns
-- Best strategies by expiry type (weekly vs. monthly)
-
-### 16. Fundamental Data Integration
-- Quarterly results tracking (EPS, revenue, margins)
-- Promoter holding changes
-- FII/DII flow data
-- Corporate actions (dividends, splits, buybacks)
-
-### 17. Mobile App Feature Parity
-Current mobile app is minimal. Bring it to parity with web:
-- Full options chain
-- Backtest viewer
-- Auto-trader control
-- Finance tracker
-- Push notifications
-
-### 18. Audit Trail & Compliance
-- Immutable trade log (append-only table)
-- Export trades to CSV/Excel for tax filing
-- FIFO/LIFO P&L calculation for tax purposes
-- Capital gains report (STCG/LTCG for Indian tax)
-
-### 19. Paper Trading Competition Mode
-- Multiple paper portfolios with different strategies
-- Leaderboard view
-- Strategy performance comparison over same time period
-
-### 20. AI Chat Assistant
-- Natural language interface: "Show me all losing trades this month"
-- Strategy suggestions based on current market conditions
-- Explain why a signal was generated (already have SHAP, just need UI)
-- Powered by a local LLM or OpenAI API
+| Item | Status | Evidence |
+|------|--------|----------|
+| Zerodha KiteConnect | ✅ | `core/broker/zerodha/` — client, instruments, OAuth |
+| Zerodha OAuth login | ✅ | `oauth.py`, Settings UI with OAuth flow |
+| Zerodha dry run / live / paper modes | ✅ | `execution/mode.py`, `EXECUTION_MODE` env |
+| INDMoney / INDstocks | ✅ | `execution/indmoney.py`, `indmoney_broker.py` |
+| Broker reconciliation backend | ✅ | `core/exit/broker_reconcile.py` |
+| Broker reconciliation UI | ✅ | `web/src/pages/BrokerReconciliation.tsx` |
+| Broker status indicator (header) | ✅ | Header shows active broker + execution mode |
+| Multi-broker switching | ✅ | `ACTIVE_BROKER` env + Settings UI |
+| Zerodha GTT orders | ❌ | No `place_gtt()` call anywhere in codebase |
 
 ---
 
-## Quick Wins (Can be done in < 1 day each)
+## Trading Engine
 
-| Enhancement                          | Effort | Impact |
-|--------------------------------------|--------|--------|
-| Dark/light theme toggle              | Low    | Medium |
-| CSV export for strategy runs         | Low    | High   |
-| Keyboard shortcuts for terminal      | Low    | Medium |
-| Favicon and PWA manifest             | Low    | Low    |
-| Rate limit display in UI             | Low    | Medium |
-| Broker connection status indicator   | Low    | High   |
-| Last signal timestamp per symbol     | Low    | Medium |
-| Collapsible sidebar sections         | Low    | Medium |
-| Mobile-responsive web layout         | Medium | High   |
-| API docs link in UI (FastAPI /docs)  | Low    | Medium |
+| Item | Status | Evidence |
+|------|--------|----------|
+| Option spread strategies (15m) | ✅ | `core/strategies/option_spread_15m/` |
+| Custom option spread engine | ✅ | `core/strategies/option_spread_custom/` |
+| Stock strategies (momentum, mean reversion, trend) | ✅ | `core/strategies/stock_strategies/` |
+| Strategy CRUD + enable/disable/deploy | ✅ | `routes/strategies.py`, `StrategyManager.tsx` |
+| Strategy Builder (visual + payoff diagram) | ✅ | `StrategyBuilder.tsx` — SVG payoff chart, Greeks, PoP, breakevens |
+| Strategy Marketplace (8 templates) | ✅ | `routes/marketplace.py` + `StrategyMarketplace.tsx` |
+| Auto Trader | ✅ | `AutoTrader.tsx` + `core/auto_trader.py` — start/stop/pause/config/logs |
+| Paper trading + MTM | ✅ | `execution/paper.py`, `execution/paper_mtm.py` |
+| TP/SL auto-exit | ✅ | `core/exit/auto_exit.py` scheduler |
+| Trailing stop loss | ✅ | `core/risk/tp_sl_calculator.py` |
+| Expiry auto-exit | ✅ | `core/market/expiry_exit.py` scheduler |
+| Trade cost calculator | ✅ | `routes/trade_costs.py` + `TradeCostTracker.tsx` |
+| Risk limits (DB-backed, IV regime) | ✅ | `core/risk/risk_limits_config.py` |
+| Drawdown tracker | ✅ | `core/risk/drawdown_tracker.py` |
+| Trade limit enforcement | ✅ | `core/risk/trade_limit.py` |
+| Zerodha GTT orders | ❌ | Not implemented |
 
 ---
 
-## Infrastructure Improvements
+## Market Data
 
-### Containerization
-- Dockerfile for backend (Python + Uvicorn)
-- Dockerfile for frontend (Node + Nginx)
-- docker-compose.yml for local dev
-- Enables consistent deployment across environments
+| Item | Status | Evidence |
+|------|--------|----------|
+| Live LTP (Zerodha) | ✅ | `core/market/ltp.py` |
+| Options chain (real Zerodha data) | ✅ | `routes/options_real.py` |
+| Candle data (1m, 5m, 15m, 1h, daily) | ✅ | Scheduler + `models_candles.py` |
+| Multi-timeframe view | ✅ | `MultiTimeframe.tsx` |
+| VIX / IV Rank | ✅ | `core/market/vix_iv_api.py`, `iv_rank_calculator.py` |
+| Sector performance | ✅ | `routes/market_dashboard.py` |
+| Market depth | ✅ | `routes/market_depth.py` |
+| Economic calendar | ✅ | `routes/economic_calendar.py` |
+| Peer comparison | ✅ | `routes/peer_comparison.py` |
+| WebSocket live positions | ✅ | `routes/ws_positions.py` |
+| 52-week high/low (live) | 🔧 | In `Symbol` model schema, not live-fetched from broker API |
 
-### CI/CD Pipeline
-- GitHub Actions for lint + test on PR
-- Auto-deploy to VPS on merge to main
-- Environment-specific configs (dev/staging/prod)
+---
 
-### Secrets Management
-- Move from .env file to AWS Secrets Manager or HashiCorp Vault
-- Rotate Zerodha access tokens automatically
-- Never commit credentials to git
+## ML & Signals
 
-### Monitoring & Observability
-- Structured JSON logging (already configurable via JSON_LOGS env)
-- Prometheus metrics endpoint
-- Grafana dashboard for API latency, trade counts, scheduler health
-- Sentry for error tracking
+| Item | Status | Evidence |
+|------|--------|----------|
+| GBM stock ML model | ✅ | `core/ml/stock_model.py`, `STOCK_ML_ENABLED` flag |
+| Ensemble model | ✅ | `core/ml/ensemble.py` |
+| SHAP explainability | ✅ | `core/ml/shap_explainer.py` |
+| Walk-forward backtest | ✅ | `core/ml/walk_forward.py` |
+| Signal backtest | ✅ | `core/ml/signal_backtest.py` |
+| News sentiment (NLP) | ✅ | `core/ml/news_sentiment.py` |
+| Twitter/X sentiment | ✅ | `services/twitter_service.py` + `TwitterAlerts.tsx` |
+| Correlation matrix UI | ✅ | `core/ml/correlation.py` + ML Center tab |
+| ML Center UI (all tabs) | ✅ | `MLCenter.tsx` |
+| Signal diagnostics | ✅ | `core/learning/signal_diagnostics.py` + Journal UI |
+| Condition strategy lab | ✅ | `core/condition_strategy_lab.py` |
+| Create Scanner | ✅ | `CreateScanner.tsx` + `routes/condition_scanner.py` |
 
-### Rate Limiting
-- `rate_limiter.py` exists but add per-IP rate limiting at API gateway level
-- Protect against accidental loops hitting broker APIs
+---
+
+## Analytics & Reporting
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Strategy P&L dashboard | ✅ | `StrategyPnL.tsx` — equity curve, drawdown, monthly heatmap, per-strategy table, exit reasons |
+| P&L analytics backend | ✅ | `routes/analytics.py` — full endpoint with filters |
+| Trade Journal | ✅ | `Journal.tsx` — P&L filter, execution type filter, diagnostics, delete |
+| Journal CSV export | ❌ | Export button renders but has **no onClick handler** — completely unwired |
+| Backtest engine | ✅ | `core/backtest/engine.py` + `Backtest.tsx` |
+| Backtest comparison | ✅ | `BacktestComparison.tsx` |
+| Heatmap | ✅ | `Heatmap.tsx` |
+| Bloomberg Terminal | ✅ | `TerminalBloomberg.tsx` |
+| Finance tracker | ✅ | `FinanceTracker.tsx` — budgets, goals, bills, forecasts, recurring |
+| Audit trail / STCG/LTCG tax export | ❌ | No FIFO/LIFO P&L, no capital gains report |
+
+---
+
+## Screener
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Basic filters (price, RSI, volume, MA) | ✅ | `routes/screener.py` + `Screener.tsx` |
+| Fundamental filters (P/E, P/B, ROE, D/E, div yield) | ✅ | Backend + UI both implemented |
+| 52-week high/low proximity | ✅ | `near_52w_high` / `near_52w_low` filters in backend + UI |
+| Save/load custom presets (localStorage) | ✅ | `CUSTOM_PRESETS_KEY`, save/delete UI in `Screener.tsx` |
+| Built-in presets (7) | ✅ | breakout, oversold, overbought, high_volume, trending_up, large_cap, IT sector |
+| Earnings date proximity filter | ❌ | No earnings data source |
+| Relative strength vs NIFTY | ❌ | Not implemented |
+| Schedule screener runs | ❌ | No cron/scheduler |
+| Promoter holding filter | ❌ | No data source |
+
+---
+
+## Notifications
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Gmail / SMTP alerts | ✅ | `services/notifications.py` — trade executed, SL/TP hit, daily summary, system errors |
+| In-app notifications (DB-backed) | ✅ | `models_notification.py`, `routes/notifications.py` |
+| Telegram notifications | ❌ | `TELEGRAM_BOT_TOKEN` in `.env` but **zero Telegram code** in `notifications.py` |
+| WhatsApp notifications | ❌ | Not started |
+| Push notifications (mobile) | ❌ | Expo Notifications not wired |
+| Rate limit display in UI | ❌ | `rate_limiter.py` exists, not surfaced in Header or anywhere in UI |
+
+---
+
+## UI / UX
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Dark mode (default) | ✅ | CSS variables + `html.light-mode` class |
+| Light mode toggle | ✅ | Header button + Settings toggle, persisted to localStorage |
+| Favicon + PWA manifest | ✅ | `web/public/favicon.svg`, `manifest.json` |
+| API docs link in header | ✅ | `/api/docs` ExternalLink in `Header.tsx` |
+| Sidebar (20+ items) | ✅ | All pages linked |
+| Collapsible sidebar (icon-only) | ✅ | Collapses to `w-20` icon-only mode |
+| Sidebar section grouping | ❌ | All items in one flat list — no sections/groups |
+| Keyboard shortcuts | ❌ | No `useKeyboardShortcuts` hook, no command palette |
+| Mobile-responsive web layout | 🔧 | Tailwind responsive classes used, but tables/charts overflow on small screens |
+| Last signal timestamp per symbol | ❌ | Not surfaced anywhere in UI |
+| Options Greeks dashboard (portfolio-level) | ❌ | `routes/greeks.py` exists for single-leg calc, no portfolio aggregation page |
+
+---
+
+## Mobile App
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Expo React Native app | 🔧 | `mobile/app/` — dashboard, journal, positions, strategies, backtest, settings |
+| Mobile feature parity with web | ❌ | Missing: screener, ML center, auto-trader, finance tracker, options chain, watchlists |
+| Mobile push notifications | ❌ | Not wired |
+
+---
+
+## Pending Work — Prioritized
+
+### 🟢 Quick Wins (< 2 hours each)
+
+#### 1. Journal CSV Export *(button exists, no handler)*
+Wire the Export button in `Journal.tsx` — download `filteredEntries` as CSV.
+Columns: date, strategy, underlying, entry price, exit price, P&L, P&L%, status, mode.
+**File:** `web/src/pages/Journal.tsx` only — ~10 lines.
+
+#### 2. Rate Limit Display in UI
+Expose remaining quota from `rate_limiter.py` via `GET /system/rate-limit-status`.
+Show a small badge in `Header.tsx` (e.g. "API 42/60").
+**Files:** `backend/app/core/rate_limiter.py`, `backend/app/api/system_control.py`, `web/src/components/Header.tsx`.
+
+#### 3. Last Signal Timestamp per Symbol
+Add `last_signal_at` per underlying to the auto-trader status response.
+Show "last scanned X mins ago" badge in `AutoTrader.tsx` dashboard tab.
+**Files:** `backend/app/api/routes/auto_trader.py`, `web/src/pages/AutoTrader.tsx`.
+
+---
+
+### 🟡 Medium Effort (1–3 days each)
+
+#### 4. Telegram Notifications
+`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` already in `.env` — just needs the sender.
+- Add `send_telegram(message)` in `services/notifications.py`
+- Call it alongside Gmail in `_send_notification()` for HIGH/CRITICAL priority
+- Add Telegram section in `Settings.tsx` (bot token + chat ID + test button)
+**Files:** `backend/app/services/notifications.py`, `web/src/pages/Settings.tsx`.
+
+#### 5. Sidebar Section Grouping
+Group the 20+ sidebar items into collapsible sections: Market · Trading · Analytics · Tools · System.
+Persist collapsed state per section in localStorage.
+**File:** `web/src/components/Sidebar.tsx`.
+
+#### 6. Keyboard Shortcuts
+- `Ctrl+K` → command palette / quick nav
+- Single-key nav: `T`=Terminal, `S`=Screener, `J`=Journal, `P`=Positions, `A`=AutoTrader
+**Files:** new `web/src/hooks/useKeyboardShortcuts.ts`, `web/src/App.tsx`.
+
+#### 7. Live Options Greeks Dashboard
+New page showing portfolio-level Δ, Γ, Θ, Vega aggregated across all open `ExecutionIntent` positions.
+`routes/greeks.py` already calculates per-leg — just needs a portfolio aggregation endpoint + page.
+Delta-neutral suggestion: show lots needed to flatten delta.
+**Files:** new `backend/app/api/routes/portfolio_greeks.py`, new `web/src/pages/OptionsGreeks.tsx`.
+
+#### 8. Audit Trail & Tax Export (STCG/LTCG)
+- New endpoint `GET /audit/trades` — all closed intents with holding period classification
+- FIFO P&L per symbol, STCG (< 1 year) vs LTCG (≥ 1 year) for Indian tax
+- CSV export with ITR-compatible columns
+**Files:** new `backend/app/api/routes/audit.py`, new `web/src/pages/AuditTrail.tsx`.
+
+---
+
+### 🔴 Significant Effort (3–7 days each)
+
+#### 9. Zerodha GTT Orders
+On trade entry, place a GTT on Zerodha for TP and SL instead of polling every 30s.
+Eliminates missed exits when the app is offline or restarting.
+Requires `kite.place_gtt()` + GTT status polling + fallback to current polling on failure.
+**Files:** `backend/app/core/execution/zerodha.py`, `backend/app/core/exit/auto_exit.py`.
+
+#### 10. Mobile App Feature Parity
+Add to Expo app: Screener, Auto Trader control, Finance Tracker, ML predictions, Watchlists.
+Wire Expo push notifications to backend trade alerts.
+**Files:** `mobile/app/` (multiple new screens).
+
+#### 11. Advanced Screener — Remaining Filters
+- Relative strength vs NIFTY (rolling return comparison)
+- Earnings date proximity (NSE or external API)
+- Schedule screener runs (cron + email results)
+- Promoter holding % (BSE/NSE shareholding data)
+**Files:** `backend/app/api/routes/screener.py`, `web/src/pages/Screener.tsx`.
+
+---
+
+### ⚫ Long-term / Advanced
+
+#### 12. CI/CD Pipeline
+GitHub Actions: `tsc --noEmit` + `pytest` on PR, Docker build + deploy on merge to `main`.
+**Files:** new `.github/workflows/ci.yml`, `.github/workflows/deploy.yml`.
+
+#### 13. Monitoring & Observability
+Prometheus `/metrics` endpoint, Grafana dashboard, Sentry SDK for frontend + backend.
+**Files:** `backend/app/main.py`, new `backend/app/api/routes/metrics.py`.
+
+#### 14. Secrets Management
+Move from `.env` to AWS Secrets Manager or HashiCorp Vault. Auto-rotate Zerodha token daily.
+
+#### 15. Reinforcement Learning Agent
+Replace rule-based auto-trader signal with PPO/SAC RL agent (Stable Baselines3).
+Train on historical `ExecutionIntent` outcomes. Paper trade before going live.
+**Files:** new `backend/app/core/ml/rl_agent.py`.
+
+#### 16. Multi-Account Support
+Trade across multiple Zerodha sub-accounts. Consolidated P&L view. Per-account risk limits.
+
+#### 17. AI Chat Assistant
+Natural language: "Show me all losing trades this month."
+SHAP explanations already exist — needs a chat UI + LLM backend.
+**Files:** new `web/src/pages/AIAssistant.tsx`, new `backend/app/api/routes/ai_chat.py`.
+
+#### 18. Paper Trading Competition Mode
+Multiple paper portfolios running in parallel. Leaderboard comparing strategy performance.
+
+#### 19. Order Flow Analysis
+Tick-by-tick data via Zerodha WebSocket full mode. Large order detection, VWAP alerts, Time & Sales.
+
+---
+
+## What to Build Next
+
+```
+TODAY (< 2 hours):
+  1. Journal CSV export          → Journal.tsx (wire empty Export button)
+  2. Rate limit display in UI    → Header.tsx + system_control.py
+
+THIS WEEK:
+  3. Telegram notifications      → notifications.py + Settings.tsx
+  4. Last signal timestamp       → auto_trader.py + AutoTrader.tsx
+  5. Sidebar section grouping    → Sidebar.tsx
+  6. Keyboard shortcuts          → useKeyboardShortcuts.ts + App.tsx
+
+NEXT SPRINT:
+  7. Options Greeks dashboard    → portfolio_greeks.py + OptionsGreeks.tsx
+  8. Audit trail + tax export    → audit.py + AuditTrail.tsx
+  9. Zerodha GTT orders          → execution/zerodha.py + auto_exit.py
+```

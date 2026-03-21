@@ -54,8 +54,15 @@ def get_reconciliation_status(db: Session = Depends(get_db)):
 
     def fmt(intent: ExecutionIntent):
         mode = ""
-        if isinstance(intent.execution_result, dict):
-            mode = str(intent.execution_result.get("mode", ""))
+        exec_result = intent.execution_result or {}
+        if isinstance(exec_result, str):
+            import json as _json
+            try:
+                exec_result = _json.loads(exec_result)
+            except Exception:
+                exec_result = {}
+        if isinstance(exec_result, dict):
+            mode = str(exec_result.get("mode", ""))
         return {
             "intent_id": intent.intent_id,
             "strategy": intent.strategy,

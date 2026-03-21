@@ -90,8 +90,15 @@ def reconcile_broker_positions(db: Session, force: bool = False) -> List[str]:
         # Only reconcile actual LIVE Zerodha positions
         # Skip PAPER and DRY_RUN — they have no real broker legs
         mode = ""
-        if isinstance(intent.execution_result, dict):
-            mode = str(intent.execution_result.get("mode", "")).upper()
+        exec_result = intent.execution_result or {}
+        if isinstance(exec_result, str):
+            import json as _json
+            try:
+                exec_result = _json.loads(exec_result)
+            except Exception:
+                exec_result = {}
+        if isinstance(exec_result, dict):
+            mode = str(exec_result.get("mode", "")).upper()
         if "ZERODHA" not in mode:
             continue
         # DRY_RUN positions have no real broker legs — reconcile would
@@ -99,7 +106,8 @@ def reconcile_broker_positions(db: Session, force: bool = False) -> List[str]:
         if "DRY_RUN" in mode or "PAPER" in mode:
             continue
 
-        ticket = intent.ticket or {}
+        import json as _json
+        ticket = intent.ticket_dict
         legs = ticket.get("legs", [])
         if not legs:
             continue
