@@ -66,6 +66,11 @@ class INDMoneySecurityLookupRequest(BaseModel):
     symbol: str
 
 
+class TelegramSettings(BaseModel):
+    bot_token: str
+    chat_id: str
+
+
 class GmailSettings(BaseModel):
     """Model for Gmail notification settings"""
     gmail_user: str
@@ -842,6 +847,49 @@ def send_test_email(subject: str = "FastTrade Test", body: str = "This is a test
     except Exception as e:
         logger.error(f"Error sending test email: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+@router.get("/notifications/telegram")
+def get_telegram_settings():
+    """Get Telegram notification settings status"""
+    token = get_env_value("TELEGRAM_BOT_TOKEN")
+    chat_id = get_env_value("TELEGRAM_CHAT_ID")
+    return {
+        "configured": bool(token and chat_id),
+        "chat_id": chat_id,
+        "token_set": bool(token),
+    }
+
+
+@router.post("/notifications/telegram")
+def save_telegram_settings(settings: TelegramSettings):
+    """Save Telegram bot token and chat ID to .env"""
+    try:
+        set_key(str(ENV_FILE), "TELEGRAM_BOT_TOKEN", settings.bot_token)
+        set_key(str(ENV_FILE), "TELEGRAM_CHAT_ID", settings.chat_id)
+        os.environ["TELEGRAM_BOT_TOKEN"] = settings.bot_token
+        os.environ["TELEGRAM_CHAT_ID"] = settings.chat_id
+        logger.info("Telegram settings updated")
+        return {"status": "success", "message": "Telegram settings saved"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/notifications/telegram/test")
+def send_test_telegram():
+    """Send a test Telegram message"""
+    try:
+        db = SessionLocal()
+        service = NotificationService(db)
+        db.close()
+        if not service.telegram_enabled:
+            raise HTTPException(status_code=400, detail="Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID first.")
+        service._send_telegram("\U0001f916 FastTrade test message — Telegram notifications are working!")
+        return {"status": "success", "message": "Test Telegram message sent"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ============ ML Settings ============
 

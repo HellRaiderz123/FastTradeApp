@@ -47,7 +47,7 @@ interface SignalDiagnostics {
 }
 
 type PnLFilter = 'all' | 'profit' | 'loss';
-type ExecutionTypeFilter = 'all' | 'paper' | 'zerodha_dry' | 'zerodha_live';
+type ExecutionTypeFilter = 'all' | 'paper' | 'zerodha_dry' | 'zerodha_live' | 'zerodha_actual';
 
 const Journal: React.FC = () => {
   const { showToast } = useToast();
@@ -56,6 +56,8 @@ const Journal: React.FC = () => {
   const [pnlFilter, setPnlFilter] = useState<PnLFilter>('all');
   const [executionTypeFilter, setExecutionTypeFilter] = useState<ExecutionTypeFilter>('all');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [diagnostics, setDiagnostics] = useState<SignalDiagnostics | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -63,8 +65,11 @@ const Journal: React.FC = () => {
   const [diagnosticsLimit, setDiagnosticsLimit] = useState(200);
 
   useEffect(() => {
-    fetchJournal();
-    fetchDiagnostics();
+    // Auto-sync Zerodha trades on mount, then load journal
+    handleSyncZerodha(true).finally(() => {
+      fetchJournal();
+      fetchDiagnostics();
+    });
   }, []);
 
   const fetchJournal = async () => {
@@ -76,17 +81,23 @@ const Journal: React.FC = () => {
         const pnl = Number(item?.pnl ?? 0) || 0;
         const execution_result = item?.execution_result || {};
         const execution_mode = (execution_result && execution_result.mode) || 'UNKNOWN';
-        
-        // Calculate exit price properly from ticket legs if available
-        let exitPrice: number | null = null;
+
+        // Extract per-share entry price from ticket legs (first leg price)
+        const legs: any[] = item?.ticket?.legs ?? [];
+        const qty = legs.reduce((sum: number, l: any) => sum + (Number(l.qty ?? l.quantity ?? 0)), 0) || 1;
+        const legPrice = legs.length > 0 ? Number(legs[0].price ?? 0) : 0;
+        // entry_price: prefer leg price (per share), fall back to entry_credit / qty
+        const entryPrice = legPrice > 0 ? legPrice : (entryCredit > 0 ? entryCredit / qty : 0);
+
+        // exit_price: only show when position is closed AND pnl is non-zero
         const isClosed = item?.closed_at != null;
-        
-        if (isClosed && entryCredit > 0) {
-          // For closed positions, calculate exit value from entry_credit + pnl
-          const exitValue = entryCredit + pnl;
-          exitPrice = exitValue;
+        let exitPrice: number | null = null;
+        if (isClosed && entryPrice > 0 && pnl !== 0) {
+          // exit value per share = entry + pnl/qty
+          exitPrice = entryPrice + pnl / qty;
         }
-        
+
+        // pnl_percent relative to total invested capital (entry_credit)
         const pnlPercent = entryCredit !== 0 ? (pnl / entryCredit) * 100 : 0;
         
         return {
@@ -96,7 +107,7 @@ const Journal: React.FC = () => {
           underlying: item?.underlying || '-',
           created_at: item?.created_at,
           closed_at: item?.closed_at,
-          entry_price: entryCredit,
+          entry_price: entryPrice,
           exit_price: exitPrice,
           pnl,
           pnl_percent: pnlPercent,
@@ -131,6 +142,59 @@ const Journal: React.FC = () => {
       setDiagnostics(null);
     } finally {
       setDiagnosticsLoading(false);
+    }
+  };
+
+  const exportCSV = () => {
+    if (filteredEntries.length === 0) return;
+    const headers = ['Date', 'Closed At', 'Strategy', 'Underlying', 'Entry Price', 'Exit Price', 'P&L', 'P&L %', 'Status', 'Mode'];
+    const rows = filteredEntries.map((e) => [
+      new Date(e.created_at).toLocaleString(),
+      e.closed_at ? new Date(e.closed_at).toLocaleString() : '',
+      e.strategy,
+      e.underlying,
+      e.entry_price.toFixed(2),
+      e.exit_price != null ? e.exit_price.toFixed(2) : '',
+      e.pnl.toFixed(2),
+      e.pnl_percent.toFixed(2),
+      e.status,
+      e.execution_mode || '',
+    ]);
+    const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `journal_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleSyncZerodha = async (silent = false) => {
+    setSyncing(true);
+    try {
+      const res = await journalAPI.syncZerodha();
+      const { imported, skipped } = res.data;
+      if (!silent) showToast('success', 'Zerodha Synced', `${imported} new trades imported, ${skipped} skipped`);
+      if (imported > 0) await fetchJournal();
+    } catch (err: any) {
+      if (!silent) showToast('error', 'Sync Failed', err?.response?.data?.detail || 'Could not reach Zerodha');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleClearClosed = async () => {
+    if (!confirm('Delete all closed/completed trades? Open positions will be kept.')) return;
+    setClearing(true);
+    try {
+      const res = await journalAPI.clearClosedTrades();
+      showToast('success', 'Cleared', `${res.data.deleted} closed trades deleted`);
+      await fetchJournal();
+    } catch {
+      showToast('error', 'Failed', 'Could not clear closed trades');
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -195,6 +259,7 @@ const Journal: React.FC = () => {
 
   const getExecutionTypeFromMode = (mode?: string): ExecutionTypeFilter => {
     if (!mode) return 'paper';
+    if (mode === 'ZERODHA_ACTUAL') return 'zerodha_actual';
     if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'zerodha_live';
     if (mode.includes('ZERODHA_LIVE')) return 'zerodha_live';
     if (mode.includes('ZERODHA')) return 'zerodha_dry';
@@ -395,10 +460,26 @@ const Journal: React.FC = () => {
       <div className="card-glass p-6">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-2xl font-bold text-white">Trade Journal</h2>
-          <button className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition text-slate-300">
-            <Download className="w-4 h-4" />
-            Export
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleSyncZerodha(false)}
+              disabled={syncing}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition text-white text-sm"
+            >
+              {syncing ? '⟳ Syncing...' : '⟳ Sync Zerodha'}
+            </button>
+            <button
+              onClick={handleClearClosed}
+              disabled={clearing}
+              className="flex items-center gap-2 px-4 py-2 bg-rose-900/60 hover:bg-rose-800 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition text-rose-300 text-sm"
+            >
+              {clearing ? 'Clearing...' : '🗑 Clear Closed'}
+            </button>
+            <button onClick={exportCSV} disabled={filteredEntries.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed">
+              <Download className="w-4 h-4" />
+              Export CSV
+            </button>
+          </div>
         </div>
 
         {/* Filters */}
@@ -427,12 +508,13 @@ const Journal: React.FC = () => {
           <div>
             <p className="text-xs text-slate-400 mb-2 font-semibold">Execution Type</p>
             <div className="flex flex-wrap gap-2">
-              {(['all', 'paper', 'zerodha_dry', 'zerodha_live'] as const).map((f) => {
+              {(['all', 'paper', 'zerodha_dry', 'zerodha_live', 'zerodha_actual'] as const).map((f) => {
                 const labels = {
                   all: 'All',
                   paper: 'Paper',
                   zerodha_dry: 'Zerodha DRY',
                   zerodha_live: 'Zerodha LIVE',
+                  zerodha_actual: 'Actual Trades',
                 };
                 return (
                   <button
@@ -533,6 +615,7 @@ interface JournalEntryRowProps {
 
 const getModeLabel = (mode?: string) => {
   if (!mode) return 'Unknown';
+  if (mode === 'ZERODHA_ACTUAL') return 'Actual Zerodha Trade';
   if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'Executed Direct on Zerodha';
   if (mode.includes('ZERODHA_LIVE')) return 'Executed as Zerodha LIVE RUN';
   if (mode.includes('ZERODHA_DRY_RUN')) return 'Executed as DRY RUN (Zerodha)';
@@ -542,6 +625,7 @@ const getModeLabel = (mode?: string) => {
 
 const getModeColor = (mode?: string) => {
   if (!mode) return 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+  if (mode === 'ZERODHA_ACTUAL') return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
   if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'bg-purple-500/20 text-purple-300 border-purple-500/30';
   if (mode.includes('ZERODHA_LIVE')) return 'bg-red-500/20 text-red-300 border-red-500/30';
   if (mode.includes('ZERODHA')) return 'bg-blue-500/20 text-blue-300 border-blue-500/30';

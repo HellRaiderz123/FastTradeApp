@@ -173,6 +173,10 @@ export const journalAPI = {
     api.get('/journal/signal-diagnostics', { params }),
   deleteExecutionIntent: (intentId: string) =>
     api.delete(`/journal/execution-intents/${intentId}`),
+  clearClosedTrades: () =>
+    api.delete('/journal/execution-intents/closed'),
+  syncZerodha: () =>
+    api.post('/journal/sync-zerodha'),
 };
 
 // Smart Position Suggestions API
@@ -406,6 +410,15 @@ export const settingsAPI = {
 
   sendTestEmail: (subject?: string, body?: string) =>
     api.post('/settings/notifications/gmail/test', null, { params: { subject, body } }),
+
+  getTelegramSettings: () =>
+    api.get('/settings/notifications/telegram'),
+
+  saveTelegramSettings: (data: { bot_token: string; chat_id: string }) =>
+    api.post('/settings/notifications/telegram', data),
+
+  sendTestTelegram: () =>
+    api.post('/settings/notifications/telegram/test'),
 
   // ML Settings
   getMLSettings: () =>

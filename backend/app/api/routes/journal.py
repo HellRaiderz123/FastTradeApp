@@ -309,6 +309,154 @@ def signal_diagnostics(
     )
 
 
+@router.delete("/execution-intents/closed")
+def delete_closed_trades(
+    db: Session = Depends(get_db),
+):
+    """
+    Bulk-delete all closed (completed) execution intents from the journal.
+    Open positions (closed_at IS NULL) are preserved.
+    """
+    closed = db.query(ExecutionIntent).filter(ExecutionIntent.closed_at.isnot(None)).all()
+    count = len(closed)
+    for intent in closed:
+        db.delete(intent)
+    db.commit()
+    logger.info(f"🗑️ Bulk-deleted {count} closed trades from journal")
+    return {"success": True, "deleted": count}
+
+
+@router.post("/sync-zerodha")
+def sync_zerodha_trades(
+    db: Session = Depends(get_db),
+):
+    """
+    Import actual executed trades from Zerodha orders/trades API.
+    Creates ZERODHA_ACTUAL journal entries for trades not already tracked.
+    Skips duplicates (matched by order_id stored in execution_result).
+    """
+    import json as _json
+
+    try:
+        kite = get_kite_client()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Zerodha not connected: {e}")
+
+    # Fetch orders and trades from Zerodha
+    try:
+        orders = kite.orders() or []
+        trades = kite.trades() or []
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zerodha API error: {e}")
+
+    # Build a map of order_id → trade fill details
+    trade_map: dict = {}
+    for t in trades:
+        oid = str(t.get("order_id", ""))
+        if oid:
+            trade_map[oid] = t
+
+    # Collect all existing order_ids already in DB to avoid duplicates
+    existing_intents = db.query(ExecutionIntent).all()
+    existing_order_ids: set = set()
+    for intent in existing_intents:
+        er = intent.execution_result_dict
+        oid = er.get("order_id") or er.get("zerodha_order_id")
+        if oid:
+            existing_order_ids.add(str(oid))
+
+    added = 0
+    skipped = 0
+
+    for order in orders:
+        order_id = str(order.get("order_id", ""))
+        status = (order.get("status") or "").upper()
+
+        # Only import COMPLETE orders
+        if status != "COMPLETE":
+            skipped += 1
+            continue
+
+        if order_id in existing_order_ids:
+            skipped += 1
+            continue
+
+        symbol = order.get("tradingsymbol", "").strip()
+        transaction_type = order.get("transaction_type", "BUY").upper()
+        qty = int(order.get("filled_quantity") or order.get("quantity") or 0)
+        avg_price = float(order.get("average_price") or order.get("price") or 0)
+        order_timestamp = order.get("order_timestamp") or order.get("exchange_timestamp")
+
+        if not symbol or qty == 0:
+            skipped += 1
+            continue
+
+        # Get fill price from trades if available
+        fill = trade_map.get(order_id, {})
+        fill_price = float(fill.get("average_price") or avg_price)
+
+        # Determine if this is a closing trade (SELL for equity)
+        # For simplicity, treat each order as its own journal entry
+        entry_value = fill_price * qty
+
+        # Parse order timestamp
+        created = now_ist()
+        if order_timestamp:
+            try:
+                if isinstance(order_timestamp, str):
+                    created = datetime.fromisoformat(order_timestamp.replace("Z", "+00:00"))
+                else:
+                    created = order_timestamp
+            except Exception:
+                pass
+
+        intent = ExecutionIntent(
+            run_id=0,
+            intent_id=f"zerodha_actual_{order_id}",
+            strategy="ZERODHA_ACTUAL",
+            underlying=symbol,
+            status="EXECUTED",
+            executed=True,
+            ticket={
+                "legs": [{
+                    "symbol": symbol,
+                    "side": transaction_type,
+                    "price": fill_price,
+                    "qty": qty,
+                }],
+                "lot_size": 1,
+                "lots": 1,
+            },
+            entry_credit=entry_value,
+            pnl=0.0,
+            unrealized_pnl=0.0,
+            execution_result={
+                "mode": "ZERODHA_ACTUAL",
+                "order_id": order_id,
+                "exchange": order.get("exchange", ""),
+                "product": order.get("product", ""),
+                "order_type": order.get("order_type", ""),
+                "transaction_type": transaction_type,
+                "source": "zerodha_order_sync",
+                "synced_at": now_ist().isoformat(),
+            },
+            created_at=created,
+            last_mtm_at=now_ist(),
+            # Mark as closed since it's a completed historical order
+            closed_at=created,
+            exit_reason="ZERODHA_ACTUAL",
+        )
+        db.add(intent)
+        existing_order_ids.add(order_id)
+        added += 1
+
+    if added:
+        db.commit()
+
+    logger.info(f"✅ Zerodha sync: {added} new trades imported, {skipped} skipped")
+    return {"success": True, "imported": added, "skipped": skipped, "total_orders": len(orders)}
+
+
 @router.delete("/execution-intents/{intent_id}")
 def delete_execution_intent(
     intent_id: str,

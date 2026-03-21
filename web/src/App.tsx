@@ -15,7 +15,7 @@ import Journal from './pages/Journal';
 import Settings from './pages/Settings';
 import Heatmap from './pages/Heatmap';
 import Login from './pages/Login';
-import { systemAPI } from './lib/api';
+import { systemAPI, journalAPI } from './lib/api';
 import { useTradeStore } from './lib/store';
 import FinanceTracker from './pages/FinanceTracker';
 import Calendar from './pages/Calendar';
@@ -32,19 +32,16 @@ import StrategyMarketplace from './pages/StrategyMarketplace';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import TwitterAlertsMonitor from './components/TwitterAlerts';
+import CommandPalette from './components/CommandPalette';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
-// Simple Error Boundary to avoid white screen and show errors
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }>{
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { hasError: false };
   }
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error: Error, info: any) {
-    console.error('UI Error:', error, info);
-  }
+  static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
+  componentDidCatch(error: Error, info: any) { console.error('UI Error:', error, info); }
   render() {
     if (this.state.hasError) {
       return (
@@ -59,12 +56,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
-function App() {
+// Inner component — must be inside Router so useNavigate works
+function AppInner() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const { systemEnabled, setSystemEnabled, darkMode } = useTradeStore();
 
+  useKeyboardShortcuts({ onOpenPalette: () => setPaletteOpen(true) });
+
   useEffect(() => {
-    // Apply saved theme on mount
     if (!darkMode) {
       document.documentElement.classList.add('light-mode');
     } else {
@@ -73,79 +73,72 @@ function App() {
   }, [darkMode]);
 
   useEffect(() => {
-    checkSystemStatus();
+    systemAPI.status()
+      .then((r) => setSystemEnabled(r.data.trading_enabled))
+      .catch(() => {});
+    // Silent Zerodha trade sync on app start
+    journalAPI.syncZerodha().catch(() => {});
   }, []);
 
-  const checkSystemStatus = async () => {
-    try {
-      const response = await systemAPI.status();
-      setSystemEnabled(response.data.trading_enabled);
-    } catch (error) {
-      console.error('Failed to fetch system status:', error);
-    }
-  };
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="*" element={
+        <ProtectedRoute>
+          <div className="flex h-screen terminal-shell">
+            <Sidebar open={sidebarOpen} />
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <Header
+                onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+                systemEnabled={systemEnabled}
+                onSystemToggle={setSystemEnabled}
+              />
+              <SignalAlertMonitor />
+              <TwitterAlertsMonitor />
+              <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+              <main className="flex-1 overflow-auto p-6">
+                <Routes>
+                  <Route path="/" element={<Terminal />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/screener" element={<Screener />} />
+                  <Route path="/heatmap" element={<Heatmap />} />
+                  <Route path="/options" element={<OptionsChain />} />
+                  <Route path="/ml" element={<MLCenter />} />
+                  <Route path="/ml-intelligence" element={<MLCenter />} />
+                  <Route path="/strategies" element={<Strategies />} />
+                  <Route path="/strategies/builder" element={<StrategyBuilder />} />
+                  <Route path="/marketplace" element={<StrategyMarketplace />} />
+                  <Route path="/create-scanner" element={<CreateScanner />} />
+                  <Route path="/backtest" element={<Backtest />} />
+                  <Route path="/backtest-comparison" element={<BacktestComparison />} />
+                  <Route path="/positions" element={<Positions />} />
+                  <Route path="/reconciliation" element={<BrokerReconciliation />} />
+                  <Route path="/strategy-pnl" element={<StrategyPnL />} />
+                  <Route path="/journal" element={<Journal />} />
+                  <Route path="/trade-costs" element={<TradeCostTracker />} />
+                  <Route path="/auto-trader" element={<AutoTrader />} />
+                  <Route path="/watchlists" element={<CustomWatchlists />} />
+                  <Route path="/multi-timeframe" element={<MultiTimeframe />} />
+                  <Route path="/calendar" element={<Calendar />} />
+                  <Route path="/finance" element={<FinanceTracker />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Routes>
+              </main>
+            </div>
+          </div>
+        </ProtectedRoute>
+      } />
+    </Routes>
+  );
+}
 
+function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
         <Router>
-          <Routes>
-            {/* Public route - no authentication required */}
-            <Route path="/login" element={<Login />} />
-          
-          {/* Protected routes - require authentication */}
-          <Route path="*" element={
-            <ProtectedRoute>
-              <div className="flex h-screen terminal-shell">
-                <Sidebar open={sidebarOpen} />
-                
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  <Header 
-                    onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-                    systemEnabled={systemEnabled}
-                    onSystemToggle={setSystemEnabled}
-                  />
-                  
-                  {/* ML Signal Alert Monitor — runs in background */}
-                  <SignalAlertMonitor />
-                  
-                  {/* Twitter High-Impact Alert Monitor — runs in background */}
-                  <TwitterAlertsMonitor />
-
-                  <main className="flex-1 overflow-auto p-6">
-                    <Routes>
-                      <Route path="/" element={<Terminal />} />
-                      <Route path="/dashboard" element={<Dashboard />} />
-                      <Route path="/screener" element={<Screener />} />
-                      <Route path="/heatmap" element={<Heatmap />} />
-                      <Route path="/options" element={<OptionsChain />} />
-                      <Route path="/ml" element={<MLCenter />} />
-                      <Route path="/strategies" element={<Strategies />} />
-                      <Route path="/strategies/builder" element={<StrategyBuilder />} />
-                      <Route path="/backtest" element={<Backtest />} />
-                      <Route path="/positions" element={<Positions />} />
-                      <Route path="/journal" element={<Journal />} />
-                      <Route path="/settings" element={<Settings />} />
-                      <Route path="/finance" element={<FinanceTracker />} />
-                      <Route path="/calendar" element={<Calendar />} />
-                      <Route path="/auto-trader" element={<AutoTrader />} />
-                      <Route path="/multi-timeframe" element={<MultiTimeframe />} />
-                      <Route path="/backtest-comparison" element={<BacktestComparison />} />
-                      <Route path="/trade-costs" element={<TradeCostTracker />} />
-                      <Route path="/watchlists" element={<CustomWatchlists />} />
-                      <Route path="/ml-intelligence" element={<MLCenter />} />
-                      <Route path="/create-scanner" element={<CreateScanner />} />
-                      <Route path="/reconciliation" element={<BrokerReconciliation />} />
-                      <Route path="/strategy-pnl" element={<StrategyPnL />} />
-                      <Route path="/marketplace" element={<StrategyMarketplace />} />
-                    </Routes>
-                  </main>
-                </div>
-              </div>
-            </ProtectedRoute>
-          } />
-        </Routes>
-      </Router>
+          <AppInner />
+        </Router>
       </ToastProvider>
     </ErrorBoundary>
   );

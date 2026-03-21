@@ -5,6 +5,8 @@ Supports: In-App Notifications + Gmail
 
 import logging
 import smtplib
+import urllib.request
+import urllib.parse
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -48,6 +50,9 @@ class NotificationService:
     def __init__(self, db: Session):
         self.db = db
         self.gmail_enabled = self._check_gmail_config()
+        self.telegram_enabled = self._check_telegram_config()
+        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
         
         # Load Gmail credentials
         # Primary envs
@@ -86,6 +91,10 @@ class NotificationService:
         )
         enabled_flag = os.getenv("NOTIFY_GMAIL_ENABLED", "true").lower() in ["1", "true", "yes"]
         return creds_ok and enabled_flag
+
+    def _check_telegram_config(self) -> bool:
+        """Check if Telegram bot is configured"""
+        return bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
     
     # ============================
     # TRADE NOTIFICATIONS
@@ -437,6 +446,13 @@ class NotificationService:
                     self._send_email(title, message)
                 else:
                     logger.warning(f"Gmail not configured, skipping email for: {title}")
+
+            # 3. Send Telegram for high/critical priority
+            if priority in [NotificationPriority.HIGH, NotificationPriority.CRITICAL]:
+                if self.telegram_enabled:
+                    self._send_telegram(f"{title}\n\n{message}")
+                else:
+                    logger.debug(f"Telegram not configured, skipping for: {title}")
             
             logger.info(f"✅ Notification sent: {title}")
             
@@ -475,6 +491,26 @@ class NotificationService:
             logger.error(f"Failed to store in-app notification: {e}")
             self.db.rollback()
     
+    def _send_telegram(self, message: str):
+        """Send message via Telegram Bot API"""
+        if not self.telegram_enabled:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            data = urllib.parse.urlencode({
+                "chat_id": self.telegram_chat_id,
+                "text": message[:4096],  # Telegram max message length
+                "parse_mode": "HTML",
+            }).encode()
+            req = urllib.request.Request(url, data=data, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    logger.info(f"✅ Telegram message sent")
+                else:
+                    logger.warning(f"⚠️ Telegram returned status {resp.status}")
+        except Exception as e:
+            logger.error(f"❌ Failed to send Telegram message: {e}")
+
     def _send_email(self, subject: str, body: str):
         """Send email via Gmail SMTP"""
         if not self.gmail_enabled:

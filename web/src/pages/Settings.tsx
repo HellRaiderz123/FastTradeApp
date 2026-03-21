@@ -94,6 +94,12 @@ const Settings: React.FC = () => {
   const [gmailMessage, setGmailMessage] = useState('');
   const [showGmailPassword, setShowGmailPassword] = useState(false);
 
+  // Telegram notification settings
+  const [telegramStatus, setTelegramStatus] = useState({ configured: false, chat_id: '', token_set: false });
+  const [telegramForm, setTelegramForm] = useState({ bot_token: '', chat_id: '' });
+  const [telegramLoading, setTelegramLoading] = useState(false);
+  const [telegramMessage, setTelegramMessage] = useState('');
+
   // ML settings
   const [mlSettings, setMlSettings] = useState({
     enabled: false,
@@ -109,6 +115,7 @@ const Settings: React.FC = () => {
     loadZerodhaSettings();
     loadINDMoneySettings();
     loadNotificationSettings();
+    loadTelegramSettings();
     loadTradingSettings();
     loadMlSettings();
     loadSessionStatus();
@@ -206,6 +213,16 @@ const Settings: React.FC = () => {
       });
     } catch (error) {
       console.error('Error loading notification settings:', error);
+    }
+  };
+
+  const loadTelegramSettings = async () => {
+    try {
+      const response = await settingsAPI.getTelegramSettings();
+      const data = response.data || response;
+      setTelegramStatus({ configured: !!data.configured, chat_id: data.chat_id || '', token_set: !!data.token_set });
+    } catch (error) {
+      console.error('Error loading Telegram settings:', error);
     }
   };
 
@@ -778,6 +795,91 @@ const Settings: React.FC = () => {
             }`}>
               {gmailMessage}
             </div>
+          )}
+        </div>
+      </SettingsCard>
+
+      {/* Telegram Notification Settings */}
+      <SettingsCard title="Telegram Notifications">
+        <div className="mb-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-400 text-sm">Status:</span>
+            {telegramStatus.configured ? (
+              <span className="flex items-center gap-1 text-green-400 text-sm"><CheckCircle className="w-4 h-4" /> Configured</span>
+            ) : (
+              <span className="flex items-center gap-1 text-red-400 text-sm"><XCircle className="w-4 h-4" /> Not configured</span>
+            )}
+          </div>
+          {telegramStatus.chat_id && (
+            <p className="text-xs text-slate-400 mt-1">Chat ID: {telegramStatus.chat_id}</p>
+          )}
+          <p className="text-xs text-slate-500 mt-2">Create a bot via @BotFather on Telegram, then get your Chat ID from @userinfobot.</p>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Bot Token</label>
+            <input
+              type="password"
+              placeholder="123456789:ABCdef..."
+              value={telegramForm.bot_token}
+              onChange={(e) => setTelegramForm({ ...telegramForm, bot_token: e.target.value })}
+              disabled={telegramLoading}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Chat ID</label>
+            <input
+              type="text"
+              placeholder="e.g. 123456789 or -100123456789 for groups"
+              value={telegramForm.chat_id}
+              onChange={(e) => setTelegramForm({ ...telegramForm, chat_id: e.target.value })}
+              disabled={telegramLoading}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+            />
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={async () => {
+                try {
+                  setTelegramLoading(true);
+                  await settingsAPI.saveTelegramSettings(telegramForm);
+                  setTelegramMessage('✓ Telegram settings saved');
+                  setTelegramForm({ bot_token: '', chat_id: '' });
+                  await loadTelegramSettings();
+                  setTimeout(() => setTelegramMessage(''), 3000);
+                } catch (err: any) {
+                  setTelegramMessage(err.response?.data?.detail || 'Error saving');
+                } finally { setTelegramLoading(false); }
+              }}
+              disabled={telegramLoading}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            >
+              <Save className="w-4 h-4" />
+              {telegramLoading ? 'Saving...' : 'Save Telegram Settings'}
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  setTelegramLoading(true);
+                  await settingsAPI.sendTestTelegram();
+                  setTelegramMessage('✓ Test message sent to Telegram');
+                  setTimeout(() => setTelegramMessage(''), 3000);
+                } catch (err: any) {
+                  setTelegramMessage(err.response?.data?.detail || 'Error sending test');
+                } finally { setTelegramLoading(false); }
+              }}
+              disabled={telegramLoading || !telegramStatus.configured}
+              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            >
+              <Send className="w-4 h-4" />
+              {telegramLoading ? 'Sending...' : 'Send Test Message'}
+            </button>
+          </div>
+          {telegramMessage && (
+            <div className={`p-3 rounded-lg text-sm font-semibold ${
+              telegramMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+            }`}>{telegramMessage}</div>
           )}
         </div>
       </SettingsCard>
