@@ -1,0 +1,17 @@
+{
+  "name": "FastTrade Pro",
+  "short_name": "FastTrade",
+  "description": "Professional Algo Trading Platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#10B981",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

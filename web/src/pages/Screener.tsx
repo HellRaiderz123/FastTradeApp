@@ -25,6 +25,17 @@ interface ScreenerFilters {
   sectors?: string[];
   min_market_cap?: number;
   max_market_cap?: number;
+  // Fundamentals
+  min_pe_ratio?: number;
+  max_pe_ratio?: number;
+  min_pb_ratio?: number;
+  max_pb_ratio?: number;
+  min_dividend_yield?: number;
+  max_debt_to_equity?: number;
+  min_roe?: number;
+  // 52w proximity
+  near_52w_high?: boolean;
+  near_52w_low?: boolean;
   sort_by?: string;
   sort_order?: string;
 }
@@ -53,6 +64,21 @@ interface Preset {
   name: string;
   description: string;
   filters: ScreenerFilters;
+  isCustom?: boolean;
+}
+
+const CUSTOM_PRESETS_KEY = 'screener_custom_presets';
+
+function loadCustomPresets(): Preset[] {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOM_PRESETS_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomPresets(presets: Preset[]) {
+  localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(presets));
 }
 
 const Screener: React.FC = () => {
@@ -64,8 +90,12 @@ const Screener: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
+  const [customPresets, setCustomPresets] = useState<Preset[]>(loadCustomPresets);
   const [showFilters, setShowFilters] = useState<boolean>(true);
+  const [showFundamentals, setShowFundamentals] = useState<boolean>(false);
   const [totalScanned, setTotalScanned] = useState<number>(0);
+  const [savePresetName, setSavePresetName] = useState<string>('');
+  const [showSavePreset, setShowSavePreset] = useState<boolean>(false);
 
   // Fetch presets on mount
   useEffect(() => {
@@ -109,6 +139,28 @@ const Screener: React.FC = () => {
       sort_order: 'desc',
     });
     setResults([]);
+  };
+
+  const saveCurrentPreset = () => {
+    if (!savePresetName.trim()) return;
+    const newPreset: Preset = {
+      id: `custom_${Date.now()}`,
+      name: savePresetName.trim(),
+      description: 'Custom saved preset',
+      filters: { ...filters },
+      isCustom: true,
+    };
+    const updated = [...customPresets, newPreset];
+    setCustomPresets(updated);
+    saveCustomPresets(updated);
+    setSavePresetName('');
+    setShowSavePreset(false);
+  };
+
+  const deleteCustomPreset = (id: string) => {
+    const updated = customPresets.filter((p) => p.id !== id);
+    setCustomPresets(updated);
+    saveCustomPresets(updated);
   };
 
   const exportResults = () => {
@@ -177,6 +229,25 @@ const Screener: React.FC = () => {
                 {preset.name}
               </div>
             </button>
+          ))}
+          {customPresets.map((preset) => (
+            <div key={preset.id} className="flex items-center gap-1">
+              <button
+                onClick={() => applyPreset(preset)}
+                className="px-4 py-2 bg-purple-900/50 hover:bg-purple-700 border border-purple-700 rounded-lg text-sm text-white transition-colors"
+                title={preset.description}
+              >
+                <div className="flex items-center gap-2">
+                  <Activity size={16} />
+                  {preset.name}
+                </div>
+              </button>
+              <button
+                onClick={() => deleteCustomPreset(preset.id)}
+                className="px-2 py-2 bg-slate-800 hover:bg-red-900/50 rounded-lg text-slate-400 hover:text-red-400 transition-colors text-xs"
+                title="Delete preset"
+              >✕</button>
+            </div>
           ))}
         </div>
       </div>
@@ -322,8 +393,86 @@ const Screener: React.FC = () => {
             </div>
           </div>
 
+          {/* Fundamentals Toggle */}
+          <div className="mt-4">
+            <button
+              onClick={() => setShowFundamentals(!showFundamentals)}
+              className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              {showFundamentals ? '▲ Hide' : '▼ Show'} Fundamental Filters
+            </button>
+          </div>
+
+          {showFundamentals && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
+              {/* P/E Ratio */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">P/E Ratio</label>
+                <div className="flex gap-2">
+                  <input type="number" placeholder="Min" value={filters.min_pe_ratio || ''}
+                    onChange={(e) => setFilters({ ...filters, min_pe_ratio: Number(e.target.value) || undefined })}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                  <input type="number" placeholder="Max" value={filters.max_pe_ratio || ''}
+                    onChange={(e) => setFilters({ ...filters, max_pe_ratio: Number(e.target.value) || undefined })}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                </div>
+              </div>
+              {/* P/B Ratio */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">P/B Ratio</label>
+                <div className="flex gap-2">
+                  <input type="number" placeholder="Min" value={filters.min_pb_ratio || ''}
+                    onChange={(e) => setFilters({ ...filters, min_pb_ratio: Number(e.target.value) || undefined })}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                  <input type="number" placeholder="Max" value={filters.max_pb_ratio || ''}
+                    onChange={(e) => setFilters({ ...filters, max_pb_ratio: Number(e.target.value) || undefined })}
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                </div>
+              </div>
+              {/* Min Dividend Yield */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Min Dividend Yield (%)</label>
+                <input type="number" placeholder="e.g. 2.0" step="0.1" value={filters.min_dividend_yield || ''}
+                  onChange={(e) => setFilters({ ...filters, min_dividend_yield: Number(e.target.value) || undefined })}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+              </div>
+              {/* Max Debt/Equity */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Max Debt/Equity</label>
+                <input type="number" placeholder="e.g. 1.0" step="0.1" value={filters.max_debt_to_equity || ''}
+                  onChange={(e) => setFilters({ ...filters, max_debt_to_equity: Number(e.target.value) || undefined })}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+              </div>
+              {/* Min ROE */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Min ROE (%)</label>
+                <input type="number" placeholder="e.g. 15" value={filters.min_roe || ''}
+                  onChange={(e) => setFilters({ ...filters, min_roe: Number(e.target.value) || undefined })}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+              </div>
+              {/* 52W Proximity */}
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">52-Week Proximity</label>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                    <input type="checkbox" checked={!!filters.near_52w_high}
+                      onChange={(e) => setFilters({ ...filters, near_52w_high: e.target.checked || undefined })}
+                      className="w-4 h-4" />
+                    Near High
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                    <input type="checkbox" checked={!!filters.near_52w_low}
+                      onChange={(e) => setFilters({ ...filters, near_52w_low: e.target.checked || undefined })}
+                      className="w-4 h-4" />
+                    Near Low
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons */}
-          <div className="flex gap-3 mt-6">
+          <div className="flex flex-wrap gap-3 mt-6">
             <button
               onClick={runScreener}
               disabled={loading}
@@ -348,6 +497,12 @@ const Screener: React.FC = () => {
               <RefreshCcw size={18} />
               Reset
             </button>
+            <button
+              onClick={() => setShowSavePreset(!showSavePreset)}
+              className="flex items-center gap-2 px-6 py-2 bg-purple-700 hover:bg-purple-600 rounded-lg text-white transition-colors"
+            >
+              Save Preset
+            </button>
             {results.length > 0 && (
               <button
                 onClick={exportResults}
@@ -358,6 +513,21 @@ const Screener: React.FC = () => {
               </button>
             )}
           </div>
+          {showSavePreset && (
+            <div className="flex gap-2 mt-3">
+              <input
+                type="text"
+                placeholder="Preset name..."
+                value={savePresetName}
+                onChange={(e) => setSavePresetName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && saveCurrentPreset()}
+                className="flex-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              />
+              <button onClick={saveCurrentPreset} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-white transition-colors">
+                Save
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -413,6 +583,12 @@ const Screener: React.FC = () => {
                   <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
                     Mkt Cap (Cr)
                   </th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
+                    P/E
+                  </th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
+                    ROE%
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700">
@@ -458,6 +634,12 @@ const Screener: React.FC = () => {
                     <td className="px-4 py-3 text-slate-300">{stock.sector}</td>
                     <td className="px-4 py-3 text-right text-slate-300">
                       ₹{stock.market_cap_cr.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right text-slate-300">
+                      {(stock as any).pe_ratio?.toFixed(1) ?? '—'}
+                    </td>
+                    <td className="px-4 py-3 text-right text-slate-300">
+                      {(stock as any).roe?.toFixed(1) ?? '—'}%
                     </td>
                   </tr>
                 ))}

@@ -31,7 +31,56 @@ body {
   --terminal-accent: #14b8a6;
   --terminal-accent-2: #f97316;
   --terminal-panel: rgba(10, 15, 25, 0.82);
+  --bg-body: #070b14;
+  --bg-sidebar: #020408;
+  --bg-header: #020408;
 }
+
+/* Light mode overrides */
+html.light-mode {
+  --terminal-ink: #1e293b;
+  --terminal-muted: #475569;
+  --terminal-border: rgba(71, 85, 105, 0.25);
+  --terminal-glow: rgba(20, 184, 166, 0.1);
+  --terminal-panel: rgba(248, 250, 252, 0.95);
+  --bg-body: #f1f5f9;
+  --bg-sidebar: #e2e8f0;
+  --bg-header: #e2e8f0;
+  color-scheme: light;
+}
+
+html.light-mode body {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+html.light-mode .terminal-shell {
+  background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+}
+
+html.light-mode .card-glass {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(71, 85, 105, 0.2);
+}
+
+html.light-mode aside {
+  background: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light-mode header {
+  background: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light-mode .text-slate-400 { color: #475569 !important; }
+html.light-mode .text-slate-300 { color: #334155 !important; }
+html.light-mode .text-white { color: #0f172a !important; }
+html.light-mode .bg-slate-950 { background: #e2e8f0 !important; }
+html.light-mode .bg-slate-900 { background: #f8fafc !important; }
+html.light-mode .bg-slate-800 { background: #f1f5f9 !important; }
+html.light-mode .border-slate-800 { border-color: #cbd5e1 !important; }
+html.light-mode .border-slate-700 { border-color: #94a3b8 !important; }
 
 .terminal-shell {
   background:

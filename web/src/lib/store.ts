@@ -40,6 +40,7 @@ interface TradeStore {
   systemEnabled: boolean;
   accountProfile: AccountProfile | null;
   loading: boolean;
+  darkMode: boolean;
   
   setTrades: (trades: Trade[]) => void;
   addTrade: (trade: Trade) => void;
@@ -49,6 +50,7 @@ interface TradeStore {
   setSystemEnabled: (enabled: boolean) => void;
   setAccountProfile: (profile: AccountProfile | null) => void;
   setLoading: (loading: boolean) => void;
+  toggleDarkMode: () => void;
 }
 
 export const useTradeStore = create<TradeStore>((set) => ({
@@ -58,6 +60,7 @@ export const useTradeStore = create<TradeStore>((set) => ({
   systemEnabled: true,
   accountProfile: null,
   loading: false,
+  darkMode: localStorage.getItem('theme') !== 'light',
   
   setTrades: (trades) => set({ trades }),
   addTrade: (trade) => set((state) => ({ trades: [...state.trades, trade] })),
@@ -70,6 +73,12 @@ export const useTradeStore = create<TradeStore>((set) => ({
   setSystemEnabled: (systemEnabled) => set({ systemEnabled }),
   setAccountProfile: (accountProfile) => set({ accountProfile }),
   setLoading: (loading) => set({ loading }),
+  toggleDarkMode: () => set((state) => {
+    const next = !state.darkMode;
+    localStorage.setItem('theme', next ? 'dark' : 'light');
+    document.documentElement.classList.toggle('light-mode', !next);
+    return { darkMode: next };
+  }),
 }));
 
 interface SignalStore {

@@ -12,7 +12,7 @@ const DEFAULT_IV_LIMITS: Record<string, { min_atm_dist_pct: number; max_risk_pct
 
 const Settings: React.FC = () => {
   const { showToast } = useToast();
-  const { capital, setCapital } = useTradeStore();
+  const { capital, setCapital, darkMode, toggleDarkMode } = useTradeStore();
   const [settings, setSettings] = useState({
     riskPerTrade: 2,
     maxDailyLoss: 2,
@@ -784,7 +784,27 @@ const Settings: React.FC = () => {
 
       {/* Appearance */}
       <SettingsCard title="Appearance">
-        <ToggleSetting label="Dark Mode (Always On)" value={settings.darkMode} onChange={() => {}} disabled />
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-slate-300 font-medium">Theme</p>
+            <p className="text-xs text-slate-500 mt-0.5">{darkMode ? 'Dark mode active' : 'Light mode active'}</p>
+          </div>
+          <button
+            onClick={toggleDarkMode}
+            className={`relative inline-flex h-7 w-14 items-center rounded-full transition ${
+              darkMode ? 'bg-slate-700' : 'bg-blue-500'
+            }`}
+          >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
+              darkMode ? 'translate-x-1' : 'translate-x-8'
+            }`} />
+            <span className={`absolute text-[9px] font-bold ${
+              darkMode ? 'right-1.5 text-slate-400' : 'left-1.5 text-white'
+            }`}>
+              {darkMode ? '🌙' : '☀️'}
+            </span>
+          </button>
+        </div>
       </SettingsCard>
 
       {/* API Keys */}

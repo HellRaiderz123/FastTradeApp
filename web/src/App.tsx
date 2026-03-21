@@ -26,6 +26,9 @@ import BacktestComparison from './pages/BacktestComparison';
 import TradeCostTracker from './pages/TradeCostTracker';
 import CustomWatchlists from './pages/CustomWatchlists';
 import CreateScanner from './pages/CreateScanner';
+import BrokerReconciliation from './pages/BrokerReconciliation';
+import StrategyPnL from './pages/StrategyPnL';
+import StrategyMarketplace from './pages/StrategyMarketplace';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import TwitterAlertsMonitor from './components/TwitterAlerts';
@@ -58,7 +61,16 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const { systemEnabled, setSystemEnabled } = useTradeStore();
+  const { systemEnabled, setSystemEnabled, darkMode } = useTradeStore();
+
+  useEffect(() => {
+    // Apply saved theme on mount
+    if (!darkMode) {
+      document.documentElement.classList.add('light-mode');
+    } else {
+      document.documentElement.classList.remove('light-mode');
+    }
+  }, [darkMode]);
 
   useEffect(() => {
     checkSystemStatus();
@@ -123,6 +135,9 @@ function App() {
                       <Route path="/watchlists" element={<CustomWatchlists />} />
                       <Route path="/ml-intelligence" element={<MLCenter />} />
                       <Route path="/create-scanner" element={<CreateScanner />} />
+                      <Route path="/reconciliation" element={<BrokerReconciliation />} />
+                      <Route path="/strategy-pnl" element={<StrategyPnL />} />
+                      <Route path="/marketplace" element={<StrategyMarketplace />} />
                     </Routes>
                   </main>
                 </div>

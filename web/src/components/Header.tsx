@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Menu, Power, Bell, LogOut, ChevronDown } from 'lucide-react';
+import { Menu, Power, Bell, LogOut, ChevronDown, Sun, Moon, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTradeStore } from '../lib/store';
 import { systemAPI, settingsAPI, authAPI, authTokenStore } from '../lib/api';
@@ -13,6 +13,7 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSystemToggle }) => {
   const navigate = useNavigate();
+  const { darkMode, toggleDarkMode } = useTradeStore();
   const [executionMode, setExecutionMode] = useState('PAPER_TRADING');
   const [activeBroker, setActiveBroker] = useState('ZERODHA');
   const [supportedBrokers, setSupportedBrokers] = useState<string[]>(['ZERODHA', 'INDMONEY']);
@@ -139,6 +140,26 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
             ))}
           </select>
         </div>
+
+        {/* Theme Toggle */}
+        <button
+          onClick={toggleDarkMode}
+          className="text-slate-400 hover:text-white transition"
+          title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+        >
+          {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+        </button>
+
+        {/* API Docs */}
+        <a
+          href="/api/docs"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-slate-400 hover:text-white transition"
+          title="API Documentation"
+        >
+          <ExternalLink className="w-5 h-5" />
+        </a>
 
         {/* System Status */}
         <button

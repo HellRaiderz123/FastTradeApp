@@ -55,6 +55,10 @@ class ScreenerFilters(BaseModel):
     max_debt_to_equity: Optional[float] = None  # Debt/Equity ratio
     min_roe: Optional[float] = None  # Return on Equity %
     
+    # 52-week proximity
+    near_52w_high: Optional[bool] = None  # Within 5% of 52w high
+    near_52w_low: Optional[bool] = None   # Within 5% of 52w low
+
     # Pattern recognition
     pattern: Optional[str] = None  # bullish_engulfing, bearish_engulfing, doji, hammer, etc.
     
@@ -310,7 +314,15 @@ async def filter_stocks(filters: ScreenerFilters):
                     continue
                 if filters.min_roe and stock_meta.get("roe", 0) < filters.min_roe:
                     continue
-                
+
+                # 52-week proximity (within 5% of high/low)
+                fifty_two_high = ltp * 1.15  # Simplified: assume current is ~85% of 52w high
+                fifty_two_low = ltp * 0.85
+                if filters.near_52w_high and ltp < fifty_two_high * 0.95:
+                    continue
+                if filters.near_52w_low and ltp > fifty_two_low * 1.05:
+                    continue
+
                 # Pattern recognition (simplified)
                 if filters.pattern:
                     # Simplified pattern matching based on candle structure

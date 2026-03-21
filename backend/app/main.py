@@ -60,6 +60,9 @@ from app.api.routes import auth
 from app.api.routes import trade_costs
 from app.api.routes import watchlists
 from app.api.routes import condition_scanner
+from app.api.routes import reconcile
+from app.api.routes import analytics
+from app.api.routes import marketplace
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -308,5 +311,8 @@ app.include_router(auto_trader_routes.router, dependencies=[Depends(require_auth
 app.include_router(trade_costs.router)
 app.include_router(watchlists.router)
 app.include_router(condition_scanner.router)
+app.include_router(reconcile.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(analytics.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(marketplace.router, dependencies=[Depends(require_authenticated_user)])
 
 logger.info(" All routers registered (including Phase 5 features)")

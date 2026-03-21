@@ -728,3 +728,11 @@ export const authAPI = {
     authTokenStore.clear();
   },
 };
+
+// Strategy Marketplace APIs
+export const marketplaceAPI = {
+  getTemplates: (category?: string, riskLevel?: string) =>
+    api.get('/marketplace/templates', { params: { category, risk_level: riskLevel } }),
+  deploy: (templateId: string, name?: string, lots?: number, capital?: number) =>
+    api.post('/marketplace/deploy', { template_id: templateId, name, lots, capital }),
+};

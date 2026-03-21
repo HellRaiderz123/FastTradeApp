@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock, GitCompare, DollarSign, Star, Filter } from 'lucide-react';
+import { TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart, Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock, GitCompare, DollarSign, Star, Filter, RefreshCw, PieChart, ShoppingBag } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
 
 interface SidebarProps {
@@ -46,13 +46,16 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     { path: '/calendar', icon: Calendar, label: 'Calendar' },
     { path: '/ml', icon: Brain, label: 'ML Center' },
     { path: '/strategies', icon: Zap, label: 'Strategies' },
+    { path: '/marketplace', icon: ShoppingBag, label: 'Marketplace' },
     { path: '/create-scanner', icon: Filter, label: 'Create Scanner' },
     { path: '/backtest', icon: LineChart, label: 'Backtest' },
     { path: '/backtest-comparison', icon: GitCompare, label: 'Compare Backtests' },
     { path: '/positions', icon: Briefcase, label: 'Positions' },
+    { path: '/strategy-pnl', icon: PieChart, label: 'Strategy P&L' },
     { path: '/trade-costs', icon: DollarSign, label: 'Trade Costs' },
     { path: '/auto-trader', icon: Bot, label: 'Auto Trader' },
     { path: '/journal', icon: BookOpen, label: 'Journal' },
+    { path: '/reconciliation', icon: RefreshCw, label: 'Reconciliation' },
     { path: '/finance', icon: Wallet, label: 'Finance' },
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
