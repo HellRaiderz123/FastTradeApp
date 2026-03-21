@@ -81,9 +81,9 @@ const TradeCalendar: React.FC = () => {
     setSyncing(true);
     try {
       const res = await journalAPI.syncZerodha();
-      const { imported, paired_trades, open_positions } = res.data;
+      const { imported, holdings_synced, paired_trades } = res.data;
       showToast('success', 'Zerodha Synced',
-        `${imported} imported — ${paired_trades ?? 0} paired trades, ${open_positions ?? 0} open positions`);
+        `${imported} new — ${holdings_synced ?? 0} holdings, ${paired_trades ?? 0} intraday trades`);
       loadTrades();
     } catch (err: any) {
       showToast('error', 'Sync Failed', err?.response?.data?.detail || 'Could not reach Zerodha');

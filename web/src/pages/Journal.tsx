@@ -174,8 +174,9 @@ const Journal: React.FC = () => {
     setSyncing(true);
     try {
       const res = await journalAPI.syncZerodha();
-      const { imported, skipped } = res.data;
-      if (!silent) showToast('success', 'Zerodha Synced', `${imported} new trades imported, ${skipped} skipped`);
+      const { imported, holdings_synced, paired_trades } = res.data;
+      if (!silent) showToast('success', 'Zerodha Synced',
+        `${imported} new — ${holdings_synced ?? 0} holdings, ${paired_trades ?? 0} intraday trades`);
       if (imported > 0) await fetchJournal();
     } catch (err: any) {
       if (!silent) showToast('error', 'Sync Failed', err?.response?.data?.detail || 'Could not reach Zerodha');
@@ -615,6 +616,7 @@ interface JournalEntryRowProps {
 
 const getModeLabel = (mode?: string) => {
   if (!mode) return 'Unknown';
+  if (mode === 'ZERODHA_HOLDING') return 'Zerodha Holding (CNC)';
   if (mode === 'ZERODHA_ACTUAL') return 'Actual Zerodha Trade';
   if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'Executed Direct on Zerodha';
   if (mode.includes('ZERODHA_LIVE')) return 'Executed as Zerodha LIVE RUN';
@@ -625,6 +627,7 @@ const getModeLabel = (mode?: string) => {
 
 const getModeColor = (mode?: string) => {
   if (!mode) return 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+  if (mode === 'ZERODHA_HOLDING') return 'bg-violet-500/20 text-violet-300 border-violet-500/30';
   if (mode === 'ZERODHA_ACTUAL') return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
   if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'bg-purple-500/20 text-purple-300 border-purple-500/30';
   if (mode.includes('ZERODHA_LIVE')) return 'bg-red-500/20 text-red-300 border-red-500/30';

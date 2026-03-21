@@ -56,9 +56,9 @@ class KiteConnectService:
             # If it's a simple symbol like 'NIFTY', convert to token
             try:
                 token = get_index_token(symbol)
-            except:
-                # If it fails, assume it's already a full NSE symbol
-                token = symbol
+            except Exception:
+                # Not an index — use NSE:SYMBOL format so response key is predictable
+                token = f"NSE:{symbol}"
             
             # Get LTP with retry logic for transient errors
             def fetch_ltp():
@@ -76,14 +76,19 @@ class KiteConnectService:
                 logger.warning(f"Failed to fetch LTP for {symbol} after retries")
                 return None
             
-            # Handle both token (int) and string key responses
-            if token not in data and str(token) not in data:
-                logger.warning(f"Token {token} not in response: {list(data.keys())}")
-                return None
-            
-            price_data = data.get(token) or data.get(str(token))
+            # kite.ltp() returns keys as "EXCHANGE:SYMBOL" or instrument_token (int)
+            # Try all possible key formats before giving up
+            price_data = (
+                data.get(token)
+                or data.get(str(token))
+                or data.get(f"NSE:{token}")
+                or data.get(f"NFO:{token}")
+                or data.get(f"BSE:{token}")
+                or (next(iter(data.values()), None) if len(data) == 1 else None)
+            )
             
             if not price_data:
+                logger.warning(f"Token {token!r} not found in LTP response keys: {list(data.keys())[:5]}")
                 return None
             
             result = {
