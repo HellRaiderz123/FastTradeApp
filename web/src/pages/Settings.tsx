@@ -506,40 +506,63 @@ const Settings: React.FC = () => {
   };
 
   return (
-    <div className="max-w-2xl space-y-6">
-      {/* Header */}
+    <div className="space-y-6">
       <div className="flex items-center gap-3">
         <SettingsIcon className="w-8 h-8 text-blue-400" />
         <h1 className="text-3xl font-bold text-white">Settings</h1>
       </div>
 
-      {/* Active Broker Status */}
-      <SettingsCard title="Active Broker">
-        <div className="p-4 bg-slate-800 rounded-lg border border-slate-700">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-slate-300 font-medium">Currently Active for Orders:</span>
-              <p className="text-sm text-slate-400 mt-1">
-                {activeBroker === 'ZERODHA' && 'Orders will be placed via Zerodha API'}
-                {activeBroker === 'INDMONEY' && 'Orders will be placed via INDMoney/INDstocks API'}
-              </p>
+      {/* Row 1 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <SettingsCard title="Active Broker">
+          <div className="p-4 bg-slate-800 rounded-lg border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-slate-300 font-medium">Currently Active for Orders:</span>
+                <p className="text-sm text-slate-400 mt-1">
+                  {activeBroker === 'ZERODHA' && 'Orders will be placed via Zerodha API'}
+                  {activeBroker === 'INDMONEY' && 'Orders will be placed via INDMoney/INDstocks API'}
+                </p>
+              </div>
+              <div className={`px-4 py-2 rounded-full font-semibold text-sm ${
+                activeBroker === 'ZERODHA' ? 'bg-orange-600 text-white' : 'bg-purple-600 text-white'
+              }`}>{activeBroker}</div>
             </div>
-            <div className={`px-4 py-2 rounded-full font-semibold text-sm ${
-              activeBroker === 'ZERODHA'
-                ? 'bg-orange-600 text-white'
-                : 'bg-purple-600 text-white'
-            }`}>
-              {activeBroker}
-            </div>
+            <p className="text-xs text-slate-500 mt-3">💡 Change broker from the header dropdown. Market data always uses Zerodha.</p>
           </div>
-          <p className="text-xs text-slate-500 mt-3">
-            💡 Change broker from the header dropdown. Market data always uses Zerodha.
-          </p>
-        </div>
-      </SettingsCard>
+        </SettingsCard>
 
-      {/* Trading Settings */}
-      <SettingsCard title="Trading Configuration">
+        <SettingsCard title="Execution Mode">
+          <div className="p-4 bg-slate-800 rounded-lg border border-slate-700 mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-slate-300 font-medium">Current Mode:</span>
+              <div className={`px-3 py-1 rounded-full font-semibold text-sm ${
+                zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
+              }`}>
+                {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? '🟢 Dry Run' : '🔴 Live'}
+              </div>
+            </div>
+            <p className="text-sm text-slate-400">
+              {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? 'Testing mode — no real money at risk.' : 'Live mode — real trades with actual funds.'}
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {['ZERODHA_DRY_RUN', 'ZERODHA_LIVE', 'PAPER_TRADING'].map((mode) => (
+              <button key={mode} onClick={() => handleSetExecutionMode(mode)} disabled={zerodhaLoading}
+                className={`py-2 px-2 rounded-lg font-semibold transition text-xs ${
+                  zerodhaForm.executionMode === mode ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                } disabled:opacity-50`}>
+                {mode.replace(/_/g, ' ')}
+              </button>
+            ))}
+          </div>
+          <ToggleSetting label="Auto Exit on TP/SL" value={settings.autoExit} onChange={(val) => handleChange('autoExit', val)} />
+        </SettingsCard>
+      </div>
+
+      {/* Row 2: Trading Config + Notifications & Save */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <SettingsCard title="Trading Configuration">
         <SettingItem
           label="Risk Per Trade (%)"
           type="number"
@@ -619,53 +642,41 @@ const Settings: React.FC = () => {
         </div>
       </SettingsCard>
 
-      {/* Execution Settings */}
-      <SettingsCard title="Execution Mode">
-        <div className="p-4 bg-slate-800 rounded-lg border border-slate-700 mb-4">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-slate-300 font-medium">Current Mode:</span>
-            <div className={`px-4 py-2 rounded-full font-semibold text-sm ${
-              zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN'
-                ? 'bg-green-600 text-white'
-                : 'bg-red-600 text-white'
-            }`}>
-              {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? '🟢 Dry Run (Paper)' : '🔴 Live'}
-            </div>
+      </div>{/* end top row */}
+
+      {/* ── Second row: Trading config + Notifications ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Notifications + Save — right of second row */}
+        <div className="space-y-6">
+          <SettingsCard title="Notifications">
+            <ToggleSetting label="Trade Notifications" value={settings.notifications} onChange={(val) => handleChange('notifications', val)} />
+            <ToggleSetting label="Email Alerts" value={true} onChange={() => {}} disabled />
+          </SettingsCard>
+
+          {/* Save Trading Settings */}
+          <div className="flex gap-3">
+            <button
+              onClick={handleSave}
+              disabled={riskSaving}
+              className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+            >
+              <Save className="w-5 h-5" />
+              {riskSaving ? 'Saving...' : 'Save Trading Settings'}
+            </button>
+            {saved && (
+              <div className="flex items-center gap-2 px-4 py-3 bg-green-900 text-green-200 rounded-lg">
+                <CheckCircle className="w-5 h-5" />
+                Settings saved!
+              </div>
+            )}
           </div>
-          <p className="text-sm text-slate-400">
-            {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN'
-              ? 'Testing mode - No real money at risk. Perfect for increasing Max Daily Trades.'
-              : 'Live mode - Real trades with actual funds. Use conservative trade limits.'}
-          </p>
         </div>
-        <ToggleSetting label="Auto Exit on TP/SL" value={settings.autoExit} onChange={(val) => handleChange('autoExit', val)} />
-      </SettingsCard>
 
-      {/* Notifications */}
-      <SettingsCard title="Notifications">
-        <ToggleSetting label="Trade Notifications" value={settings.notifications} onChange={(val) => handleChange('notifications', val)} />
-        <ToggleSetting label="Email Alerts" value={true} onChange={() => {}} disabled />
-      </SettingsCard>
+      </div>{/* end second row */}
 
-      {/* Save Button for Trading Settings */}
-      <div className="flex gap-3">
-        <button
-          onClick={handleSave}
-          disabled={riskSaving}
-          className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
-        >
-          <Save className="w-5 h-5" />
-          {riskSaving ? 'Saving...' : 'Save Trading Settings'}
-        </button>
-        {saved && (
-          <div className="flex items-center gap-2 px-4 py-3 bg-green-900 text-green-200 rounded-lg">
-            <CheckCircle className="w-5 h-5" />
-            Settings saved!
-          </div>
-        )}
-      </div>
-
-      {/* Gmail Notification Settings */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Lower settings grid */}
       <SettingsCard title="Email Notifications (Gmail)">
         {/* Status */}
         <div className="mb-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
@@ -1354,7 +1365,7 @@ const Settings: React.FC = () => {
       </SettingsCard>
 
       {/* Save Button */}
-      <div className="flex gap-4">
+      <div className="flex gap-4 lg:col-span-2">
         <button onClick={handleSave} disabled={riskSaving} className="btn-primary flex items-center gap-2 disabled:opacity-60">
           <Save className="w-4 h-4" />
           {riskSaving ? 'Saving...' : 'Save Settings'}
@@ -1444,7 +1455,7 @@ const Settings: React.FC = () => {
       </SettingsCard>
 
       {/* Coming Soon */}
-      <div className="card-glass p-6 opacity-50">
+      <div className="card-glass p-6 opacity-50 lg:col-span-2">
         <h3 className="font-semibold text-slate-300 mb-4">Advanced Settings (Coming Soon)</h3>
         <div className="space-y-2 text-sm text-slate-400">
           <p>• Custom risk profiles</p>
@@ -1453,6 +1464,7 @@ const Settings: React.FC = () => {
           <p>• Portfolio rebalancing</p>
           <p>• Multi-account management</p>
         </div>
+      </div>
       </div>
     </div>
   );
