@@ -309,7 +309,7 @@ const CreateScanner: React.FC = () => {
     setEditing(true);
     setScanResult(null);
 
-    if (strategy.last_backtest_result) {
+    if (strategy.last_backtest_result?.summary) {
       setBacktestResult(strategy.last_backtest_result);
       setShowBacktestPanel(true);
       if (strategy.last_backtest_result.start_date) {
@@ -408,6 +408,7 @@ const CreateScanner: React.FC = () => {
 
   const adjustedBacktestResult = useMemo(() => {
     if (!backtestResult || !applyZerodhaCharges) return null;
+    if (!backtestResult.summary || !backtestResult.all_trades) return null;
 
     const currentStrategy = strategies.find(s => s.id === selectedId);
     const strategyType = currentStrategy?.strategy_type || editorType;
@@ -768,17 +769,24 @@ const CreateScanner: React.FC = () => {
         position_size_pct: 10,
         max_open_trades: 5,
       });
-      setBacktestResult(res.data);
+      const resultData = res.data;
+      if (!resultData.summary || !resultData.all_trades) {
+        showToast('warning', resultData.error || 'Backtest returned no data — load candles first');
+        setBacktestResult(null);
+        setShowBacktestPanel(false);
+        return;
+      }
+      setBacktestResult(resultData);
       setStrategies(prev => prev.map(strategy => (
         strategy.id === selectedId
           ? {
               ...strategy,
-              last_backtest_result: res.data,
+              last_backtest_result: resultData,
               last_backtest_at: new Date().toISOString(),
             }
           : strategy
       )));
-      const s = res.data.summary;
+      const s = resultData.summary;
       if (s.total_trades === 0) {
         showToast('info', 'No trades generated in backtest period');
       } else {
@@ -1505,7 +1513,7 @@ const CreateScanner: React.FC = () => {
                 )}
 
                 {/* Backtest Results */}
-                {backtestResult && showBacktestPanel && (
+                {backtestResult && showBacktestPanel && backtestResult.summary && displayedBacktestResult?.summary && (
                   <div className="bg-slate-900/70 rounded-xl border border-purple-500/30 p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-sm font-semibold text-purple-300 flex items-center gap-1.5">

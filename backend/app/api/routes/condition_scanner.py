@@ -1295,7 +1295,7 @@ class BacktestRequest(BaseModel):
 class StrategyDiscoveryRequest(BaseModel):
     timeframe: str = "Day"
     universe: str = "NIFTY50"
-    max_candidates: int = Field(default=120, ge=10, le=250)
+    max_candidates: int = Field(default=120, ge=10, le=500)
     top_n: int = Field(default=5, ge=1, le=20)
     start_date: Optional[str] = None
     end_date: Optional[str] = None

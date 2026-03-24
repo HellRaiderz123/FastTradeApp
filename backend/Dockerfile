@@ -34,6 +34,7 @@ RUN playwright install chromium
 
 # Copy application code
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 
 EXPOSE 8000
 
