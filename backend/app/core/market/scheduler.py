@@ -605,9 +605,9 @@ def _zerodha_auto_login_job():
         if token:
             logger.info("✅ Zerodha token refreshed successfully")
         else:
-            logger.warning("⚠️ Zerodha auto-login failed — manual token may be needed")
+            logger.error("❌ Zerodha auto-login failed — check credentials and redirect URL")
     except Exception as e:
-        logger.exception(f"❌ Zerodha auto-login job failed: {e}")
+        logger.exception("❌ Zerodha auto-login job crashed")
     finally:
         db.close()
 
