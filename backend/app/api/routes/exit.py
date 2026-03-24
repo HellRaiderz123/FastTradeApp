@@ -9,6 +9,7 @@ from app.core.execution.factory import get_execution_adapter
 from app.core.utils.time import now_ist
 from app.core.execution.mode import get_execution_mode
 from app.core.learning.signal_diagnostics import record_exit_outcome
+from app.services.notifications import NotificationService
 
 router = APIRouter(prefix="/exit", tags=["Exit"])
 logger = logging.getLogger(__name__)
@@ -65,6 +66,16 @@ def manual_exit(intent_id: str, db: Session = Depends(get_db)):
 
     db.commit()
     db.refresh(intent)
+
+    try:
+        final_pnl = exit_result["final_pnl"]
+        svc = NotificationService(db)
+        if final_pnl >= 0:
+            svc.notify_tp_hit(intent.strategy or intent.underlying or "Strategy", final_pnl, 0.0)
+        else:
+            svc.notify_sl_hit(intent.strategy or intent.underlying or "Strategy", final_pnl, 0.0)
+    except Exception:
+        pass
 
     return {
         "intent_id": intent.intent_id,

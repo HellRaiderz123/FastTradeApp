@@ -19,6 +19,7 @@ from app.core.utils.time import now_ist
 from app.db.models_intent import ExecutionIntent
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.learning.signal_diagnostics import record_exit_outcome
+from app.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,17 @@ def reconcile_broker_positions(db: Session, force: bool = False) -> List[str]:
 
         try:
             record_exit_outcome(db, intent=intent, commit=False)
+        except Exception:
+            pass
+
+        try:
+            svc = NotificationService(db)
+            pnl_val = intent.pnl or 0.0
+            svc.notify_sl_hit(
+                strategy_name=f"[BROKER CLOSED] {intent.strategy or intent.underlying or 'Position'}",
+                pnl=pnl_val,
+                pnl_pct=0.0,
+            )
         except Exception:
             pass
 

@@ -639,15 +639,5 @@ def start_zerodha_auto_login_scheduler():
         coalesce=True,
     )
 
-    # Fire immediately on startup
-    from datetime import datetime, timedelta
-    scheduler.add_job(
-        func=_zerodha_auto_login_job,
-        trigger="date",
-        run_date=datetime.now() + timedelta(seconds=10),
-        id="zerodha_auto_login_startup",
-        replace_existing=True,
-    )
-
-    logger.info("🟢 Zerodha auto-login scheduler started (Mon-Fri at 8:00 AM IST + immediate on startup)")
+    logger.info("🟢 Zerodha auto-login scheduler started (Mon-Fri at 8:00 AM IST)")
 

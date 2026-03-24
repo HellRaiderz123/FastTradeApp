@@ -157,6 +157,15 @@ def advise_position(
 
     # ── Engine says NO_TRADE now ──────────────────────────────
     if new_strategy == "NO_TRADE":
+        # Neutral strategies do not depend on directional bias - only exit via TP/SL
+        if strategy in ("IRON_CONDOR", "BUTTERFLY_SPREAD", "SHORT_STRANGLE", "SHORT_STRADDLE", "LONG_STRANGLE"):
+            return {
+                **base,
+                "action": "WATCH",
+                "severity": "LOW",
+                "reason": f"TA says NO_TRADE but {position_name} is direction-neutral - let TP/SL manage exit",
+                "details": f"Neutral strategy held. conf={confidence:.0f}%, market={market_mode}, IV={iv_regime}.",
+            }
         # If position is in profit, suggest taking profits (HIGH severity)
         if pnl > 0 and entry_credit > 0 and (pnl / abs(entry_credit)) > 0.5:
             return {

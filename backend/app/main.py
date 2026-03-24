@@ -133,9 +133,18 @@ async def lifespan(app: FastAPI):
         start_twitter_sentiment_scheduler()  # Twitter market sentiment
         start_neon_sync_scheduler()            # Hourly delta backup to Neon
         start_zerodha_auto_login_scheduler()    # Daily auto-login at 8 AM IST
-        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit + Twitter sentiment + Neon sync")
+        logger.info("✅ Schedulers started")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
+
+    # Fire Zerodha auto-login immediately on startup
+    try:
+        import threading
+        from app.core.market.scheduler import _zerodha_auto_login_job
+        threading.Thread(target=_zerodha_auto_login_job, name="zerodha-startup-login", daemon=True).start()
+        logger.info("🔐 Zerodha auto-login triggered on startup")
+    except Exception as e:
+        logger.warning(f"⚠️ Zerodha startup login failed: {e}")
 
     # Resume auto-trader scheduler if it was RUNNING before restart
     try:

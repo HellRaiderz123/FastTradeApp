@@ -89,6 +89,7 @@ def run_auto_login(db) -> Optional[str]:
         return None
 
     request_token = None
+    captured_url = {}
 
     try:
         with sync_playwright() as p:
@@ -96,50 +97,46 @@ def run_auto_login(db) -> Optional[str]:
             context = browser.new_context()
             page = context.new_page()
 
+            # Intercept ALL requests early — redirect fires during/after TOTP submit
+            def on_request(request):
+                if "request_token=" in request.url:
+                    captured_url["url"] = request.url
+            page.on("request", on_request)
+
             login_url = KITE_LOGIN_URL.format(api_key=api_key)
             logger.info(f"🌐 Opening Zerodha login: {login_url}")
             page.goto(login_url, timeout=30000)
 
-            # Fill user ID
+            # Fill user ID + password
             page.wait_for_selector('input[type="text"]', timeout=15000)
             page.fill('input[type="text"]', user_id)
-
-            # Fill password
             page.fill('input[type="password"]', password)
-
-            # Click login
             page.click('button[type="submit"]')
 
-            # Handle TOTP / PIN screen
+            # Handle TOTP screen
             try:
-                page.wait_for_selector('input[type="number"], input[label="External TOTP"]', timeout=10000)
+                page.wait_for_selector('input[type="number"]', timeout=10000)
                 totp = _get_totp()
-                if totp:
-                    logger.info("🔐 Entering TOTP...")
-                    page.fill('input[type="number"]', totp)
-                    page.click('button[type="submit"]')
-                else:
+                if not totp:
                     logger.warning("⚠️  TOTP screen appeared but ZERODHA_TOTP_SECRET not set")
                     browser.close()
                     return None
+                logger.info(f"🔐 Entering TOTP... (page: {page.url})")
+                page.fill('input[type="number"]', totp)
+                page.click('button[type="submit"]')
+                logger.info("✅ TOTP submitted")
             except PWTimeout:
-                # No TOTP screen — that's fine, continue
-                pass
+                logger.info(f"ℹ️  No TOTP screen (URL: {page.url}), continuing...")
 
-            # Wait for redirect to our redirect_url containing request_token
+            # Wait up to 20s for redirect with request_token
             try:
-                page.wait_for_url(
-                    re.compile(r"request_token="),
-                    timeout=20000,
-                )
-                final_url = page.url
-                match = re.search(r"request_token=([^&]+)", final_url)
-                if match:
-                    request_token = match.group(1)
-                    logger.info(f"✅ Got request_token: {request_token[:8]}...")
+                page.wait_for_url(re.compile(r"request_token=|chrome-error"), timeout=20000)
+                if "request_token=" in page.url:
+                    captured_url["url"] = page.url
             except PWTimeout:
-                logger.error(f"❌ Timed out waiting for redirect. Current URL: {page.url}")
+                pass  # may have been captured via on_request even if page load failed
 
+            logger.info(f"🔄 Final URL: {page.url} | captured: {captured_url.get('url', 'none')[:80] if captured_url.get('url') else 'none'}")
             browser.close()
 
     except Exception as e:
@@ -147,7 +144,18 @@ def run_auto_login(db) -> Optional[str]:
         return None
 
     if not request_token:
-        return None
+        final_url = captured_url.get("url", "")
+        if final_url:
+            match = re.search(r"request_token=([^&]+)", final_url)
+            if match:
+                request_token = match.group(1)
+                logger.info(f"✅ Got request_token: {request_token[:8]}...")
+            else:
+                logger.error(f"❌ No request_token in captured URL: {final_url}")
+        else:
+            logger.error("❌ Redirect never fired — request_token not captured")
+        if not request_token:
+            return None
 
     # Exchange request_token → access_token
     try:
@@ -156,11 +164,11 @@ def run_auto_login(db) -> Optional[str]:
 
         access_token = exchange_request_token_for_access_token(db, request_token)
         if access_token:
-            # Update os.environ so current process uses new token immediately
             os.environ["ZERODHA_ACCESS_TOKEN"] = access_token
-            # Persist to .env for next restart
             _save_token_to_env(access_token)
-            # Reset cached kite client so it picks up new token
+            # Update existing singleton directly + reset so next call rebuilds cleanly
+            if kite_client_module._kite is not None:
+                kite_client_module._kite.set_access_token(access_token)
             kite_client_module._kite = None
             logger.info("✅ Zerodha auto-login complete — new access token active")
             return access_token

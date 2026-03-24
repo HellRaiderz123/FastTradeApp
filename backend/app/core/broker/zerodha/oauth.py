@@ -64,24 +64,21 @@ def exchange_request_token_for_access_token(
             logger.error("Failed to generate access token from request token")
             return None
         
-        # Deactivate previous sessions (one active session at a time)
-        old_sessions = (
-            db.query(ZerodhaSession)
-            .filter(ZerodhaSession.is_active == 1)
-            .all()
-        )
-        for session in old_sessions:
-            session.is_active = 0
-        
-        # Store new token in DB
-        expires_at = now_ist() + timedelta(days=60)  # Zerodha tokens valid ~60 days
-        new_session = ZerodhaSession(
-            access_token=access_token,
-            user_id=user_id,
-            expires_at=expires_at,
-            is_active=1,
-        )
-        db.add(new_session)
+        # Deactivate previous sessions
+        db.query(ZerodhaSession).filter(ZerodhaSession.is_active == 1).update({"is_active": 0})
+
+        # Upsert new session (token may already exist if Zerodha reused it)
+        existing = db.query(ZerodhaSession).filter(ZerodhaSession.access_token == access_token).first()
+        if existing:
+            existing.is_active = 1
+            existing.expires_at = now_ist() + timedelta(days=60)
+        else:
+            db.add(ZerodhaSession(
+                access_token=access_token,
+                user_id=user_id,
+                expires_at=now_ist() + timedelta(days=60),
+                is_active=1,
+            ))
         db.commit()
         
         logger.info(f"✅ Zerodha session created for user {user_id}")

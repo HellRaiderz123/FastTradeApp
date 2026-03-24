@@ -158,6 +158,18 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
     mode = get_execution_mode()
     auto_amount = strategy.get("auto_amount", 10000.0)
 
+    # Notify signals found
+    try:
+        from app.services.notifications import NotificationService
+        svc = NotificationService(db)
+        svc._send_telegram(
+            f"🔍 <b>Scanner: {name}</b>\n"
+            f"{len(signals)} signal(s) found\n"
+            + "\n".join(f"• {s['symbol']} @ ₹{s['ltp']} ({s['change_percent']:+.2f}%)" for s in signals[:10])
+        )
+    except Exception:
+        pass
+
     for sig in signals:
         # Calculate quantity from amount and current price
         ltp = sig["ltp"]
@@ -285,6 +297,20 @@ def _auto_execute_signal(
         execution_mode=mode,
         order_id=order.get("order_id"),
     )
+
+    try:
+        from app.services.notifications import NotificationService
+        svc = NotificationService(db)
+        status = order.get("status", "")
+        emoji = "✅" if "FAILED" not in status else "❌"
+        svc._send_telegram(
+            f"{emoji} <b>Scanner Execute: {strategy_name}</b>\n"
+            f"{direction} {symbol} @ ₹{ltp}\n"
+            f"Qty: {quantity} | Mode: {mode}\n"
+            f"Status: {status}"
+        )
+    except Exception:
+        pass
 
     # Log to DB
     try:

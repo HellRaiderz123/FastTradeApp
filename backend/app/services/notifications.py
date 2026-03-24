@@ -447,8 +447,8 @@ class NotificationService:
                 else:
                     logger.warning(f"Gmail not configured, skipping email for: {title}")
 
-            # 3. Send Telegram for high/critical priority
-            if priority in [NotificationPriority.HIGH, NotificationPriority.CRITICAL]:
+            # 3. Send Telegram for medium/high/critical priority
+            if priority in [NotificationPriority.MEDIUM, NotificationPriority.HIGH, NotificationPriority.CRITICAL]:
                 if self.telegram_enabled:
                     self._send_telegram(f"{title}\n\n{message}")
                 else:

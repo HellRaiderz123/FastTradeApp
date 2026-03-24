@@ -37,6 +37,18 @@ from app.core.strategies.option_spread_15m.risk import (
 )
 from app.core.risk.risk_limits_config import get_risk_limits
 
+def _sanitize_for_json(obj):
+    """Recursively convert non-JSON-serializable types (date, datetime) to strings."""
+    import datetime
+    if isinstance(obj, (datetime.date, datetime.datetime)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(i) for i in obj]
+    return obj
+
+
 def _log_strategy_run(result: dict, underlying: str) -> Optional[int]:
     """
     Persist strategy run to DB.
@@ -52,11 +64,10 @@ def _log_strategy_run(result: dict, underlying: str) -> Optional[int]:
             approved=bool(result.get("approved")),
             reason=str(result.get("reason") or ""),
             risk_metrics=result.get("risk_metrics") or {},
-            ticket=result.get("ticket"),
-            signal=result.get("signal") or {},
-            context=result.get("context") or {},
+            ticket=_sanitize_for_json(result.get("ticket")),
+            signal=_sanitize_for_json(result.get("signal") or {}),
+            context=_sanitize_for_json(result.get("context") or {}),
         )
-        # Return primitive id to avoid returning ORM instances bound to a closed session
         return run.id if run is not None else None
 
     except Exception as e:

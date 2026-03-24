@@ -44,8 +44,18 @@ from app.core.risk.tp_sl_calculator import (
 )
 from app.core.execution.factory import get_execution_adapter
 from app.core.learning.signal_diagnostics import record_entry_snapshot, record_exit_outcome
+from app.services.notifications import NotificationService
 
 logger = logging.getLogger(__name__)
+
+
+def _notify(db, method: str, *args, **kwargs):
+    """Fire a NotificationService method, swallowing all errors."""
+    try:
+        svc = NotificationService(db)
+        getattr(svc, method)(*args, **kwargs)
+    except Exception as exc:
+        logger.debug("Notification failed (%s): %s", method, exc)
 
 # ─── Market-hours check ──────────────────────────────────────────────
 
@@ -170,6 +180,9 @@ def _run_scan(db: Session):
                      details={"daily_pnl": cfg.daily_pnl, "limit": cfg.max_daily_loss},
                      severity="WARNING")
                 db.commit()
+                _notify(db, "notify_pnl_threshold",
+                        cfg.daily_pnl, (cfg.daily_pnl / (cfg.capital or 100000)) * 100,
+                        cfg.capital or 100000, "loss")
             return
 
     underlyings: List[str] = cfg.underlyings or ["NIFTY"]
@@ -404,6 +417,14 @@ def _auto_enter_position(
              },
              severity="SUCCESS")
 
+        _notify(db, "notify_trade_executed", strategy, underlying, {
+            "entry_credit": exec_result.get("entry_credit", 0),
+            "tp": tp, "sl": sl,
+            "mode": cfg.mode,
+            "confidence": engine_result.get("signal", {}).get("confidence", 0),
+            "legs": ticket.get("legs", []),
+        })
+
         # Update daily counters
         cfg.daily_trades = (cfg.daily_trades or 0) + 1
         db.commit()
@@ -460,6 +481,12 @@ def _auto_exit_position(
              },
              pnl_impact=final_pnl,
              severity="WARNING")
+
+        pnl_pct = (final_pnl / (cfg.capital or 100000)) * 100
+        if final_pnl >= 0:
+            _notify(db, "notify_tp_hit", intent.strategy, final_pnl, pnl_pct)
+        else:
+            _notify(db, "notify_sl_hit", intent.strategy, final_pnl, pnl_pct)
 
     except Exception as exc:
         logger.warning("Auto-exit failed for %s: %s", intent.intent_id, exc)

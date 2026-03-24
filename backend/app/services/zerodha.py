@@ -12,19 +12,26 @@ logger = logging.getLogger(__name__)
 
 class KiteConnectService:
     """Wrapper service for Zerodha KiteConnect API"""
-    
-    def __init__(self):
-        self.kite = None
-        self._initialize()
-    
+
     def _initialize(self):
         """Initialize KiteConnect client"""
         try:
             self.kite = get_kite_client()
-            logger.info("KiteConnect client initialized")
         except Exception as e:
             logger.error(f"Failed to initialize KiteConnect: {e}")
             self.kite = None
+
+    @property
+    def kite(self):
+        """Always return the current global kite client so token refreshes propagate."""
+        from app.core.broker.zerodha import client as _client_mod
+        if _client_mod._kite is None:
+            self._initialize()
+        return _client_mod._kite
+
+    @kite.setter
+    def kite(self, value):
+        pass  # no-op: state lives in client module
     
     def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
