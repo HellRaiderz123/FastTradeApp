@@ -67,7 +67,7 @@ print(f"📋 Found {len(tables)} tables in Neon: {tables}\n")
 for table in tables:
     try:
         with src_engine.connect() as src_conn:
-            rows = src_conn.execute(text(f'SELECT * FROM "{table}"')).mappings().all()
+            rows = [dict(r) for r in src_conn.execute(text(f'SELECT * FROM "{table}"')).mappings()]
 
         if not rows:
             print(f"  ⏭  {table}: empty, skipping")

@@ -594,3 +594,60 @@ def start_neon_sync_scheduler():
 
     logger.info("🟢 Neon delta sync scheduler started (every hour at :30)")
 
+
+def _zerodha_auto_login_job():
+    """Auto-refresh Zerodha access token at 8 AM IST before market opens."""
+    logger.info("⏱️ Running Zerodha auto-login...")
+    db = SessionLocal()
+    try:
+        from app.services.zerodha_auto_login import run_auto_login
+        token = run_auto_login(db)
+        if token:
+            logger.info("✅ Zerodha token refreshed successfully")
+        else:
+            logger.warning("⚠️ Zerodha auto-login failed — manual token may be needed")
+    except Exception as e:
+        logger.exception(f"❌ Zerodha auto-login job failed: {e}")
+    finally:
+        db.close()
+
+
+def start_zerodha_auto_login_scheduler():
+    """
+    Schedule daily Zerodha auto-login at 8:00 AM IST (before market opens at 9:15 AM).
+    Only activates if ZERODHA_USER_ID and ZERODHA_PASSWORD are set in .env.
+    """
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start Zerodha auto-login scheduler: main scheduler not running")
+        return
+
+    user_id = os.getenv("ZERODHA_USER_ID", "").strip()
+    password = os.getenv("ZERODHA_PASSWORD", "").strip()
+    if not user_id or not password:
+        logger.info("⏭️  Zerodha auto-login skipped (ZERODHA_USER_ID / ZERODHA_PASSWORD not set)")
+        return
+
+    scheduler.add_job(
+        func=_zerodha_auto_login_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=0,
+        id="zerodha_auto_login_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Fire immediately on startup
+    from datetime import datetime, timedelta
+    scheduler.add_job(
+        func=_zerodha_auto_login_job,
+        trigger="date",
+        run_date=datetime.now() + timedelta(seconds=10),
+        id="zerodha_auto_login_startup",
+        replace_existing=True,
+    )
+
+    logger.info("🟢 Zerodha auto-login scheduler started (Mon-Fri at 8:00 AM IST + immediate on startup)")
+

@@ -124,14 +124,13 @@ def run_delta_sync():
                 # Build query
                 with local_engine.connect() as src:
                     if since and ts_col:
-                        rows = src.execute(
+                        result = src.execute(
                             text(f'SELECT * FROM "{table}" WHERE "{ts_col}" > :since'),
                             {"since": since},
-                        ).mappings().all()
+                        )
                     else:
-                        rows = src.execute(
-                            text(f'SELECT * FROM "{table}"')
-                        ).mappings().all()
+                        result = src.execute(text(f'SELECT * FROM "{table}"'))
+                    rows = [dict(r) for r in result.mappings()]
 
                 if not rows:
                     continue
@@ -141,7 +140,8 @@ def run_delta_sync():
                 placeholders = ", ".join(f":{c}" for c in cols)
 
                 # Detect primary key for ON CONFLICT
-                pk_cols = [pk["name"] for pk in inspector.get_pk_constraint(table).get("constrained_columns", [])]
+                pk_info = inspector.get_pk_constraint(table)
+                pk_cols = pk_info.get("constrained_columns", []) if isinstance(pk_info, dict) else []
                 if pk_cols:
                     pk_clause = ", ".join(f'"{c}"' for c in pk_cols)
                     update_clause = ", ".join(
