@@ -570,3 +570,27 @@ def start_twitter_sentiment_scheduler():
     
     logger.info("🟢 Twitter sentiment scheduler started (every 15 min, market hours only)")
 
+
+def start_neon_sync_scheduler():
+    """
+    Start hourly delta sync: local Docker Postgres → Neon (cloud backup).
+    Runs every hour at :30 past the hour.
+    """
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start Neon sync scheduler: main scheduler not running")
+        return
+
+    from app.services.neon_sync import run_delta_sync
+
+    scheduler.add_job(
+        func=run_delta_sync,
+        trigger="cron",
+        minute=30,   # runs at HH:30 every hour
+        id="neon_sync_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    logger.info("🟢 Neon delta sync scheduler started (every hour at :30)")
+

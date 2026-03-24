@@ -27,15 +27,22 @@ if _is_sqlite:
         "timeout": 30,
     }
 elif _is_postgres:
-    # Connection pool tuning for Postgres (Neon serverless works best with these)
+    # Connection pool tuning for Postgres
     _engine_kwargs["pool_size"] = 5
     _engine_kwargs["max_overflow"] = 10
-    _engine_kwargs["pool_pre_ping"] = True       # detect stale connections
-    _engine_kwargs["pool_recycle"] = 300         # recycle every 5 min (Neon idle timeout)
-    _engine_kwargs["connect_args"] = {
-        "sslmode": "require",
-        "options": "-c timezone=Asia/Kolkata",
-    }
+    _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_recycle"] = 300
+    # Only force SSL for remote/cloud connections (not local Docker)
+    _is_local_pg = any(h in DATABASE_URL for h in ["localhost", "127.0.0.1", "@db:", "@db/"])
+    if not _is_local_pg:
+        _engine_kwargs["connect_args"] = {
+            "sslmode": "require",
+            "options": "-c timezone=Asia/Kolkata",
+        }
+    else:
+        _engine_kwargs["connect_args"] = {
+            "options": "-c timezone=Asia/Kolkata",
+        }
 
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 

@@ -3,6 +3,29 @@ version: "3.9"
 services:
 
   # ─────────────────────────────────────────
+  # PostgreSQL Database
+  # Data lives in named volume — survives container stop/start/rebuild
+  # Only lost if you run: docker-compose down -v  (never do this)
+  # ─────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: fasttrade-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fasttrade
+      POSTGRES_USER: fasttrade
+      POSTGRES_PASSWORD: your_new_password
+    volumes:
+      - fasttrade_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fasttrade -d fasttrade"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
   # FastAPI Backend
   # ─────────────────────────────────────────
   backend:
@@ -14,10 +37,12 @@ services:
     env_file:
       - ./backend/.env
     volumes:
-      # ML models persist across rebuilds — copy this folder to move between machines
       - ./backend/models:/app/models
     ports:
       - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
       interval: 30s
@@ -39,3 +64,10 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+volumes:
+  fasttrade_pgdata:
+    # Named volume — Docker manages this on the host
+    # Location: /var/lib/docker/volumes/fasttrade_pgdata/_data
+    # Survives: docker-compose down, docker-compose up --build, container restarts
+    # WARNING: docker-compose down -v  will DELETE this volume

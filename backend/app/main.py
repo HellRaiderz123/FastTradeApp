@@ -73,6 +73,7 @@ from app.core.market.scheduler import (
     start_auto_exit_scheduler,
     start_expiry_exit_scheduler,
     start_twitter_sentiment_scheduler,
+    start_neon_sync_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -129,7 +130,8 @@ async def lifespan(app: FastAPI):
         start_expiry_exit_scheduler()  # Auto-exit options near expiry
         start_intraday_candles_scheduler(delay_minutes=3)  # 5m + 1h candles
         start_twitter_sentiment_scheduler()  # Twitter market sentiment
-        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit + Twitter sentiment")
+        start_neon_sync_scheduler()            # Hourly delta backup to Neon
+        logger.info("✅ Schedulers started for live data updates + TP/SL monitoring + expiry auto-exit + Twitter sentiment + Neon sync")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
 

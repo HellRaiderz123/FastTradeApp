@@ -207,8 +207,15 @@ async def get_watchlist_quotes(watchlist_id: int, db: Session = Depends(get_db))
     if not watchlist:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     
-    symbols = watchlist.symbols or []
-    
+    raw_symbols = watchlist.symbols or []
+    if isinstance(raw_symbols, str):
+        import json as _json
+        try:
+            raw_symbols = _json.loads(raw_symbols)
+        except Exception:
+            raw_symbols = []
+    symbols = [s for s in raw_symbols if isinstance(s, str) and s.strip()]
+
     if not symbols:
         return {"watchlist": watchlist.name, "quotes": []}
     

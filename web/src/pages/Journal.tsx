@@ -117,8 +117,10 @@ const Journal: React.FC = () => {
         };
       });
       
+      // Exclude Zerodha holdings (long-term CNC positions) from journal view
+      const withoutHoldings = mapped.filter((e) => e.execution_mode !== 'ZERODHA_HOLDING');
       // Deduplicate ZERODHA_LIVE entries: keep only the most recent record per strategy/underlying combo
-      const deduplicated = deduplicateZerodhaLive(mapped);
+      const deduplicated = deduplicateZerodhaLive(withoutHoldings);
       setEntries(deduplicated);
     } catch (error) {
       console.error('Failed to fetch journal:', error);

@@ -424,7 +424,13 @@ def sync_zerodha_trades(
             closed_at=None,   # open holding
             last_mtm_at=now_ist(),
         )
-        db.add(intent)
+        try:
+            db.add(intent)
+            db.flush()
+        except Exception:
+            db.rollback()
+            skipped += 1
+            continue
         added += 1
 
     # ── 2. TODAY'S ORDERS — FIFO BUY+SELL pairing for realized P&L ─────────
@@ -530,9 +536,14 @@ def sync_zerodha_trades(
             last_mtm_at=now_ist(),
             exit_reason="ZERODHA_ACTUAL",
         )
-        db.add(intent)
-        existing_order_ids.add(sell_oid)
-        added += 1
+        try:
+            db.add(intent)
+            db.flush()
+            existing_order_ids.add(sell_oid)
+            added += 1
+        except Exception:
+            db.rollback()
+            skipped += 1
 
     # Unmatched BUYs from today (no sell yet)
     for symbol, buys in symbol_buys.items():
@@ -568,12 +579,22 @@ def sync_zerodha_trades(
                 closed_at=None,
                 last_mtm_at=now_ist(),
             )
-            db.add(intent)
-            existing_order_ids.add(oid)
-            added += 1
+            try:
+                db.add(intent)
+                db.flush()
+                existing_order_ids.add(oid)
+                added += 1
+            except Exception:
+                db.rollback()
+                skipped += 1
 
     if added:
-        db.commit()
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"❌ Zerodha sync commit failed: {e}")
+            raise HTTPException(status_code=500, detail=f"DB commit failed: {e}")
 
     logger.info(f"✅ Zerodha sync: {added} added ({len(holdings)} holdings, {len(completed_trades)} paired trades), {skipped} skipped/refreshed")
     return {
