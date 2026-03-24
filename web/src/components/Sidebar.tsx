@@ -67,6 +67,7 @@ const SECTIONS: Section[] = [
     label: 'Intelligence',
     items: [
       { path: '/ml', icon: Brain, label: 'ML Center' },
+      { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
     ],
   },
   {

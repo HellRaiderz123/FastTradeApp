@@ -63,6 +63,7 @@ from app.api.routes import condition_scanner
 from app.api.routes import reconcile
 from app.api.routes import analytics
 from app.api.routes import marketplace
+from app.api.routes import ai_chat
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -75,6 +76,7 @@ from app.core.market.scheduler import (
     start_twitter_sentiment_scheduler,
     start_neon_sync_scheduler,
     start_zerodha_auto_login_scheduler,
+    start_strategy_discovery_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -133,6 +135,7 @@ async def lifespan(app: FastAPI):
         start_twitter_sentiment_scheduler()  # Twitter market sentiment
         start_neon_sync_scheduler()            # Hourly delta backup to Neon
         start_zerodha_auto_login_scheduler()    # Daily auto-login at 8 AM IST
+        start_strategy_discovery_scheduler()    # Daily strategy discovery at 4:15 PM IST
         logger.info("✅ Schedulers started")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
@@ -327,5 +330,6 @@ app.include_router(condition_scanner.router)
 app.include_router(reconcile.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(analytics.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(marketplace.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(ai_chat.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

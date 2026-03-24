@@ -571,6 +571,133 @@ def start_twitter_sentiment_scheduler():
     logger.info("🟢 Twitter sentiment scheduler started (every 15 min, market hours only)")
 
 
+def _strategy_discovery_job():
+    """Run condition strategy discovery daily: 120 candidates, top 5, NIFTY50, Day timeframe."""
+    logger.info("⏱️ Running daily strategy discovery (120 candidates, NIFTY50, Day)")
+    db = SessionLocal()
+    try:
+        from app.api.routes.condition_scanner import (
+            _run_backtest_for_strategy_payload,
+            BacktestRequest,
+        )
+        from app.core.condition_strategy_lab import (
+            generate_candidate_strategies,
+            score_backtest_summary,
+            select_diverse_top,
+        )
+        from app.db.models_condition_strategy import ConditionStrategy, ConditionStrategyBacktest
+        from app.core.utils.time import now_ist
+
+        candidates = generate_candidate_strategies(
+            timeframe="Day",
+            universe="NIFTY50",
+            max_candidates=120,
+        )
+
+        req = BacktestRequest(
+            initial_capital=100000.0,
+            position_size_pct=10.0,
+            max_open_trades=5,
+        )
+
+        ranked = []
+        for candidate in candidates:
+            try:
+                result = _run_backtest_for_strategy_payload(candidate, req, db)
+                summary = result.get("summary") or {}
+                score = score_backtest_summary(summary)
+                ranked.append({"strategy": candidate, "summary": summary, "score": score, "final_capital": result.get("final_capital")})
+            except Exception:
+                pass
+
+        ranked.sort(key=lambda x: (x["score"], float((x.get("summary") or {}).get("annual_return_pct") or 0)), reverse=True)
+        top5 = select_diverse_top(ranked, top_n=5, max_per_family=1, fill_remaining=True)
+
+        existing_names = {name for (name,) in db.query(ConditionStrategy.name).all()}
+        saved = []
+        for rank, item in enumerate(top5, start=1):
+            strategy = item["strategy"]
+            base_name = f"[Auto] {strategy['name']}"
+            save_name = base_name
+            suffix = 2
+            while save_name in existing_names:
+                save_name = f"{base_name} #{suffix}"
+                suffix += 1
+
+            row = ConditionStrategy(
+                name=save_name,
+                description=f"Auto-discovered #{rank} | Score={item['score']} | Return={item['summary'].get('annual_return_pct', 0):.1f}%",
+                strategy_type=strategy.get("strategy_type", "Equity Swing"),
+                direction=strategy.get("direction", "BUY"),
+                timeframe="Day",
+                universe="NIFTY50",
+                instruments=strategy.get("instruments", []),
+                entry_conditions=strategy.get("entry_conditions", []),
+                exit_config=strategy.get("exit_config", {}),
+                is_active=True,
+                auto_scan_enabled=False,
+                auto_amount=10000.0,
+            )
+            db.add(row)
+            db.flush()
+
+            bt = ConditionStrategyBacktest(
+                strategy_id=row.id,
+                strategy_name=save_name,
+                start_date="",
+                end_date="",
+                initial_capital=100000.0,
+                final_capital=item.get("final_capital"),
+                result={**item.get("summary", {}), "strategy": strategy},
+            )
+            db.add(bt)
+            db.flush()
+            row.last_backtest_at = now_ist()
+            row.last_backtest_id = bt.id
+            existing_names.add(save_name)
+            saved.append(save_name)
+
+        db.commit()
+        logger.info("✅ Strategy discovery complete: saved %d strategies: %s", len(saved), saved)
+
+        # Telegram alert
+        try:
+            from app.services.notifications import NotificationService
+            svc = NotificationService(db)
+            svc._send_telegram(
+                f"🔬 <b>Daily Strategy Discovery</b>\n"
+                f"Tested 120 candidates on NIFTY50 (Daily)\n"
+                + "\n".join(f"{i+1}. {n}" for i, n in enumerate(saved))
+            )
+        except Exception:
+            pass
+
+    except Exception:
+        logger.exception("❌ Strategy discovery job failed")
+    finally:
+        db.close()
+
+
+def start_strategy_discovery_scheduler():
+    """Run strategy discovery daily at 4:15 PM IST (after candles + VIX are updated)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start strategy discovery scheduler: main scheduler not running")
+        return
+
+    scheduler.add_job(
+        func=_strategy_discovery_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=15,
+        id="strategy_discovery_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("🟢 Strategy discovery scheduler started (Mon-Fri at 4:15 PM IST)")
+
+
 def start_neon_sync_scheduler():
     """
     Start hourly delta sync: local Docker Postgres → Neon (cloud backup).

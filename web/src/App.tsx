@@ -29,6 +29,7 @@ import CreateScanner from './pages/CreateScanner';
 import BrokerReconciliation from './pages/BrokerReconciliation';
 import StrategyPnL from './pages/StrategyPnL';
 import StrategyMarketplace from './pages/StrategyMarketplace';
+import AIAssistant from './pages/AIAssistant';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import TwitterAlertsMonitor from './components/TwitterAlerts';
@@ -122,6 +123,7 @@ function AppInner() {
                   <Route path="/calendar" element={<Calendar />} />
                   <Route path="/finance" element={<FinanceTracker />} />
                   <Route path="/settings" element={<Settings />} />
+                  <Route path="/ai-assistant" element={<AIAssistant />} />
                 </Routes>
               </main>
             </div>
