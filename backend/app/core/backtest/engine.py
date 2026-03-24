@@ -68,13 +68,15 @@ class Trade:
         self.strategy = strategy
         self.ticket = ticket
         self.status = "open"
+        self.exit_reason: Optional[str] = None
         self.pnl: Optional[float] = None
         self.pnl_pct: Optional[float] = None
     
-    def close(self, exit_date: date, exit_price: float):
+    def close(self, exit_date: date, exit_price: float, exit_reason: str = "signal"):
         """Close the trade"""
         self.exit_date = exit_date
         self.exit_price = exit_price
+        self.exit_reason = exit_reason
         self.status = "closed"
         
         # Calculate P&L
@@ -99,6 +101,7 @@ class Trade:
             "quantity": self.quantity,
             "side": self.side,
             "strategy": self.strategy,
+            "exit_reason": self.exit_reason,
             "pnl": round(self.pnl, 2) if self.pnl is not None else None,
             "pnl_pct": round(self.pnl_pct, 2) if self.pnl_pct is not None else None,
             "status": self.status,
@@ -138,9 +141,15 @@ class BacktestEngine:
         self.raw_action_counts: Dict[str, int] = {}
         
         # Read SL/TP from strategy parameters (with sane defaults)
+        # These can be overridden via set_sl_tp() before calling run()
         params = strategy_config.parameters or {}
         self.sl_pct = float(params.get("sl_pct", 3) or 3)    # Stop loss %
         self.tp_pct = float(params.get("tp_pct", 3) or 3)    # Take profit %
+
+    def set_sl_tp(self, sl_pct: float, tp_pct: float):
+        """Override SL/TP percentages before running backtest"""
+        self.sl_pct = sl_pct
+        self.tp_pct = tp_pct
         
         logger.info(
             "✅ Initialized BacktestEngine for %s (strategy: %s, SL=%.1f%%, TP=%.1f%%)",
@@ -220,12 +229,12 @@ class BacktestEngine:
                         tp_hit = pnl_pct >= self.tp_pct
 
                         if sl_hit:
-                            open_trade.close(current_date, candle_close)
+                            open_trade.close(current_date, candle_close, exit_reason="stop_loss")
                             current_equity += open_trade.pnl
                             logger.debug(f"🛑 Stop Loss at {current_date} @ {candle_close}, P&L: {open_trade.pnl:.2f}")
                             # Don't `continue` — still generate signal for potential re-entry
                         elif tp_hit:
-                            open_trade.close(current_date, candle_close)
+                            open_trade.close(current_date, candle_close, exit_reason="take_profit")
                             current_equity += open_trade.pnl
                             logger.debug(f"💰 Take Profit at {current_date} @ {candle_close}, P&L: {open_trade.pnl:.2f}")
                     
@@ -271,7 +280,7 @@ class BacktestEngine:
                             if (open_trade.side == "long" and action == "SELL") or (
                                 open_trade.side == "short" and action == "BUY"
                             ):
-                                open_trade.close(candle["date"], candle["close"])
+                                open_trade.close(candle["date"], candle["close"], exit_reason="signal")
                                 current_equity += open_trade.pnl
                     
                     # Track equity every candle for accurate Sharpe/Sortino
@@ -287,7 +296,7 @@ class BacktestEngine:
                 last_candle = candles[-1]
                 open_trade = self._get_open_trade()
                 if open_trade:
-                    open_trade.close(last_candle["date"], last_candle["close"])
+                    open_trade.close(last_candle["date"], last_candle["close"], exit_reason="end_of_backtest")
                     current_equity += open_trade.pnl
                     self.equity_curve[-1] = current_equity
             
@@ -366,8 +375,8 @@ class BacktestEngine:
         """Create new trade from signal"""
         lots = float(self.config.parameters.get("lots", 1) or 1)
         lot_size_map = {
-            "NIFTY": 65,
-            "BANKNIFTY": 15,
+            "NIFTY": 75,
+            "BANKNIFTY": 30,
             "FINNIFTY": 40,
         }
         lot_size = int(lot_size_map.get(str(self.config.underlying or "").upper(), 1))
@@ -463,6 +472,8 @@ class BacktestEngine:
                 "peak_equity": metrics["peak_equity"],
                 "trades": [t.to_dict() for t in self.trades],
                 "equity_curve": self.equity_curve,
+                "sl_pct": self.sl_pct,
+                "tp_pct": self.tp_pct,
                 "drawdown_periods": calculator.calculate_drawdown_periods(),
                 "candles_loaded": self.candles_loaded,
                 "signal_counts": self.signal_counts,

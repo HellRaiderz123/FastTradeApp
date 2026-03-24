@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 from collections import defaultdict
 import os, re
+import httpx
 
 from app.db.session import SessionLocal
 from app.db.models_intent import ExecutionIntent
@@ -115,6 +116,19 @@ def _handle(msg: str, db: Session) -> dict:
         rows = [{"strategy": tr.strategy, "underlying": tr.underlying,
                  "unrealized_pnl": _fmt(tr.unrealized_pnl)} for tr in trades]
         return {"answer": f"{len(trades)} open position(s):", "table": rows}
+
+    # ── strategy decay ────────────────────────────────────────────
+    if any(w in t for w in ["decay", "decaying", "degraded", "underperform", "stop strategy"]):
+        from app.core.strategy_decay import compute_decay_report
+        report = compute_decay_report(db, lookback_days=days)
+        bad = [r for r in report if r["status"] in ("DECAYED", "WARNING")]
+        if not bad:
+            return {"answer": f"All strategies are healthy in the last {days} day(s)."}
+        rows = [{"strategy": r["strategy"], "status": r["status"],
+                 "live_win_rate": f"{r['live_win_rate']}%" if r['live_win_rate'] else "N/A",
+                 "backtest_win_rate": f"{r['backtest_win_rate']}%" if r['backtest_win_rate'] else "N/A",
+                 "gap": f"-{r['decay_gap']}%" if r['decay_gap'] else "N/A"} for r in bad]
+        return {"answer": f"{len(bad)} strategy/strategies showing decay in last {days} day(s):", "table": rows}
 
     # ── fallback ──────────────────────────────────────────────────
     return {

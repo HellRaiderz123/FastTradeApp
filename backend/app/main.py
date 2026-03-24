@@ -77,6 +77,7 @@ from app.core.market.scheduler import (
     start_neon_sync_scheduler,
     start_zerodha_auto_login_scheduler,
     start_strategy_discovery_scheduler,
+    start_strategy_decay_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -136,6 +137,7 @@ async def lifespan(app: FastAPI):
         start_neon_sync_scheduler()            # Hourly delta backup to Neon
         start_zerodha_auto_login_scheduler()    # Daily auto-login at 8 AM IST
         start_strategy_discovery_scheduler()    # Daily strategy discovery at 4:15 PM IST
+        start_strategy_decay_scheduler()         # Daily decay check at 4:30 PM IST
         logger.info("✅ Schedulers started")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")

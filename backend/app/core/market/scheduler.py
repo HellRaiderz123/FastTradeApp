@@ -678,6 +678,38 @@ def _strategy_discovery_job():
         db.close()
 
 
+def _strategy_decay_job():
+    """Daily strategy decay check at 4:30 PM IST."""
+    logger.info("⏱️ Running strategy decay check")
+    db = SessionLocal()
+    try:
+        from app.core.strategy_decay import run_decay_check_and_notify
+        run_decay_check_and_notify(db)
+    except Exception:
+        logger.exception("❌ Strategy decay job failed")
+    finally:
+        db.close()
+
+
+def start_strategy_decay_scheduler():
+    """Run strategy decay check daily at 4:30 PM IST (after discovery at 4:15)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start strategy decay scheduler: main scheduler not running")
+        return
+    scheduler.add_job(
+        func=_strategy_decay_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=30,
+        id="strategy_decay_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("🟢 Strategy decay scheduler started (Mon-Fri at 4:30 PM IST)")
+
+
 def start_strategy_discovery_scheduler():
     """Run strategy discovery daily at 4:15 PM IST (after candles + VIX are updated)."""
     if not scheduler.running:

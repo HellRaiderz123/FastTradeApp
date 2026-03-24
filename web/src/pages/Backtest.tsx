@@ -51,6 +51,8 @@ interface BacktestResult {
     legs?: Array<{ side: string; symbol: string }>;
   }>;
   equity_curve: number[];
+  sl_pct?: number;
+  tp_pct?: number;
   drawdown_periods: Array<{
     start: number;
     end: number;
@@ -65,6 +67,8 @@ export const Backtest: React.FC = () => {
   const [endDate, setEndDate] = useState('2024-12-31');
   const [initialCapital, setInitialCapital] = useState(100000);
   const [mode, setMode] = useState<'auto' | 'options' | 'proxy'>('auto');
+  const [slPct, setSlPct] = useState<number>(3);
+  const [tpPct, setTpPct] = useState<number>(3);
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
@@ -103,6 +107,8 @@ export const Backtest: React.FC = () => {
         end_date: endDate,
         initial_capital: initialCapital,
         mode,
+        sl_pct: slPct,
+        tp_pct: tpPct,
       });
 
       const data = response?.data;
@@ -120,14 +126,25 @@ export const Backtest: React.FC = () => {
     }
   };
 
-  // Prepare equity curve data for chart
-  const equityData = result?.equity_curve.map((equity, idx) => ({
-    day: idx,
-    equity: equity,
-  })) || [];
+  // Build equity curve with dates sampled from trade timestamps
+  const equityData = (() => {
+    if (!result) return [];
+    const curve = result.equity_curve;
+    // Collect all trade dates (entry + exit) sorted
+    const tradeDates: string[] = [];
+    result.trades.forEach((t) => {
+      if (t.entry_date) tradeDates.push(t.entry_date);
+      if (t.exit_date) tradeDates.push(t.exit_date);
+    });
+    tradeDates.sort();
+    return curve.map((equity, idx) => ({
+      date: tradeDates[idx] ?? `C${idx}`,
+      equity,
+    }));
+  })();
 
-  // Prepare trades for histogram
-  const tradeData = result?.trades.slice(0, 20).map((trade, idx) => ({
+  // All trades for P&L bar chart
+  const tradeData = result?.trades.map((trade, idx) => ({
     trade: `T${idx + 1}`,
     pnl: trade.pnl,
     type: trade.pnl > 0 ? 'win' : 'loss',
@@ -143,7 +160,7 @@ export const Backtest: React.FC = () => {
 
       {/* Input Section */}
       <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-8 gap-4">
           {/* Strategy Selector */}
           <div>
             <label htmlFor="backtest-strategy" className="block text-sm font-medium text-slate-300 mb-2">Strategy</label>
@@ -214,6 +231,38 @@ export const Backtest: React.FC = () => {
               type="number"
               value={initialCapital}
               onChange={(e) => setInitialCapital(parseInt(e.target.value))}
+              className="w-full px-4 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          {/* SL % */}
+          <div>
+            <label htmlFor="backtest-sl" className="block text-sm font-medium text-slate-300 mb-2">SL %</label>
+            <input
+              id="backtest-sl"
+              aria-label="Stop loss percentage"
+              type="number"
+              step="0.5"
+              min="0.5"
+              max="20"
+              value={slPct}
+              onChange={(e) => setSlPct(parseFloat(e.target.value))}
+              className="w-full px-4 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          {/* TP % */}
+          <div>
+            <label htmlFor="backtest-tp" className="block text-sm font-medium text-slate-300 mb-2">TP %</label>
+            <input
+              id="backtest-tp"
+              aria-label="Take profit percentage"
+              type="number"
+              step="0.5"
+              min="0.5"
+              max="50"
+              value={tpPct}
+              onChange={(e) => setTpPct(parseFloat(e.target.value))}
               className="w-full px-4 py-2 bg-slate-800 border border-slate-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -324,7 +373,8 @@ export const Backtest: React.FC = () => {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#475569" />
-                  <XAxis dataKey="day" stroke="#94a3b8" />
+                  <XAxis dataKey="date" stroke="#94a3b8" tick={{ fontSize: 10 }}
+                    tickFormatter={(v) => v.length > 10 ? v.slice(5) : v} />
                   <YAxis stroke="#94a3b8" />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569' }}
@@ -343,7 +393,7 @@ export const Backtest: React.FC = () => {
 
             {/* Trade Distribution */}
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-              <h3 className="text-lg font-semibold mb-4 text-white">Trade P&L Distribution</h3>
+              <h3 className="text-lg font-semibold mb-4 text-white">Trade P&L Distribution ({result.total_trades} trades)</h3>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={tradeData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#475569" />
@@ -363,7 +413,12 @@ export const Backtest: React.FC = () => {
           {result.trades.length > 0 && (
             <div className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
               <div className="p-6 border-b border-slate-700">
-                <h3 className="text-lg font-semibold text-white">Recent Trades</h3>
+                <h3 className="text-lg font-semibold text-white">
+                  All Trades ({result.trades.length})
+                  <span className="ml-3 text-sm font-normal text-slate-400">
+                    SL {result.sl_pct ?? slPct}% / TP {result.tp_pct ?? tpPct}%
+                  </span>
+                </h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -382,7 +437,7 @@ export const Backtest: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-700">
-                    {result.trades.slice(0, 15).map((trade, idx) => (
+                    {result.trades.map((trade, idx) => (
                       <tr key={idx} className="hover:bg-slate-700">
                         <td className="px-6 py-3">{trade.entry_date}</td>
                         <td className="px-6 py-3">{trade.exit_date || '-'}</td>

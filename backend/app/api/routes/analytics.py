@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from app.db.session import SessionLocal
 from app.db.models_intent import ExecutionIntent
+from app.core.strategy_decay import compute_decay_report
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -169,4 +170,22 @@ def get_pnl_analytics(
             "strategies": all_strategies,
             "underlyings": all_underlyings,
         },
+    }
+
+
+@router.get("/strategy-decay")
+def get_strategy_decay(
+    days: int = Query(30, ge=7, le=180),
+    db: Session = Depends(get_db),
+):
+    """Returns decay status for each strategy: live win rate vs backtest win rate."""
+    report = compute_decay_report(db, lookback_days=days)
+    decayed = sum(1 for r in report if r["status"] == "DECAYED")
+    warnings = sum(1 for r in report if r["status"] == "WARNING")
+    return {
+        "lookback_days": days,
+        "total_strategies": len(report),
+        "decayed": decayed,
+        "warnings": warnings,
+        "strategies": report,
     }

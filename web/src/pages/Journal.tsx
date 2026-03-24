@@ -47,16 +47,13 @@ interface SignalDiagnostics {
 }
 
 type PnLFilter = 'all' | 'profit' | 'loss';
-type ExecutionTypeFilter = 'all' | 'paper' | 'zerodha_dry' | 'zerodha_live' | 'zerodha_actual';
 
 const Journal: React.FC = () => {
   const { showToast } = useToast();
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [pnlFilter, setPnlFilter] = useState<PnLFilter>('all');
-  const [executionTypeFilter, setExecutionTypeFilter] = useState<ExecutionTypeFilter>('all');
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [diagnostics, setDiagnostics] = useState<SignalDiagnostics | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
@@ -65,11 +62,8 @@ const Journal: React.FC = () => {
   const [diagnosticsLimit, setDiagnosticsLimit] = useState(200);
 
   useEffect(() => {
-    // Auto-sync Zerodha trades on mount, then load journal
-    handleSyncZerodha(true).finally(() => {
-      fetchJournal();
-      fetchDiagnostics();
-    });
+    fetchJournal();
+    fetchDiagnostics();
   }, []);
 
   const fetchJournal = async () => {
@@ -117,11 +111,7 @@ const Journal: React.FC = () => {
         };
       });
       
-      // Exclude Zerodha holdings (long-term CNC positions) from journal view
-      const withoutHoldings = mapped.filter((e) => e.execution_mode !== 'ZERODHA_HOLDING');
-      // Deduplicate ZERODHA_LIVE entries: keep only the most recent record per strategy/underlying combo
-      const deduplicated = deduplicateZerodhaLive(withoutHoldings);
-      setEntries(deduplicated);
+      setEntries(mapped);
     } catch (error) {
       console.error('Failed to fetch journal:', error);
     } finally {
@@ -172,21 +162,6 @@ const Journal: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleSyncZerodha = async (silent = false) => {
-    setSyncing(true);
-    try {
-      const res = await journalAPI.syncZerodha();
-      const { imported, holdings_synced, paired_trades } = res.data;
-      if (!silent) showToast('success', 'Zerodha Synced',
-        `${imported} new — ${holdings_synced ?? 0} holdings, ${paired_trades ?? 0} intraday trades`);
-      if (imported > 0) await fetchJournal();
-    } catch (err: any) {
-      if (!silent) showToast('error', 'Sync Failed', err?.response?.data?.detail || 'Could not reach Zerodha');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   const handleClearClosed = async () => {
     if (!confirm('Delete all closed/completed trades? Open positions will be kept.')) return;
     setClearing(true);
@@ -217,98 +192,13 @@ const Journal: React.FC = () => {
     }
   };
 
-  const deduplicateZerodhaLive = (entries: JournalEntry[]): JournalEntry[] => {
-    const zerodhaLiveMap = new Map<string, JournalEntry>();
-    const nonZerodhaLive: JournalEntry[] = [];
-
-    entries.forEach((entry) => {
-      const mode = entry.execution_mode || '';
-      const isZerodhaLive = mode === 'ZERODHA_LIVE' || mode === 'ZERODHA_LIVE_DIRECT';
-      
-      if (isZerodhaLive) {
-        const key = `${entry.strategy}|${entry.underlying}`;
-        const existing = zerodhaLiveMap.get(key);
-        
-        if (!existing) {
-          zerodhaLiveMap.set(key, entry);
-        } else {
-          // Prefer app-executed (source !== 'zerodha_api_sync') over synced from API
-          const existingSource = existing.execution_result?.source || '';
-          const currentSource = entry.execution_result?.source || '';
-          const existingIsSynced = existingSource === 'zerodha_api_sync';
-          const currentIsSynced = currentSource === 'zerodha_api_sync';
-          
-          if (currentIsSynced && !existingIsSynced) {
-            // Keep existing (app-executed) over synced
-            return;
-          } else if (!currentIsSynced && existingIsSynced) {
-            // Replace with app-executed (current)
-            zerodhaLiveMap.set(key, entry);
-          } else {
-            // Both same type: keep most recent
-            if (new Date(entry.created_at) > new Date(existing.created_at)) {
-              zerodhaLiveMap.set(key, entry);
-            }
-          }
-        }
-      } else {
-        nonZerodhaLive.push(entry);
-      }
-    });
-
-    // Combine dedup'ed Zerodha live + all non-live entries
-    return [...Array.from(zerodhaLiveMap.values()), ...nonZerodhaLive];
-  };
-
-  const getExecutionTypeFromMode = (mode?: string): ExecutionTypeFilter => {
-    if (!mode) return 'paper';
-    if (mode === 'ZERODHA_ACTUAL') return 'zerodha_actual';
-    if (mode.includes('ZERODHA_LIVE_DIRECT')) return 'zerodha_live';
-    if (mode.includes('ZERODHA_LIVE')) return 'zerodha_live';
-    if (mode.includes('ZERODHA')) return 'zerodha_dry';
-    return 'paper';
-  };
-
-  const filteredEntries = entries.filter((entry) => {
-    // Apply P&L filter
+const filteredEntries = entries.filter((entry) => {
     if (pnlFilter === 'profit' && entry.pnl <= 0) return false;
     if (pnlFilter === 'loss' && entry.pnl >= 0) return false;
-
-    // Apply execution type filter
-    if (executionTypeFilter !== 'all') {
-      const entryType = getExecutionTypeFromMode(entry.execution_mode);
-      if (entryType !== executionTypeFilter) return false;
-    }
-
     return true;
   });
 
-  // Calculate stats based on FILTERED entries (not all entries)
-  const stats = {
-    totalTrades: filteredEntries.length,
-    wins: filteredEntries.filter((e) => e.pnl > 0).length,
-    losses: filteredEntries.filter((e) => e.pnl < 0).length,
-    totalPnL: filteredEntries.reduce((sum, e) => sum + e.pnl, 0),
-    avgWin: filteredEntries.filter((e) => e.pnl > 0).length > 0
-      ? filteredEntries.filter((e) => e.pnl > 0).reduce((sum, e) => sum + e.pnl, 0) /
-      filteredEntries.filter((e) => e.pnl > 0).length
-      : 0,
-    avgLoss: filteredEntries.filter((e) => e.pnl < 0).length > 0
-      ? filteredEntries.filter((e) => e.pnl < 0).reduce((sum, e) => sum + e.pnl, 0) /
-      filteredEntries.filter((e) => e.pnl < 0).length
-      : 0,
-  };
-
-  // Show all-time stats for reference
-  const allTimeStats = {
-    totalTrades: entries.length,
-    wins: entries.filter((e) => e.pnl > 0).length,
-    losses: entries.filter((e) => e.pnl < 0).length,
-    totalPnL: entries.reduce((sum, e) => sum + e.pnl, 0),
-  };
-
-  // Check if filters are active
-  const hasActiveFilters = pnlFilter !== 'all' || executionTypeFilter !== 'all';
+  const hasActiveFilters = pnlFilter !== 'all';
 
   const formatMoney = (value?: number | null) => {
     if (value === null || value === undefined) return 'N/A';
@@ -345,43 +235,11 @@ const Journal: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Filter Status Indicator */}
       {hasActiveFilters && (
         <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-          <p className="text-sm text-blue-300">
-            🔍 <span className="font-semibold">Filters Active:</span> Showing {filteredEntries.length} of {entries.length} trades
-            {pnlFilter !== 'all' && <span className="ml-2">• P&L: {pnlFilter}</span>}
-            {executionTypeFilter !== 'all' && <span className="ml-2">• Type: {executionTypeFilter.replace('_', ' ')}</span>}
-          </p>
+          <p className="text-sm text-blue-300">🔍 Showing {filteredEntries.length} of {entries.length} trades • P&L: {pnlFilter}</p>
         </div>
       )}
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard 
-          label="Total Trades" 
-          value={stats.totalTrades.toString()} 
-          subtext={hasActiveFilters ? `of ${allTimeStats.totalTrades} total` : undefined}
-        />
-        <StatCard 
-          label="Wins" 
-          value={stats.wins.toString()} 
-          subtext={`Avg: ₹${Math.round(stats.avgWin)}`} 
-          color="green" 
-        />
-        <StatCard 
-          label="Losses" 
-          value={stats.losses.toString()} 
-          subtext={`Avg: ₹${Math.round(stats.avgLoss)}`} 
-          color="red" 
-        />
-        <StatCard 
-          label="Total P&L" 
-          value={`₹${stats.totalPnL.toLocaleString()}`} 
-          subtext={hasActiveFilters ? `(All-time: ₹${allTimeStats.totalPnL.toLocaleString()})` : undefined}
-          color={stats.totalPnL >= 0 ? 'green' : 'red'} 
-        />
-      </div>
 
       {/* Diagnostics */}
       <div className="terminal-panel terminal-pattern p-6">
@@ -465,13 +323,6 @@ const Journal: React.FC = () => {
           <h2 className="text-2xl font-bold text-white">Trade Journal</h2>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => handleSyncZerodha(false)}
-              disabled={syncing}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition text-white text-sm"
-            >
-              {syncing ? '⟳ Syncing...' : '⟳ Sync Zerodha'}
-            </button>
-            <button
               onClick={handleClearClosed}
               disabled={clearing}
               className="flex items-center gap-2 px-4 py-2 bg-rose-900/60 hover:bg-rose-800 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition text-rose-300 text-sm"
@@ -507,38 +358,7 @@ const Journal: React.FC = () => {
             </div>
           </div>
 
-          {/* Execution Type Filter */}
-          <div>
-            <p className="text-xs text-slate-400 mb-2 font-semibold">Execution Type</p>
-            <div className="flex flex-wrap gap-2">
-              {(['all', 'paper', 'zerodha_dry', 'zerodha_live', 'zerodha_actual'] as const).map((f) => {
-                const labels = {
-                  all: 'All',
-                  paper: 'Paper',
-                  zerodha_dry: 'Zerodha DRY',
-                  zerodha_live: 'Zerodha LIVE',
-                  zerodha_actual: 'Actual Trades',
-                };
-                return (
-                  <button
-                    key={f}
-                    onClick={() => setExecutionTypeFilter(f)}
-                    className={`px-4 py-2 rounded-lg font-medium transition ${
-                      executionTypeFilter === f
-                        ? f === 'zerodha_live'
-                          ? 'bg-red-500 text-white'
-                          : f === 'zerodha_dry'
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-blue-500 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {labels[f]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+
         </div>
 
         {/* Entries */}
@@ -574,17 +394,7 @@ const Journal: React.FC = () => {
         )}
       </div>
 
-      {/* Analysis */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <AnalysisCard 
-          title="Win Rate" 
-          value={`${stats.totalTrades > 0 ? ((stats.wins / stats.totalTrades) * 100).toFixed(1) : '0'}%`} 
-        />
-        <AnalysisCard 
-          title="Profit Factor" 
-          value={stats.avgLoss !== 0 ? Math.abs(stats.avgWin / stats.avgLoss).toFixed(2) : 'N/A'} 
-        />
-      </div>
+
     </div>
   );
 };

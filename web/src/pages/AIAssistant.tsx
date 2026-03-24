@@ -17,6 +17,7 @@ const SUGGESTIONS = [
   'My P&L summary',
   'Recent trades',
   'Open positions',
+  'Which strategies are decaying',
 ];
 
 export default function AIAssistant() {

@@ -38,6 +38,8 @@ class BacktestRequest(BaseModel):
     end_date: date
     initial_capital: float = 100000
     mode: str = "auto"  # auto | proxy | options
+    sl_pct: Optional[float] = None   # Override stop-loss %; None = use strategy.parameters
+    tp_pct: Optional[float] = None   # Override take-profit %; None = use strategy.parameters
 
 
 class BacktestResultResponse(BaseModel):
@@ -107,9 +109,17 @@ def run_backtest(
 
         use_options = mode == "options" or (mode == "auto" and config.strategy_type == "option_spread_15m")
 
+        def _apply_sl_tp(eng):
+            if request.sl_pct is not None or request.tp_pct is not None:
+                if hasattr(eng, 'set_sl_tp'):
+                    sl = request.sl_pct if request.sl_pct is not None else eng.sl_pct
+                    tp = request.tp_pct if request.tp_pct is not None else eng.tp_pct
+                    eng.set_sl_tp(sl, tp)
+
         if use_options:
             try:
                 engine = OptionsBacktestEngine(config, db)
+                _apply_sl_tp(engine)
                 result = engine.run(
                     start_date=request.start_date,
                     end_date=request.end_date,
@@ -136,6 +146,7 @@ def run_backtest(
 
                     logger.warning(f"⚠️ {msg} Falling back to proxy.")
                     engine = BacktestEngine(config, db)
+                    _apply_sl_tp(engine)
                     result = engine.run(
                         start_date=request.start_date,
                         end_date=request.end_date,
@@ -166,6 +177,7 @@ def run_backtest(
 
                 # mode == auto -> fallback to proxy backtest
                 engine = BacktestEngine(config, db)
+                _apply_sl_tp(engine)
                 result = engine.run(
                     start_date=request.start_date,
                     end_date=request.end_date,
@@ -178,6 +190,7 @@ def run_backtest(
                 result["mode_used"] = "proxy_fallback"
         else:
             engine = BacktestEngine(config, db)
+            _apply_sl_tp(engine)
             result = engine.run(
                 start_date=request.start_date,
                 end_date=request.end_date,

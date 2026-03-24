@@ -166,15 +166,6 @@ def list_execution_intents(
     Returns:
         List of execution intents ordered by most recent first.
     """
-    # Sync Zerodha live positions that aren't tracked in the app
-    # AND reconcile stale positions that were closed on Zerodha directly
-    try:
-        _sync_zerodha_live_positions(db)
-        reconcile_broker_positions(db, force=True)
-    except Exception as e:
-        logger.debug(f"⚠️  Zerodha position sync skipped: {e}")
-        # Non-blocking: proceed with available data
-    
     intents = db.query(ExecutionIntent).order_by(ExecutionIntent.created_at.desc()).limit(limit).all()
 
     # Best-effort MTM refresh for open paper positions.

@@ -290,6 +290,40 @@ const CreateScanner: React.FC = () => {
     }
   }, []);
 
+  // ── Select a strategy ─────────────────────────────────────────────────
+
+  const selectStrategy = useCallback((strategy: Strategy) => {
+    if (!strategy) return;
+    setSelectedId(strategy.id);
+    localStorage.setItem(LAST_SELECTED_SCANNER_STRATEGY_KEY, String(strategy.id));
+    setEditorName(strategy.name);
+    setEditorDescription(strategy.description || '');
+    setEditorType(strategy.strategy_type || 'Equity Swing');
+    setEditorDirection((strategy.direction as 'BUY' | 'SELL') || 'BUY');
+    setEditorTimeframe(strategy.timeframe || '1 Hour');
+    setEditorUniverse(strategy.universe || 'NIFTY50');
+    setEditorConditions([...(strategy.entry_conditions || [])]);
+    setEditorExit({ ...(strategy.exit_config || { sl_pct: 5, tp_pct: 10, tsl_pct: 0, exit_mode: 'percentage' }) });
+    setEditorAutoScan(strategy.auto_scan_enabled || false);
+    setEditorAutoQty(strategy.auto_amount || 10000);
+    setEditing(true);
+    setScanResult(null);
+
+    if (strategy.last_backtest_result) {
+      setBacktestResult(strategy.last_backtest_result);
+      setShowBacktestPanel(true);
+      if (strategy.last_backtest_result.start_date) {
+        setBtStartDate(strategy.last_backtest_result.start_date);
+      }
+      if (strategy.last_backtest_result.end_date) {
+        setBtEndDate(strategy.last_backtest_result.end_date);
+      }
+    } else {
+      setBacktestResult(null);
+      setShowBacktestPanel(false);
+    }
+  }, []);
+
   useEffect(() => { loadData(); }, [loadData]);
 
   useEffect(() => {
@@ -313,13 +347,13 @@ const CreateScanner: React.FC = () => {
       selectStrategy(strategy);
     }
     setRestoredSelection(true);
-  }, [restoredSelection, selectedId, strategies]);
+  }, [restoredSelection, selectedId, strategies, selectStrategy]);
 
   // ── Select a strategy ─────────────────────────────────────────────────
 
   // Fetch candle date range when timeframe or universe changes
   useEffect(() => {
-    if (!editorTimeframe) return;
+    if (!editorTimeframe || !editorUniverse) return;
     api.get(`/condition-scanner/candle-range/${encodeURIComponent(editorTimeframe)}`, {
       params: { universe: editorUniverse },
     }).then(res => {
@@ -535,37 +569,6 @@ const CreateScanner: React.FC = () => {
   }, [applyZerodhaCharges, backtestResult, brokerageConfig, editorType, strategies, selectedId]);
 
   const displayedBacktestResult = adjustedBacktestResult || backtestResult;
-
-  const selectStrategy = (strategy: Strategy) => {
-    setSelectedId(strategy.id);
-    localStorage.setItem(LAST_SELECTED_SCANNER_STRATEGY_KEY, String(strategy.id));
-    setEditorName(strategy.name);
-    setEditorDescription(strategy.description);
-    setEditorType(strategy.strategy_type);
-    setEditorDirection(strategy.direction as 'BUY' | 'SELL');
-    setEditorTimeframe(strategy.timeframe);
-    setEditorUniverse(strategy.universe);
-    setEditorConditions([...strategy.entry_conditions]);
-    setEditorExit({ ...strategy.exit_config });
-    setEditorAutoScan(strategy.auto_scan_enabled || false);
-    setEditorAutoQty(strategy.auto_amount || 10000);
-    setEditing(true);
-    setScanResult(null);
-
-    if (strategy.last_backtest_result) {
-      setBacktestResult(strategy.last_backtest_result);
-      setShowBacktestPanel(true);
-      if (strategy.last_backtest_result.start_date) {
-        setBtStartDate(strategy.last_backtest_result.start_date);
-      }
-      if (strategy.last_backtest_result.end_date) {
-        setBtEndDate(strategy.last_backtest_result.end_date);
-      }
-    } else {
-      setBacktestResult(null);
-      setShowBacktestPanel(false);
-    }
-  };
 
   // ── New strategy ──────────────────────────────────────────────────────
 
