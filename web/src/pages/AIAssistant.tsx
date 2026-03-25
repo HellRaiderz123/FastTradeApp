@@ -12,17 +12,19 @@ interface Message {
 }
 
 const SUGGESTIONS = [
-  'Show me losing trades this month',
-  'Best strategy this week',
-  'My P&L summary',
-  'Recent trades',
-  'Open positions',
-  'Which strategies are decaying',
+  'Show my open positions',
+  'Which strategy is performing best?',
+  'Analyze my losing trades',
+  'What is my win rate?',
+  'Should I hold or exit my current positions?',
+  'What is my total P&L this month?',
+  'Which symbol made me the most money?',
+  'Explain iron condor strategy',
 ];
 
 export default function AIAssistant() {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'bot', text: 'Hi! Ask me anything about your trades.\nTry: "Show me losing trades this month" or "Best strategy this week".' },
+    { role: 'bot', text: 'Hi! I have full access to your trade data and can answer anything.\nAsk me about your positions, P&L, strategy performance, or any trading concept.' },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -32,11 +34,16 @@ export default function AIAssistant() {
 
   const send = async (text: string) => {
     if (!text.trim() || loading) return;
-    setMessages(prev => [...prev, { role: 'user', text }]);
+    const updatedMessages = [...messages, { role: 'user' as const, text }];
+    setMessages(updatedMessages);
     setInput('');
     setLoading(true);
     try {
-      const { data } = await axios.post(`${API}/ai-chat/query`, { message: text });
+      // Build history for multi-turn context (exclude initial bot greeting)
+      const history = updatedMessages
+        .slice(1)
+        .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
+      const { data } = await axios.post(`${API}/ai-chat/query`, { message: text, history });
       setMessages(prev => [...prev, { role: 'bot', text: data.answer, table: data.table }]);
     } catch {
       setMessages(prev => [...prev, { role: 'bot', text: 'Failed to reach server.' }]);

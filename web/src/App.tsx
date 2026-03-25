@@ -77,8 +77,6 @@ function AppInner() {
     systemAPI.status()
       .then((r) => setSystemEnabled(r.data.trading_enabled))
       .catch(() => {});
-    // Silent Zerodha trade sync on app start
-    journalAPI.syncZerodha().catch(() => {});
   }, []);
 
   return (

@@ -70,7 +70,9 @@ const Journal: React.FC = () => {
     try {
       const response = await journalAPI.getExecutionIntents(100);
       const data = Array.isArray(response.data) ? response.data : [];
-      const mapped: JournalEntry[] = data.map((item: any) => {
+      const ZERODHA_STRATEGIES = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
+      const filtered = data.filter((item: any) => !ZERODHA_STRATEGIES.includes(item?.strategy));
+      const mapped: JournalEntry[] = filtered.map((item: any) => {
         const entryCredit = Number(item?.entry_credit ?? 0) || 0;
         const pnl = Number(item?.pnl ?? 0) || 0;
         const execution_result = item?.execution_result || {};

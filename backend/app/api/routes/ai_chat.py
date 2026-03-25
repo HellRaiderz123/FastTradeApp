@@ -1,16 +1,18 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 from collections import defaultdict
-import os, re
+import os
 import httpx
 
 from app.db.session import SessionLocal
 from app.db.models_intent import ExecutionIntent
 
 router = APIRouter(prefix="/ai-chat", tags=["AI Chat"])
+
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
 
 def get_db():
@@ -23,123 +25,160 @@ def get_db():
 
 class ChatRequest(BaseModel):
     message: str
-
-
-def _parse_days(text: str) -> int:
-    if "today" in text: return 1
-    if "week" in text: return 7
-    if "month" in text: return 30
-    if "year" in text: return 365
-    m = re.search(r"(\d+)\s*day", text)
-    if m: return int(m.group(1))
-    return 30
+    history: list = []  # [{role: "user"|"assistant", content: "..."}]
 
 
 def _fmt(val):
-    if val is None: return "N/A"
+    if val is None:
+        return "N/A"
     return f"₹{val:,.2f}"
 
 
-def _handle(msg: str, db: Session) -> dict:
-    t = msg.lower()
-    days = _parse_days(t)
-    cutoff = datetime.utcnow() - timedelta(days=days)
+def _build_context(db: Session) -> str:
+    lines = []
 
-    base = db.query(ExecutionIntent).filter(
-        ExecutionIntent.status == "CLOSED",
-        ExecutionIntent.pnl.isnot(None),
-        ExecutionIntent.closed_at >= cutoff,
+    # ── Open positions ────────────────────────────────────────────
+    open_trades = (
+        db.query(ExecutionIntent)
+        .filter(ExecutionIntent.status == "EXECUTED", ExecutionIntent.closed_at.is_(None))
+        .order_by(ExecutionIntent.created_at.desc())
+        .limit(50)
+        .all()
     )
+    if open_trades:
+        total_unrealized = sum(t.unrealized_pnl or 0 for t in open_trades)
+        lines.append(f"OPEN POSITIONS ({len(open_trades)}, total unrealized P&L: {_fmt(total_unrealized)}):")
+        for t in open_trades:
+            entry = _fmt(t.entry_credit)
+            opened = t.created_at.strftime("%d %b %Y %H:%M") if t.created_at else "-"
+            mode = ""
+            if isinstance(t.execution_result, dict):
+                mode = t.execution_result.get("mode", "")
+            lines.append(
+                f"  • {t.underlying} | {t.strategy} | Entry: {entry} | "
+                f"Unrealized P&L: {_fmt(t.unrealized_pnl)} | Opened: {opened} | Mode: {mode}"
+            )
+    else:
+        lines.append("OPEN POSITIONS: None currently")
 
-    # ── losing trades ─────────────────────────────────────────────
-    if any(w in t for w in ["losing", "loss", "losses", "red"]):
-        trades = base.filter(ExecutionIntent.pnl < 0).order_by(ExecutionIntent.closed_at.desc()).limit(20).all()
-        if not trades:
-            return {"answer": f"No losing trades in the last {days} day(s)."}
-        rows = [{"date": tr.closed_at.strftime("%d %b %Y"), "strategy": tr.strategy,
-                 "underlying": tr.underlying, "pnl": _fmt(tr.pnl)} for tr in trades]
-        total = sum(tr.pnl for tr in trades)
-        return {"answer": f"Found {len(trades)} losing trade(s) in the last {days} day(s). Total loss: {_fmt(total)}.", "table": rows}
+    # ── Closed trades — last 90 days ──────────────────────────────
+    cutoff = datetime.utcnow() - timedelta(days=90)
+    closed = (
+        db.query(ExecutionIntent)
+        .filter(ExecutionIntent.closed_at.isnot(None), ExecutionIntent.closed_at >= cutoff)
+        .order_by(ExecutionIntent.closed_at.desc())
+        .limit(100)
+        .all()
+    )
+    if closed:
+        total_pnl = sum(t.pnl or 0 for t in closed)
+        wins = sum(1 for t in closed if (t.pnl or 0) > 0)
+        losses = sum(1 for t in closed if (t.pnl or 0) < 0)
+        win_rate = round(wins / len(closed) * 100, 1)
+        avg_win = sum(t.pnl for t in closed if (t.pnl or 0) > 0) / max(wins, 1)
+        avg_loss = sum(t.pnl for t in closed if (t.pnl or 0) < 0) / max(losses, 1)
 
-    # ── winning trades ────────────────────────────────────────────
-    if any(w in t for w in ["winning", "win", "profit", "green"]):
-        trades = base.filter(ExecutionIntent.pnl > 0).order_by(ExecutionIntent.closed_at.desc()).limit(20).all()
-        if not trades:
-            return {"answer": f"No winning trades in the last {days} day(s)."}
-        rows = [{"date": tr.closed_at.strftime("%d %b %Y"), "strategy": tr.strategy,
-                 "underlying": tr.underlying, "pnl": _fmt(tr.pnl)} for tr in trades]
-        total = sum(tr.pnl for tr in trades)
-        return {"answer": f"Found {len(trades)} winning trade(s) in the last {days} day(s). Total profit: {_fmt(total)}.", "table": rows}
+        lines.append(
+            f"\nCLOSED TRADES LAST 90 DAYS ({len(closed)} trades | "
+            f"{wins}W/{losses}L | Win rate: {win_rate}% | "
+            f"Total P&L: {_fmt(total_pnl)} | Avg win: {_fmt(avg_win)} | Avg loss: {_fmt(avg_loss)}):"
+        )
+        for t in closed:
+            date = t.closed_at.strftime("%d %b %Y") if t.closed_at else "-"
+            exit_r = t.exit_reason or "-"
+            lines.append(
+                f"  • {date} | {t.underlying} | {t.strategy} | "
+                f"P&L: {_fmt(t.pnl)} | Exit: {exit_r}"
+            )
 
-    # ── best strategy ─────────────────────────────────────────────
-    if any(w in t for w in ["best strategy", "top strategy", "best performing"]):
-        trades = base.all()
-        if not trades:
-            return {"answer": "No closed trades found."}
-        sm = defaultdict(float)
-        for tr in trades:
-            sm[tr.strategy or "Unknown"] += tr.pnl or 0
-        ranked = sorted(sm.items(), key=lambda x: x[1], reverse=True)
-        rows = [{"strategy": s, "total_pnl": _fmt(p)} for s, p in ranked]
-        return {"answer": f"Best strategy: {ranked[0][0]} with {_fmt(ranked[0][1])} in {days} day(s).", "table": rows}
+        # ── Strategy breakdown ────────────────────────────────────
+        by_strategy = defaultdict(lambda: {"pnl": 0, "trades": 0, "wins": 0})
+        for t in closed:
+            s = t.strategy or "Unknown"
+            by_strategy[s]["pnl"] += t.pnl or 0
+            by_strategy[s]["trades"] += 1
+            if (t.pnl or 0) > 0:
+                by_strategy[s]["wins"] += 1
+        lines.append("\nSTRATEGY PERFORMANCE (last 90 days):")
+        for s, v in sorted(by_strategy.items(), key=lambda x: x[1]["pnl"], reverse=True):
+            wr = round(v["wins"] / v["trades"] * 100, 1)
+            lines.append(f"  • {s}: {v['trades']} trades | Win rate: {wr}% | Total P&L: {_fmt(v['pnl'])}")
 
-    # ── summary / pnl ─────────────────────────────────────────────
-    if any(w in t for w in ["summary", "pnl", "p&l", "performance", "how am i", "how did"]):
-        trades = base.all()
-        if not trades:
-            return {"answer": f"No closed trades in the last {days} day(s)."}
-        pnls = [tr.pnl or 0 for tr in trades]
-        wins = sum(1 for p in pnls if p > 0)
-        total = sum(pnls)
-        wr = round(wins / len(pnls) * 100, 1)
-        return {"answer": f"Last {days} day(s): {len(trades)} trades, {wins} wins ({wr}% win rate), total P&L: {_fmt(total)}."}
+        # ── Underlying breakdown ──────────────────────────────────
+        by_symbol = defaultdict(lambda: {"pnl": 0, "trades": 0})
+        for t in closed:
+            sym = t.underlying or "Unknown"
+            by_symbol[sym]["pnl"] += t.pnl or 0
+            by_symbol[sym]["trades"] += 1
+        top_symbols = sorted(by_symbol.items(), key=lambda x: x[1]["pnl"], reverse=True)[:10]
+        lines.append("\nTOP SYMBOLS BY P&L (last 90 days):")
+        for sym, v in top_symbols:
+            lines.append(f"  • {sym}: {v['trades']} trades | P&L: {_fmt(v['pnl'])}")
+    else:
+        lines.append("\nCLOSED TRADES: None in last 90 days")
 
-    # ── recent trades ─────────────────────────────────────────────
-    if any(w in t for w in ["recent", "last", "latest", "trades"]):
-        trades = db.query(ExecutionIntent).filter(
-            ExecutionIntent.closed_at >= cutoff
-        ).order_by(ExecutionIntent.closed_at.desc()).limit(10).all()
-        if not trades:
-            return {"answer": f"No trades in the last {days} day(s)."}
-        rows = [{"date": tr.closed_at.strftime("%d %b %Y") if tr.closed_at else "-",
-                 "strategy": tr.strategy, "underlying": tr.underlying,
-                 "status": tr.status, "pnl": _fmt(tr.pnl)} for tr in trades]
-        return {"answer": f"Last {len(trades)} trade(s) in {days} day(s):", "table": rows}
+    return "\n".join(lines)
 
-    # ── open positions ────────────────────────────────────────────
-    if any(w in t for w in ["open", "active", "running", "live position"]):
-        trades = db.query(ExecutionIntent).filter(
-            ExecutionIntent.status.in_(["CONFIRMED", "OPEN"])
-        ).order_by(ExecutionIntent.created_at.desc()).all()
-        if not trades:
-            return {"answer": "No open positions right now."}
-        rows = [{"strategy": tr.strategy, "underlying": tr.underlying,
-                 "unrealized_pnl": _fmt(tr.unrealized_pnl)} for tr in trades]
-        return {"answer": f"{len(trades)} open position(s):", "table": rows}
 
-    # ── strategy decay ────────────────────────────────────────────
-    if any(w in t for w in ["decay", "decaying", "degraded", "underperform", "stop strategy"]):
-        from app.core.strategy_decay import compute_decay_report
-        report = compute_decay_report(db, lookback_days=days)
-        bad = [r for r in report if r["status"] in ("DECAYED", "WARNING")]
-        if not bad:
-            return {"answer": f"All strategies are healthy in the last {days} day(s)."}
-        rows = [{"strategy": r["strategy"], "status": r["status"],
-                 "live_win_rate": f"{r['live_win_rate']}%" if r['live_win_rate'] else "N/A",
-                 "backtest_win_rate": f"{r['backtest_win_rate']}%" if r['backtest_win_rate'] else "N/A",
-                 "gap": f"-{r['decay_gap']}%" if r['decay_gap'] else "N/A"} for r in bad]
-        return {"answer": f"{len(bad)} strategy/strategies showing decay in last {days} day(s):", "table": rows}
+SYSTEM_PROMPT = """You are an expert trading assistant for FastTrade, an algorithmic trading platform for Indian stock markets (NSE/BSE).
 
-    # ── fallback ──────────────────────────────────────────────────
-    return {
-        "answer": "I can answer questions like:\n• Show me losing trades this month\n• Best strategy this week\n• My P&L summary\n• Recent trades\n• Open positions"
-    }
+You have FULL access to the user's real trade data provided below. Use it to give specific, data-driven answers.
+
+Your capabilities:
+- Analyze open positions and suggest hold/exit decisions
+- Calculate P&L, win rates, profit factors from the data
+- Identify best/worst performing strategies and symbols
+- Explain trading concepts (RSI, MACD, options greeks, spreads, etc.)
+- Suggest risk management improvements based on actual trade history
+- Identify patterns in winning vs losing trades
+- Answer questions about Indian markets, NIFTY, BANKNIFTY, F&O
+- Give actionable advice based on the user's specific trading style
+
+Rules:
+- Always answer based on the actual data provided — never say you don't have access
+- Use ₹ for Indian rupees
+- Be concise and direct — no fluff
+- If data shows no trades, say so clearly
+- For market/strategy questions without data, give expert advice
+
+=== USER'S LIVE TRADE DATA ===
+{context}
+=============================="""
+
+
+def _call_ollama(message: str, history: list, db: Session) -> str:
+    context = _build_context(db)
+    system = SYSTEM_PROMPT.format(context=context)
+
+    messages = [{"role": "system", "content": system}]
+    # Include conversation history for multi-turn chat
+    for h in history[-10:]:  # last 10 turns to stay within context window
+        messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": message})
+
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={"model": OLLAMA_MODEL, "messages": messages, "stream": False},
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["message"]["content"]
+    except httpx.ConnectError:
+        return (
+            "⚠️ Ollama is not running. Pull a model first:\n"
+            "  docker exec fasttrade-ollama ollama pull llama3.2:3b"
+        )
+    except httpx.TimeoutException:
+        return "⚠️ Ollama timed out — the model may still be loading. Try again in a moment."
+    except Exception as e:
+        return f"⚠️ LLM error: {e}"
 
 
 @router.post("/query")
 def chat_query(req: ChatRequest, db: Session = Depends(get_db)):
     try:
-        result = _handle(req.message, db)
-        return {"ok": True, **result}
+        answer = _call_ollama(req.message, req.history, db)
+        return {"ok": True, "answer": answer}
     except Exception as e:
         return {"ok": False, "answer": f"Error: {str(e)}"}

@@ -52,6 +52,20 @@ services:
       start_period: 25s
 
   # ─────────────────────────────────────────
+  # Ollama — offline LLM for AI chatbot
+  # Pull a model after first start:
+  #   docker exec fasttrade-ollama ollama pull llama3.2:3b
+  # ─────────────────────────────────────────
+  ollama:
+    image: ollama/ollama
+    container_name: fasttrade-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  # ─────────────────────────────────────────
   # React Web UI (Nginx)
   # ─────────────────────────────────────────
   frontend:
@@ -68,6 +82,7 @@ services:
 
 volumes:
   fasttrade_pgdata:
+  ollama_data:
     # Named volume — Docker manages this on the host
     # Location: /var/lib/docker/volumes/fasttrade_pgdata/_data
     # Survives: docker-compose down, docker-compose up --build, container restarts

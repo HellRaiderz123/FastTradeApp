@@ -322,11 +322,10 @@ def sync_zerodha_trades(
     db: Session = Depends(get_db),
 ):
     """
-    Import actual Zerodha data into journal:
-    1. Holdings (long-term stock positions with unrealized P&L)
-    2. Today's completed orders paired as BUY+SELL with realized P&L
-    Skips duplicates matched by symbol/order_id.
+    Disabled — Zerodha holdings/trades are no longer imported into FastTrade journal.
+    Only trades executed from FastTrade app are tracked.
     """
+    return {"success": True, "imported": 0, "holdings_synced": 0, "paired_trades": 0, "skipped": 0, "message": "Sync disabled — only FastTrade-executed trades are tracked"}
     try:
         kite = get_kite_client()
     except Exception as e:

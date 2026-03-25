@@ -131,7 +131,11 @@ const Positions: React.FC = () => {
       const response = await journalAPI.getExecutionIntents(50);
       const data = response?.data;
       const intents = Array.isArray(data) ? data : [];
-      const activeIntents = intents.filter((intent: any) => intent?.status === 'EXECUTED');
+      const ZERODHA_STRATEGIES = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
+      const activeIntents = intents.filter((intent: any) =>
+        intent?.status === 'EXECUTED' &&
+        !ZERODHA_STRATEGIES.includes(intent?.strategy)
+      );
       setLocalTrades(activeIntents);
     } catch (error) {
       console.error('Failed to fetch positions:', error);
