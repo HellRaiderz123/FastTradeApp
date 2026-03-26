@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import { Ionicons } from '@expo/vector-icons';
 import { journalAPI } from '../lib/api';
-import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
-import { EmptyState, GlassCard, LoadingSpinner, PnLBadge, Tag } from '../components/ui';
+import { Colors, Radius, Spacing } from '../lib/theme';
+import { EmptyState, GlassCard, LoadingSpinner, PnLBadge, ScreenHeader, Tag } from '../components/ui';
 
 type FilterMode = 'all' | 'wins' | 'losses';
 
@@ -56,6 +56,45 @@ export default function JournalScreen() {
     await load();
   };
 
+  const deleteEntry = (intentId: string) => {
+    Alert.alert('Delete Entry', 'Remove this trade from the journal?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await journalAPI.deleteExecutionIntent(intentId);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            setExpandedId(null);
+            await load();
+          } catch (err: any) {
+            Alert.alert('Error', err?.response?.data?.detail || 'Delete failed');
+          }
+        },
+      },
+    ]);
+  };
+
+  const clearClosed = () => {
+    Alert.alert('Clear All Closed', 'This removes all closed trade records. Continue?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Clear',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await journalAPI.clearClosedTrades();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            await load();
+          } catch (err: any) {
+            Alert.alert('Error', err?.response?.data?.detail || 'Clear failed');
+          }
+        },
+      },
+    ]);
+  };
+
   if (loading) {
     return <View style={styles.root}><LoadingSpinner /></View>;
   }
@@ -64,10 +103,11 @@ export default function JournalScreen() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={Gradients.header} style={styles.header}>
-          <Text style={styles.headerTitle}>Journal</Text>
-          <Text style={styles.headerSub}>Closed trades, clean and readable</Text>
-
+        <ScreenHeader
+          title="Journal"
+          subtitle="Closed trades, clean and readable"
+          badge={<Tag label="TRACKED" color={Colors.accent} bg={Colors.accentSoft} />}
+        >
           <View style={styles.summaryStrip}>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryLabel}>Closed</Text>
@@ -84,13 +124,21 @@ export default function JournalScreen() {
               <Text style={[styles.summaryValue, { color: totalPnL >= 0 ? Colors.green : Colors.red }]}>₹{Math.abs(totalPnL).toLocaleString('en-IN')}</Text>
             </View>
           </View>
-        </LinearGradient>
+        </ScreenHeader>
 
         <ScrollView
           contentContainerStyle={styles.scroll}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}
           showsVerticalScrollIndicator={false}
         >
+          {/* Clear closed trades button */}
+          {closedEntries.length > 0 && (
+            <TouchableOpacity style={styles.clearBtn} onPress={clearClosed} activeOpacity={0.8}>
+              <Ionicons name="trash-outline" size={14} color={Colors.red} />
+              <Text style={styles.clearBtnText}>Clear Closed ({closedEntries.length})</Text>
+            </TouchableOpacity>
+          )}
+
           <View style={styles.filterRow}>
             {(['all', 'wins', 'losses'] as FilterMode[]).map((mode) => {
               const active = filter === mode;
@@ -181,6 +229,14 @@ export default function JournalScreen() {
                               : 'Still open'}
                           </Text>
                         </View>
+                        <TouchableOpacity
+                          style={styles.deleteEntryBtn}
+                          onPress={() => deleteEntry(entry.intent_id)}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons name="trash-outline" size={14} color={Colors.red} />
+                          <Text style={styles.deleteEntryText}>Delete Entry</Text>
+                        </TouchableOpacity>
                       </View>
                     )}
                   </GlassCard>
@@ -242,4 +298,26 @@ const styles = StyleSheet.create({
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   detailLabel: { fontSize: 12, color: Colors.textMuted },
   detailValue: { fontSize: 12, color: Colors.textPrimary, fontWeight: '600', maxWidth: '60%', textAlign: 'right' },
+  clearBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-end',
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.3)',
+    backgroundColor: 'rgba(239,68,68,0.08)',
+  },
+  clearBtnText: { fontSize: 12, color: Colors.red, fontWeight: '600' },
+  deleteEntryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 6,
+    paddingVertical: 6,
+  },
+  deleteEntryText: { fontSize: 12, color: Colors.red, fontWeight: '600' },
 });

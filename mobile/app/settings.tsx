@@ -2,9 +2,21 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, RefreshControl, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { authAPI, getApiBaseUrl, getDefaultApiBaseUrl, persistApiBaseUrl, syncApiBaseUrlFromStorage, systemAPI } from '../lib/api';
+import {
+  authAPI,
+  getAiApiBaseUrl,
+  getApiBaseUrl,
+  getDefaultAiApiBaseUrl,
+  getDefaultApiBaseUrl,
+  persistAiApiBaseUrl,
+  persistApiBaseUrl,
+  syncAiApiBaseUrlFromStorage,
+  syncApiBaseUrlFromStorage,
+  systemAPI,
+} from '../lib/api';
+import { useAuthStore } from '../lib/auth';
 import { Colors, Radius, Spacing, Gradients } from '../lib/theme';
-import { GlassCard, LoadingSpinner, PrimaryButton, Tag } from '../components/ui';
+import { GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
 
 type ToggleState = {
   faceId: boolean;
@@ -14,6 +26,10 @@ type ToggleState = {
 };
 
 export default function SettingsScreen() {
+  const biometricEnabled = useAuthStore((state) => state.biometricEnabled);
+  const biometricAvailable = useAuthStore((state) => state.biometricAvailable);
+  const setBiometricEnabled = useAuthStore((state) => state.setBiometricEnabled);
+  const signOut = useAuthStore((state) => state.signOut);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [systemEnabled, setSystemEnabled] = useState(false);
@@ -25,12 +41,15 @@ export default function SettingsScreen() {
     compactCharts: false,
   });
   const [apiBaseInput, setApiBaseInput] = useState('');
+  const [aiApiBaseInput, setAiApiBaseInput] = useState('');
   const [savingApiBase, setSavingApiBase] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const resolvedApiBase = await syncApiBaseUrlFromStorage();
+      const resolvedAiApiBase = await syncAiApiBaseUrlFromStorage();
       setApiBaseInput(resolvedApiBase);
+      setAiApiBaseInput(resolvedAiApiBase);
 
       const [systemRes, profileRes] = await Promise.allSettled([
         systemAPI.status(),
@@ -44,6 +63,7 @@ export default function SettingsScreen() {
         const data = profileRes.value.data;
         setProfileName(data?.username || data?.email || 'FastTrade Operator');
       }
+      setToggles((prev) => ({ ...prev, faceId: biometricEnabled }));
     } catch {}
 
     setLoading(false);
@@ -54,7 +74,21 @@ export default function SettingsScreen() {
     load();
   }, [load]);
 
-  const setToggle = (key: keyof ToggleState) => {
+  useEffect(() => {
+    setToggles((prev) => ({ ...prev, faceId: biometricEnabled }));
+  }, [biometricEnabled]);
+
+  const setToggle = async (key: keyof ToggleState) => {
+    if (key === 'faceId') {
+      const nextValue = !toggles.faceId;
+      const result = await setBiometricEnabled(nextValue);
+      if (!result.ok) {
+        Alert.alert('Face ID unavailable', result.reason || 'Biometric authentication is not available on this device.');
+      }
+      setToggles((prev) => ({ ...prev, faceId: result.ok ? nextValue : false }));
+      return;
+    }
+
     setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
@@ -89,9 +123,46 @@ export default function SettingsScreen() {
     setSavingApiBase(false);
   };
 
+  const handleSaveAiApiBase = async () => {
+    const nextUrl = aiApiBaseInput.trim();
+    const isValid = /^https?:\/\/.+/i.test(nextUrl);
+    if (!isValid) {
+      Alert.alert('Invalid URL', 'Use a full URL like http://192.168.1.5:8000 or https://api.example.com');
+      return;
+    }
+
+    setSavingApiBase(true);
+    try {
+      await persistAiApiBaseUrl(nextUrl);
+      setAiApiBaseInput(getAiApiBaseUrl());
+      Alert.alert('Saved', 'AI URL updated for future requests.');
+    } catch {
+      Alert.alert('Failed', 'Could not save AI URL. Please try again.');
+    }
+    setSavingApiBase(false);
+  };
+
   const handleResetApiBase = () => {
     const fallbackUrl = getDefaultApiBaseUrl();
     setApiBaseInput(fallbackUrl);
+  };
+
+  const handleResetAiApiBase = () => {
+    const fallbackUrl = getDefaultAiApiBaseUrl();
+    setAiApiBaseInput(fallbackUrl);
+  };
+
+  const handleLogout = () => {
+    Alert.alert('Sign Out', 'This will clear your mobile session.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: async () => {
+          await signOut();
+        },
+      },
+    ]);
   };
 
   if (loading) {
@@ -102,10 +173,11 @@ export default function SettingsScreen() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={Gradients.header} style={styles.header}>
-          <Text style={styles.headerTitle}>Settings</Text>
-          <Text style={styles.headerSub}>Personalize your app and backend connection</Text>
-        </LinearGradient>
+        <ScreenHeader
+          title="Settings"
+          subtitle="Personalize your app and backend connection"
+          badge={<Tag label={systemEnabled ? 'ENGINE ON' : 'ENGINE OFF'} color={systemEnabled ? Colors.green : Colors.red} bg={systemEnabled ? Colors.greenBg : Colors.redBg} />}
+        />
 
         <ScrollView
           contentContainerStyle={styles.scroll}
@@ -143,6 +215,7 @@ export default function SettingsScreen() {
           <GlassCard style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Experience</Text>
             <SettingRow title="Face ID unlock" subtitle="Keep app access instant and private" value={toggles.faceId} onToggle={() => setToggle('faceId')} />
+            {!biometricAvailable ? <Text style={styles.noteText}>Biometric unlock is not available or not enrolled on this device.</Text> : null}
             <SettingRow title="Push alerts" subtitle="Trade events, scanner hits, and AI summaries" value={toggles.pushAlerts} onToggle={() => setToggle('pushAlerts')} />
             <SettingRow title="Trade haptics" subtitle="Subtle feedback on action taps and confirmations" value={toggles.tradeHaptics} onToggle={() => setToggle('tradeHaptics')} />
             <SettingRow title="Compact charts" subtitle="Denser summaries for smaller market cards" value={toggles.compactCharts} onToggle={() => setToggle('compactCharts')} />
@@ -156,7 +229,7 @@ export default function SettingsScreen() {
               onChangeText={setApiBaseInput}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="http://localhost:8000"
+              placeholder="http:// 192.168.1.103:8000"
               placeholderTextColor={Colors.textFaint}
               style={styles.urlInput}
             />
@@ -166,16 +239,33 @@ export default function SettingsScreen() {
             </View>
             <Text style={styles.connectionHint}>Tip: use `10.0.2.2` for Android emulator and `localhost` for iOS simulator.</Text>
             <InfoRow label="Active URL" value={getApiBaseUrl()} />
+            <Text style={[styles.inputLabel, { marginTop: 10 }]}>AI Base URL</Text>
+            <TextInput
+              value={aiApiBaseInput}
+              onChangeText={setAiApiBaseInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="http://192.168.1.103:8000"
+              placeholderTextColor={Colors.textFaint}
+              style={styles.urlInput}
+            />
+            <View style={styles.connectionActions}>
+              <PrimaryButton title="Save AI URL" onPress={handleSaveAiApiBase} loading={savingApiBase} style={styles.connectionButton} />
+              <PrimaryButton title="Reset AI" onPress={handleResetAiApiBase} variant="ghost" style={styles.connectionButton} />
+            </View>
+            <InfoRow label="Active AI URL" value={getAiApiBaseUrl()} />
             <InfoRow label="Theme" value="Metallic Night" />
             <InfoRow label="Layout" value="Expo Router tabs" />
           </GlassCard>
 
           <GlassCard style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Planned Next</Text>
-            <Text style={styles.noteText}>1. Native login flow</Text>
-            <Text style={styles.noteText}>2. Push notification registration</Text>
-            <Text style={styles.noteText}>3. Live broker and scanner settings sync</Text>
+            <Text style={styles.noteText}>1. Push notification registration</Text>
+            <Text style={styles.noteText}>2. Live broker and scanner settings sync</Text>
+            <Text style={styles.noteText}>3. Broker authentication polish</Text>
           </GlassCard>
+
+          <PrimaryButton title="Sign Out" onPress={handleLogout} variant="danger" style={{ marginBottom: 12 }} />
 
           <TouchableOpacity style={styles.syncButton} activeOpacity={0.85} onPress={() => load()}>
             <LinearGradient colors={Gradients.primaryAction} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.syncGradient}>

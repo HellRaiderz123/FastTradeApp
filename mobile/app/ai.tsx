@@ -4,8 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { aiAPI } from '../lib/api';
-import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
-import { GlassCard, Tag } from '../components/ui';
+import { Colors, Radius, Spacing } from '../lib/theme';
+import { GlassCard, ScreenHeader, Tag } from '../components/ui';
 
 const STARTERS = [
   'Show my open positions',
@@ -45,12 +45,15 @@ export default function AIScreen() {
       const reply = res.data?.response || res.data?.message || 'Connected, but no response body was returned from the backend.';
       setHistory((prev) => [...prev, { role: 'assistant', content: reply }]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch {
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || error?.response?.data?.error || error?.message;
       setHistory((prev) => [
         ...prev,
         {
           role: 'assistant',
-          content: 'The backend assistant is not reachable right now. The chat UI is ready, and wiring to the shared backend endpoint is already in place.',
+          content: detail
+            ? `AI assistant error: ${String(detail)}`
+            : 'The backend assistant is not reachable right now. Check AI URL and main backend URL in Settings.',
         },
       ]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -76,10 +79,11 @@ export default function AIScreen() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={Gradients.header} style={styles.header}>
-          <Text style={styles.headerTitle}>AI Desk</Text>
-          <Text style={styles.headerSub}>Natural-language trading, scanner, and finance queries</Text>
-        </LinearGradient>
+        <ScreenHeader
+          title="AI Desk"
+          subtitle="Natural-language trading, scanner, and finance queries"
+          badge={<Tag label="SMART ASSIST" color={Colors.accent} bg={Colors.accentSoft} />}
+        />
 
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <ScrollView

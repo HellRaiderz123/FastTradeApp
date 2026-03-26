@@ -7,8 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { journalAPI, exitAPI } from '../lib/api';
-import { Colors, Gradients, Spacing, Radius } from '../lib/theme';
-import { GlassCard, MetalCard, PnLBadge, SectionHeader, EmptyState, LoadingSpinner, Tag, ProgressBar } from '../components/ui';
+import { Colors, Spacing, Radius } from '../lib/theme';
+import { GlassCard, MetalCard, PnLBadge, EmptyState, LoadingSpinner, ScreenHeader, Tag, ProgressBar } from '../components/ui';
 
 const EXCLUDED = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
 type PositionFilter = 'all' | 'live' | 'paper';
@@ -85,24 +85,23 @@ export default function Positions() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        {/* Header */}
-        <LinearGradient colors={Gradients.header} style={styles.header}>
-          <Text style={styles.headerTitle}>Positions</Text>
-          <Text style={styles.headerSub}>{positions.length} open · {liveCount} live</Text>
-
-          {/* Summary Bar */}
+        <ScreenHeader
+          title="Positions"
+          subtitle={`${positions.length} open · ${liveCount} live`}
+          badge={<Tag label="ACTIVE" color={Colors.green} bg={Colors.greenBg} />}
+        >
           {positions.length > 0 && (
             <View style={styles.summaryBar}>
               <View style={styles.summaryItem}>
                 <Text style={styles.summaryLabel}>Total P&L</Text>
-                <Text style={[styles.summaryValue, { color: totalPnL >= 0 ? Colors.green : Colors.red }]}>
+                <Text style={[styles.summaryValue, { color: totalPnL >= 0 ? Colors.green : Colors.red }]}> 
                   {totalPnL >= 0 ? '+' : ''}₹{Math.abs(totalPnL).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                 </Text>
               </View>
               <View style={styles.summaryDivider} />
               <View style={styles.summaryItem}>
                 <Text style={styles.summaryLabel}>Return</Text>
-                <Text style={[styles.summaryValue, { color: pnlPct >= 0 ? Colors.green : Colors.red }]}>
+                <Text style={[styles.summaryValue, { color: pnlPct >= 0 ? Colors.green : Colors.red }]}> 
                   {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
                 </Text>
               </View>
@@ -113,8 +112,7 @@ export default function Positions() {
               </View>
             </View>
           )}
-        </LinearGradient>
-
+        </ScreenHeader>
         <ScrollView
           contentContainerStyle={styles.scroll}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}

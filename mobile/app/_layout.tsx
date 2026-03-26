@@ -1,8 +1,13 @@
 import { Tabs } from 'expo-router';
-import { View, StyleSheet, Platform } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, StyleSheet, Platform, AppState } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Colors } from '../lib/theme';
 import { Ionicons } from '@expo/vector-icons';
+import { requestNotificationPermissions } from '../lib/notifications';
+import { LoadingSpinner } from '../components/ui';
+import { BiometricLockScreen, LoginScreen } from '../components/AuthScreens';
+import { useAuthStore } from '../lib/auth';
 
 function TabIcon({ name, focused }: { name: keyof typeof Ionicons.glyphMap; focused: boolean }) {
   return (
@@ -18,6 +23,35 @@ function TabIcon({ name, focused }: { name: keyof typeof Ionicons.glyphMap; focu
 }
 
 export default function Layout() {
+  const bootstrap = useAuthStore((state) => state.bootstrap);
+  const bootstrapped = useAuthStore((state) => state.bootstrapped);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const isLocked = useAuthStore((state) => state.isLocked);
+  const handleAppStateChange = useAuthStore((state) => state.handleAppStateChange);
+
+  useEffect(() => {
+    bootstrap();
+    requestNotificationPermissions();
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [bootstrap, handleAppStateChange]);
+
+  if (!bootstrapped) {
+    return (
+      <View style={styles.loadingRoot}>
+        <LoadingSpinner />
+      </View>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginScreen />;
+  }
+
+  if (isLocked) {
+    return <BiometricLockScreen />;
+  }
+
   return (
     <Tabs
       screenOptions={{
@@ -59,11 +93,27 @@ export default function Layout() {
       <Tabs.Screen name="backtest" options={{ href: null }} />
       <Tabs.Screen name="strategies" options={{ href: null }} />
       <Tabs.Screen name="strategyBuilder" options={{ href: null }} />
+      <Tabs.Screen name="optionChain" options={{ href: null }} />
+      <Tabs.Screen name="autoTrader" options={{ href: null }} />
+      <Tabs.Screen name="watchlists" options={{ href: null }} />
+      <Tabs.Screen name="alerts" options={{ href: null }} />
+      <Tabs.Screen name="strategyPnl" options={{ href: null }} />
+      <Tabs.Screen name="finance" options={{ href: null }} />
+      <Tabs.Screen name="screener" options={{ href: null }} />
+      <Tabs.Screen name="heatmap" options={{ href: null }} />
+      <Tabs.Screen name="tradeCostTracker" options={{ href: null }} />
+      <Tabs.Screen name="brokerReconciliation" options={{ href: null }} />
+      <Tabs.Screen name="mlCenter" options={{ href: null }} />
+      <Tabs.Screen name="calendar" options={{ href: null }} />
     </Tabs>
   );
 }
 
 const styles = StyleSheet.create({
+  loadingRoot: {
+    flex: 1,
+    backgroundColor: Colors.bg,
+  },
   tabBar: {
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.08)',

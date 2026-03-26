@@ -4,7 +4,7 @@ import {
   ViewStyle, ActivityIndicator, StyleProp,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Colors, Radius, Spacing, Typography } from '../lib/theme';
+import { Colors, Gradients, Radius, Spacing, Typography } from '../lib/theme';
 
 export function GlassCard({ children, style, padding = Spacing.md }: {
   children: React.ReactNode; style?: StyleProp<ViewStyle>; padding?: number;
@@ -144,6 +144,33 @@ export function ProgressBar({ value, color = Colors.accent, height = 4, style }:
   );
 }
 
+export function ScreenHeader({
+  title,
+  subtitle,
+  badge,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  badge?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  return (
+    <LinearGradient colors={Gradients.header} style={styles.screenHeader}>
+      <View style={styles.headerGlowOne} />
+      <View style={styles.headerGlowTwo} />
+      <View style={styles.screenHeaderRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.screenHeaderTitle}>{title}</Text>
+          {subtitle ? <Text style={styles.screenHeaderSubtitle}>{subtitle}</Text> : null}
+        </View>
+        {badge ? <View>{badge}</View> : null}
+      </View>
+      {children ? <View style={styles.screenHeaderChildren}>{children}</View> : null}
+    </LinearGradient>
+  );
+}
+
 const styles = StyleSheet.create({
   glassCard: {
     backgroundColor: Colors.bgGlass,
@@ -190,4 +217,49 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 48 },
   progressTrack: { backgroundColor: Colors.bgGlassStrong, borderRadius: Radius.full, overflow: 'hidden' },
   progressFill: { borderRadius: Radius.full },
+  screenHeader: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.lg,
+    overflow: 'hidden',
+  },
+  screenHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 2,
+  },
+  screenHeaderTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    letterSpacing: -0.5,
+  },
+  screenHeaderSubtitle: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginTop: 3,
+  },
+  screenHeaderChildren: {
+    marginTop: Spacing.md,
+    zIndex: 2,
+  },
+  headerGlowOne: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 999,
+    backgroundColor: Colors.accentSoft,
+    top: -130,
+    right: -80,
+  },
+  headerGlowTwo: {
+    position: 'absolute',
+    width: 130,
+    height: 130,
+    borderRadius: 999,
+    backgroundColor: Colors.greenBg,
+    top: -50,
+    left: -40,
+  },
 });

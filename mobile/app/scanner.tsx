@@ -3,9 +3,10 @@ import { RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpaci
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { scannerAPI } from '../lib/api';
-import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
-import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, Tag } from '../components/ui';
+import { Colors, Radius, Spacing } from '../lib/theme';
+import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
 
 const FALLBACK_STRATEGIES = [
   { id: 1, name: 'Momentum Breakout Lab', timeframe: 'Day', universe: 'NIFTY50', direction: 'BUY', is_active: true, last_signal_count: 4 },
@@ -14,19 +15,28 @@ const FALLBACK_STRATEGIES = [
 ];
 
 export default function ScannerScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
   const [strategies, setStrategies] = useState<any[]>([]);
+  const [usingFallbackData, setUsingFallbackData] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
       const res = await scannerAPI.listStrategies();
-      const data = Array.isArray(res.data) ? res.data : res.data?.items || [];
-      setStrategies(data.length ? data : FALLBACK_STRATEGIES);
+      const data = Array.isArray(res.data)
+        ? res.data
+        : Array.isArray(res.data?.strategies)
+          ? res.data.strategies
+          : res.data?.items || [];
+      const useFallback = !data.length;
+      setUsingFallbackData(useFallback);
+      setStrategies(useFallback ? FALLBACK_STRATEGIES : data);
     } catch {
+      setUsingFallbackData(true);
       setStrategies(FALLBACK_STRATEGIES);
     }
     setLoading(false);
@@ -48,6 +58,12 @@ export default function ScannerScreen() {
     if (!selected?.id) {
       return;
     }
+    if (usingFallbackData) {
+      setScanStatus('Scanner is showing demo strategies. Check backend/API URL and refresh.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
     setScanning(true);
     setScanStatus('');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -60,11 +76,33 @@ export default function ScannerScreen() {
           : Number(res.data?.signal_count || 0);
       setScanStatus(`Scan complete: ${count} signal${count === 1 ? '' : 's'} found`);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch {
-      setScanStatus('Scan failed. Please try again.');
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || error?.response?.data?.error || 'Scan failed. Please try again.';
+      setScanStatus(String(detail));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
     setScanning(false);
+  };
+
+  const openBacktestForm = () => {
+    if (!selected?.id) return;
+    if (usingFallbackData) {
+      setScanStatus('Scanner is showing demo strategies. Connect backend first, then open Backtest.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push({
+      pathname: '/backtest',
+      params: {
+        strategyId: String(selected.id),
+        strategyName: selected.name || `Strategy #${selected.id}`,
+        universe: selected.universe || 'NIFTY50',
+        timeframe: selected.timeframe || 'Day',
+        backtestType: 'scanner',
+      },
+    });
   };
 
   const selected = useMemo(() => {
@@ -79,10 +117,11 @@ export default function ScannerScreen() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={Gradients.header} style={styles.header}>
-          <Text style={styles.headerTitle}>Scanner</Text>
-          <Text style={styles.headerSub}>Condition strategies and signals in a phone-first layout</Text>
-        </LinearGradient>
+        <ScreenHeader
+          title="Scanner"
+          subtitle="Condition strategies and signals in a phone-first layout"
+          badge={<Tag label="LIVE SCAN" color={Colors.green} bg={Colors.greenBg} />}
+        />
 
         <ScrollView
           contentContainerStyle={styles.scroll}
@@ -162,12 +201,25 @@ export default function ScannerScreen() {
                 <Text style={styles.detailValue}>{selected.last_signal_count || 0}</Text>
               </View>
 
+                {usingFallbackData ? (
+                  <Text style={styles.warningText}>Demo strategies loaded. Connect backend to run real scan/backtest.</Text>
+                ) : null}
+
               <PrimaryButton
                 title={scanning ? 'Scanning...' : 'Run Scan'}
                 onPress={scanSelected}
                 loading={scanning}
+                  disabled={usingFallbackData}
                 style={{ marginTop: 6 }}
               />
+              <PrimaryButton
+                  title="Open Backtest Form"
+                  onPress={openBacktestForm}
+                  disabled={usingFallbackData}
+                variant="ghost"
+                style={{ marginTop: 8 }}
+              />
+
               {scanStatus ? (
                 <Text style={styles.scanStatus}>{scanStatus}</Text>
               ) : null}
@@ -207,5 +259,6 @@ const styles = StyleSheet.create({
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   detailLabel: { fontSize: 12, color: Colors.textMuted },
   detailValue: { fontSize: 13, color: Colors.textPrimary, fontWeight: '600' },
+  warningText: { marginTop: 2, marginBottom: 6, fontSize: 11, color: Colors.amber },
   scanStatus: { marginTop: 10, fontSize: 12, color: Colors.textSecondary },
 });

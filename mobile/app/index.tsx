@@ -1,14 +1,16 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  TouchableOpacity, StatusBar,
+  TouchableOpacity, StatusBar, Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { journalAPI, systemAPI, autoTraderAPI, marketAPI } from '../lib/api';
 import { Colors, Spacing, Radius, Gradients } from '../lib/theme';
 import { GlassCard, MetalCard, PnLBadge, StatCard, LoadingSpinner, Tag } from '../components/ui';
+import { sendLocalNotification } from '../lib/notifications';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -18,6 +20,61 @@ export default function Dashboard() {
   const [systemEnabled, setSystemEnabled] = useState(false);
   const [autoTrader, setAutoTrader] = useState<any>(null);
   const [niftyLtp, setNiftyLtp] = useState<number | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const ltpPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const posPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevPnLRef = useRef<number>(0);
+
+  // Pulsing LIVE dot
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 0.2, duration: 900, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 900, useNativeDriver: true }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [pulseAnim]);
+
+  // Live LTP polling — every 5 seconds
+  useEffect(() => {
+    ltpPollRef.current = setInterval(async () => {
+      try {
+        const res = await marketAPI.getLTP('NIFTY');
+        if (res.data?.ltp) setNiftyLtp(res.data.ltp);
+        setLastUpdated(new Date());
+      } catch {}
+    }, 5000);
+    return () => { if (ltpPollRef.current) clearInterval(ltpPollRef.current); };
+  }, []);
+
+  // Position P&L polling — every 30 seconds
+  useEffect(() => {
+    posPollRef.current = setInterval(async () => {
+      try {
+        const res = await journalAPI.getExecutionIntents(50);
+        const all = res.data || [];
+        const open = all.filter((p: any) =>
+          p.status === 'EXECUTED' && !p.closed_at &&
+          !['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'].includes(p.strategy)
+        );
+        setPositions(open);
+        const newPnL = open.reduce((s: number, p: any) => s + (p.unrealized_pnl || 0), 0);
+        const prev = prevPnLRef.current;
+        // Notify if P&L dropped by more than ₹5,000 since last check
+        if (prev !== 0 && newPnL - prev < -5000) {
+          sendLocalNotification(
+            '⚠️ P&L Alert',
+            `Portfolio P&L dropped ₹${Math.abs(newPnL - prev).toFixed(0)} to ₹${newPnL.toFixed(0)}`
+          );
+        }
+        prevPnLRef.current = newPnL;
+      } catch {}
+    }, 30000);
+    return () => { if (posPollRef.current) clearInterval(posPollRef.current); };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -37,6 +94,9 @@ export default function Dashboard() {
       if (sysRes.status === 'fulfilled') setSystemEnabled(sysRes.value.data?.trading_enabled);
       if (atRes.status === 'fulfilled') setAutoTrader(atRes.value.data);
       if (ltpRes.status === 'fulfilled') setNiftyLtp(ltpRes.value.data?.ltp);
+      const pnl = positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
+      prevPnLRef.current = pnl;
+      setLastUpdated(new Date());
     } catch {}
     setLoading(false);
     setRefreshing(false);
@@ -75,8 +135,8 @@ export default function Dashboard() {
                 <Text style={styles.heroDate}>{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</Text>
               </View>
               <View style={styles.heroRight}>
-                <View style={[styles.statusDot, { backgroundColor: systemEnabled ? Colors.green : Colors.red }]} />
-                <Text style={styles.statusText}>{systemEnabled ? 'Trading ON' : 'Trading OFF'}</Text>
+                <Animated.View style={[styles.liveDot, { opacity: pulseAnim }]} />
+                <Text style={styles.statusText}>LIVE</Text>
               </View>
             </View>
 
@@ -87,15 +147,32 @@ export default function Dashboard() {
                 {totalPnL >= 0 ? '+' : ''}₹{Math.abs(totalPnL).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
               </Text>
               {niftyLtp && (
-                <Text style={styles.niftyLtp}>NIFTY ₹{niftyLtp.toLocaleString('en-IN')}</Text>
+                <Text style={styles.niftyLtp}>NIFTY ₹{niftyLtp.toLocaleString('en-IN')}{lastUpdated ? `  ·  ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</Text>
               )}
             </View>
 
-            <View style={styles.quickActionsRow}>
-              <QuickAction label="Scanner" value="Signals" onPress={() => router.push('/scanner')} />
-              <QuickAction label="Positions" value="Manage" onPress={() => router.push('/positions')} />
-              <QuickAction label="AI Desk" value="Ask" onPress={() => router.push('/ai')} />
-            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.quickActionsRow}
+              contentContainerStyle={{ gap: 8, paddingRight: Spacing.lg }}
+            >
+              <QuickAction label="Scanner" value="Signals" icon="scan-outline" onPress={() => router.push('/scanner')} />
+              <QuickAction label="Positions" value="Manage" icon="briefcase-outline" onPress={() => router.push('/positions')} />
+              <QuickAction label="AI Desk" value="Ask" icon="sparkles-outline" onPress={() => router.push('/ai')} />
+              <QuickAction label="Option Chain" value="View" icon="layers-outline" onPress={() => router.push('/optionChain')} />
+              <QuickAction label="Auto Trader" value="Control" icon="flash-outline" onPress={() => router.push('/autoTrader')} />
+              <QuickAction label="Watchlists" value="Quotes" icon="star-outline" onPress={() => router.push('/watchlists')} />
+              <QuickAction label="Alerts" value="Notify" icon="notifications-outline" onPress={() => router.push('/alerts')} />
+              <QuickAction label="Analytics" value="P&L" icon="bar-chart-outline" onPress={() => router.push('/strategyPnl')} />
+              <QuickAction label="Finance" value="Cashflow" icon="wallet-outline" onPress={() => router.push('/finance')} />
+              <QuickAction label="Screener" value="Filter" icon="funnel-outline" onPress={() => router.push('/screener')} />
+              <QuickAction label="Heatmap" value="Market" icon="grid-outline" onPress={() => router.push('/heatmap')} />
+              <QuickAction label="Trade Costs" value="Charges" icon="calculator-outline" onPress={() => router.push('/tradeCostTracker')} />
+              <QuickAction label="Reconcile" value="Sync" icon="sync-outline" onPress={() => router.push('/brokerReconciliation')} />
+              <QuickAction label="ML Center" value="Models" icon="analytics-outline" onPress={() => router.push('/mlCenter')} />
+              <QuickAction label="Calendar" value="Events" icon="calendar-outline" onPress={() => router.push('/calendar')} />
+            </ScrollView>
           </SafeAreaView>
         </LinearGradient>
 
@@ -173,9 +250,22 @@ export default function Dashboard() {
   );
 }
 
-function QuickAction({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
+function QuickAction({
+  label,
+  value,
+  icon,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+}) {
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={styles.quickActionBtn}>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={styles.quickActionBtn}>
+      <View style={styles.quickActionIconWrap}>
+        <Ionicons name={icon} size={14} color={Colors.accentLight} />
+      </View>
       <Text style={styles.quickActionValue}>{value}</Text>
       <Text style={styles.quickActionLabel}>{label}</Text>
     </TouchableOpacity>
@@ -194,26 +284,33 @@ const styles = StyleSheet.create({
   heroGreeting: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
   heroDate: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
   heroRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '500' },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.green },
+  statusText: { fontSize: 13, color: Colors.green, fontWeight: '600' },
   heroPnL: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.xl },
   heroPnLLabel: { fontSize: 13, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
   heroPnLValue: { fontSize: 42, fontWeight: '700', letterSpacing: -1, marginTop: 4 },
   niftyLtp: { fontSize: 13, color: Colors.textMuted, marginTop: 6 },
   quickActionsRow: {
-    flexDirection: 'row',
-    paddingHorizontal: Spacing.lg,
     marginTop: Spacing.md,
-    gap: 8,
+    paddingLeft: Spacing.lg,
   },
   quickActionBtn: {
-    flex: 1,
-    backgroundColor: Colors.bgGlass,
+    width: 96,
+    backgroundColor: Colors.bgGlassStrong,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Colors.borderStrong,
     borderRadius: Radius.md,
     paddingVertical: 10,
     paddingHorizontal: 8,
+  },
+  quickActionIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: Colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
   },
   quickActionValue: { color: Colors.textPrimary, fontSize: 14, fontWeight: '700' },
   quickActionLabel: { color: Colors.textSecondary, fontSize: 11, marginTop: 2 },
