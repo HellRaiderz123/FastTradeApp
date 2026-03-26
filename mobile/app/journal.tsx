@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 import { journalAPI } from '../lib/api';
-import { Colors, Radius, Spacing } from '../lib/theme';
+import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PnLBadge, Tag } from '../components/ui';
 
 type FilterMode = 'all' | 'wins' | 'losses';
@@ -46,7 +47,14 @@ export default function JournalScreen() {
   const closedEntries = entries.filter((entry) => entry.closed_at);
   const totalPnL = closedEntries.reduce((sum, entry) => sum + (entry.pnl || 0), 0);
   const wins = closedEntries.filter((entry) => (entry.pnl || 0) > 0).length;
+  const losses = closedEntries.filter((entry) => (entry.pnl || 0) < 0).length;
   const winRate = closedEntries.length ? Math.round((wins / closedEntries.length) * 100) : 0;
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await load();
+  };
 
   if (loading) {
     return <View style={styles.root}><LoadingSpinner /></View>;
@@ -56,7 +64,7 @@ export default function JournalScreen() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+        <LinearGradient colors={Gradients.header} style={styles.header}>
           <Text style={styles.headerTitle}>Journal</Text>
           <Text style={styles.headerSub}>Closed trades, clean and readable</Text>
 
@@ -80,26 +88,34 @@ export default function JournalScreen() {
 
         <ScrollView
           contentContainerStyle={styles.scroll}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.accent} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.filterRow}>
             {(['all', 'wins', 'losses'] as FilterMode[]).map((mode) => {
               const active = filter === mode;
+              const count = mode === 'all' ? filteredEntries.length : mode === 'wins' ? wins : losses;
               return (
                 <TouchableOpacity
                   key={mode}
                   style={[styles.filterChip, active && styles.filterChipActive]}
-                  onPress={() => setFilter(mode)}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setFilter(mode);
+                  }}
                 >
-                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{mode.toUpperCase()}</Text>
+                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{mode.toUpperCase()} ({count})</Text>
                 </TouchableOpacity>
               );
             })}
           </View>
 
           {filteredEntries.length === 0 ? (
-            <EmptyState icon="📚" title="No Journal Entries" subtitle="Executed trades will appear here once they close." />
+            <EmptyState
+              icon="📚"
+              title={filter === 'all' ? 'No Journal Entries' : `No ${filter} yet`}
+              subtitle={filter === 'all' ? 'Executed trades will appear here once they close.' : 'Try switching filter or pull to refresh.'}
+            />
           ) : (
             filteredEntries.map((entry) => {
               const expanded = expandedId === entry.intent_id;
@@ -111,7 +127,10 @@ export default function JournalScreen() {
                 <TouchableOpacity
                   key={entry.intent_id}
                   activeOpacity={0.9}
-                  onPress={() => setExpandedId(expanded ? null : entry.intent_id)}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setExpandedId(expanded ? null : entry.intent_id);
+                  }}
                 >
                   <GlassCard style={styles.entryCard}>
                     <View style={styles.entryTop}>

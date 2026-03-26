@@ -1,9 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 import { aiAPI } from '../lib/api';
-import { Colors, Radius, Spacing } from '../lib/theme';
+import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
 import { GlassCard, Tag } from '../components/ui';
 
 const STARTERS = [
@@ -16,6 +17,7 @@ const STARTERS = [
 export default function AIScreen() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([
     {
       role: 'assistant',
@@ -31,6 +33,8 @@ export default function AIScreen() {
       return;
     }
 
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
     const nextHistory = [...history, { role: 'user' as const, content: outgoing }];
     setHistory(nextHistory);
     setMessage('');
@@ -40,6 +44,7 @@ export default function AIScreen() {
       const res = await aiAPI.query(outgoing, nextHistory);
       const reply = res.data?.response || res.data?.message || 'Connected, but no response body was returned from the backend.';
       setHistory((prev) => [...prev, { role: 'assistant', content: reply }]);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch {
       setHistory((prev) => [
         ...prev,
@@ -48,25 +53,44 @@ export default function AIScreen() {
           content: 'The backend assistant is not reachable right now. The chat UI is ready, and wiring to the shared backend endpoint is already in place.',
         },
       ]);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
 
     setLoading(false);
+  };
+
+  const resetConversation = async () => {
+    setRefreshing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setHistory([
+      {
+        role: 'assistant',
+        content: 'Fresh chat started. Ask anything about positions, scanner signals, P&L, or settings.',
+      },
+    ]);
+    setMessage('');
+    setRefreshing(false);
   };
 
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+        <LinearGradient colors={Gradients.header} style={styles.header}>
           <Text style={styles.headerTitle}>AI Desk</Text>
           <Text style={styles.headerSub}>Natural-language trading, scanner, and finance queries</Text>
         </LinearGradient>
 
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            contentContainerStyle={styles.scroll}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={resetConversation} tintColor={Colors.accent} />}
+          >
             <View style={styles.starterRow}>
               {STARTERS.map((starter) => (
-                <TouchableOpacity key={starter} style={styles.starterChip} onPress={() => send(starter)}>
+                <TouchableOpacity key={starter} style={[styles.starterChip, loading && styles.starterChipDisabled]} onPress={() => send(starter)} disabled={loading}>
                   <Text style={styles.starterText}>{starter}</Text>
                 </TouchableOpacity>
               ))}
@@ -138,6 +162,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 8,
   },
+  starterChipDisabled: { opacity: 0.55 },
   starterText: { color: Colors.textSecondary, fontSize: 12, fontWeight: '600' },
   messageRow: { marginBottom: 12, flexDirection: 'row' },
   messageRowLeft: { justifyContent: 'flex-start' },

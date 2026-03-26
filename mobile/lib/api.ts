@@ -1,10 +1,45 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 
-// Change this to your machine's IP when running on physical device
-// For simulator: http://localhost:8000
-// For physical device: http://YOUR_LOCAL_IP:8000
-export const API_BASE = 'http://172.20.10.8:8000';
+const API_BASE_STORAGE_KEY = 'fasttrade_api_base_url';
+
+const trimTrailingSlash = (url: string) => url.replace(/\/+$/, '');
+
+const getDefaultApiBaseUrl = () => {
+  if (Platform.OS === 'android') {
+    return 'http://192.168.1.103:8000';
+  }
+  return 'http://localhost:8000';
+};
+
+const envApiBase = process.env.EXPO_PUBLIC_API_BASE_URL;
+const extraApiBase = (Constants.expoConfig?.extra as { apiBaseUrl?: string } | undefined)?.apiBaseUrl;
+
+let API_BASE = trimTrailingSlash(envApiBase || extraApiBase || getDefaultApiBaseUrl());
+
+export const getApiBaseUrl = () => API_BASE;
+export { getDefaultApiBaseUrl };
+
+export const setApiBaseUrl = (nextUrl: string) => {
+  const normalized = trimTrailingSlash(nextUrl.trim());
+  API_BASE = normalized;
+  api.defaults.baseURL = normalized;
+};
+
+export const persistApiBaseUrl = async (nextUrl: string) => {
+  setApiBaseUrl(nextUrl);
+  await AsyncStorage.setItem(API_BASE_STORAGE_KEY, getApiBaseUrl());
+};
+
+export const syncApiBaseUrlFromStorage = async () => {
+  const stored = await AsyncStorage.getItem(API_BASE_STORAGE_KEY);
+  if (stored?.trim()) {
+    setApiBaseUrl(stored);
+  }
+  return getApiBaseUrl();
+};
 
 const api = axios.create({
   baseURL: API_BASE,
@@ -12,8 +47,13 @@ const api = axios.create({
   timeout: 15000,
 });
 
+syncApiBaseUrlFromStorage().catch(() => {
+  // no-op: app continues with default/env base URL
+});
+
 // Auth interceptor
 api.interceptors.request.use(async (config) => {
+  config.baseURL = getApiBaseUrl();
   const token = await AsyncStorage.getItem('fasttrade_auth_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;

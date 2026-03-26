@@ -16,6 +16,7 @@ export const Colors = {
   // Accent — Electric Blue
   accent: '#3B82F6',
   accentLight: '#60A5FA',
+  accentSoft: 'rgba(59,130,246,0.12)',
   accentGlow: 'rgba(59,130,246,0.25)',
 
   // Green (profit)
@@ -38,6 +39,7 @@ export const Colors = {
   textPrimary: '#F1F5F9',
   textSecondary: '#94A3B8',
   textMuted: '#475569',
+  textFaint: '#334155',
   textAccent: '#60A5FA',
 
   // Metallic gradients
@@ -51,6 +53,11 @@ export const Colors = {
   tabBg: 'rgba(8,12,20,0.95)',
   tabActive: '#3B82F6',
   tabInactive: '#475569',
+
+  // Semantic
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444',
 };
 
 export const Spacing = {
@@ -69,6 +76,13 @@ export const Radius = {
   xl: 20,
   xxl: 28,
   full: 999,
+};
+
+export const Gradients = {
+  header: ['#0F172A', '#080C14'] as [string, string],
+  primaryAction: ['#1D4ED8', '#3B82F6'] as [string, string],
+  successAction: ['#065F46', '#10B981'] as [string, string],
+  dangerAction: ['#7F1D1D', '#EF4444'] as [string, string],
 };
 
 export const Typography = {

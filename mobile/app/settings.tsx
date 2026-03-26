@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { RefreshControl, ScrollView, StatusBar, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, RefreshControl, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { API_BASE, authAPI, systemAPI } from '../lib/api';
-import { Colors, Radius, Spacing } from '../lib/theme';
-import { GlassCard, LoadingSpinner, Tag } from '../components/ui';
+import { authAPI, getApiBaseUrl, getDefaultApiBaseUrl, persistApiBaseUrl, syncApiBaseUrlFromStorage, systemAPI } from '../lib/api';
+import { Colors, Radius, Spacing, Gradients } from '../lib/theme';
+import { GlassCard, LoadingSpinner, PrimaryButton, Tag } from '../components/ui';
 
 type ToggleState = {
   faceId: boolean;
@@ -24,9 +24,14 @@ export default function SettingsScreen() {
     tradeHaptics: true,
     compactCharts: false,
   });
+  const [apiBaseInput, setApiBaseInput] = useState('');
+  const [savingApiBase, setSavingApiBase] = useState(false);
 
   const load = useCallback(async () => {
     try {
+      const resolvedApiBase = await syncApiBaseUrlFromStorage();
+      setApiBaseInput(resolvedApiBase);
+
       const [systemRes, profileRes] = await Promise.allSettled([
         systemAPI.status(),
         authAPI.me(),
@@ -65,6 +70,30 @@ export default function SettingsScreen() {
     } catch {}
   };
 
+  const handleSaveApiBase = async () => {
+    const nextUrl = apiBaseInput.trim();
+    const isValid = /^https?:\/\/.+/i.test(nextUrl);
+    if (!isValid) {
+      Alert.alert('Invalid URL', 'Use a full URL like http://192.168.1.5:8000 or https://api.example.com');
+      return;
+    }
+
+    setSavingApiBase(true);
+    try {
+      await persistApiBaseUrl(nextUrl);
+      setApiBaseInput(getApiBaseUrl());
+      Alert.alert('Saved', 'Backend URL updated for future requests.');
+    } catch {
+      Alert.alert('Failed', 'Could not save backend URL. Please try again.');
+    }
+    setSavingApiBase(false);
+  };
+
+  const handleResetApiBase = () => {
+    const fallbackUrl = getDefaultApiBaseUrl();
+    setApiBaseInput(fallbackUrl);
+  };
+
   if (loading) {
     return <View style={styles.root}><LoadingSpinner /></View>;
   }
@@ -73,9 +102,9 @@ export default function SettingsScreen() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+        <LinearGradient colors={Gradients.header} style={styles.header}>
           <Text style={styles.headerTitle}>Settings</Text>
-          <Text style={styles.headerSub}>Personalize the iPhone UI and monitor backend connection status</Text>
+          <Text style={styles.headerSub}>Personalize your app and backend connection</Text>
         </LinearGradient>
 
         <ScrollView
@@ -121,7 +150,22 @@ export default function SettingsScreen() {
 
           <GlassCard style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Connection</Text>
-            <InfoRow label="Backend" value={API_BASE} />
+            <Text style={styles.inputLabel}>Backend Base URL</Text>
+            <TextInput
+              value={apiBaseInput}
+              onChangeText={setApiBaseInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="http://localhost:8000"
+              placeholderTextColor={Colors.textFaint}
+              style={styles.urlInput}
+            />
+            <View style={styles.connectionActions}>
+              <PrimaryButton title="Save URL" onPress={handleSaveApiBase} loading={savingApiBase} style={styles.connectionButton} />
+              <PrimaryButton title="Reset" onPress={handleResetApiBase} variant="ghost" style={styles.connectionButton} />
+            </View>
+            <Text style={styles.connectionHint}>Tip: use `10.0.2.2` for Android emulator and `localhost` for iOS simulator.</Text>
+            <InfoRow label="Active URL" value={getApiBaseUrl()} />
             <InfoRow label="Theme" value="Metallic Night" />
             <InfoRow label="Layout" value="Expo Router tabs" />
           </GlassCard>
@@ -134,7 +178,7 @@ export default function SettingsScreen() {
           </GlassCard>
 
           <TouchableOpacity style={styles.syncButton} activeOpacity={0.85} onPress={() => load()}>
-            <LinearGradient colors={['#1D4ED8', '#3B82F6']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.syncGradient}>
+            <LinearGradient colors={Gradients.primaryAction} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.syncGradient}>
               <Text style={styles.syncText}>Refresh Status</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -206,6 +250,20 @@ const styles = StyleSheet.create({
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
   infoLabel: { fontSize: 12, color: Colors.textMuted, width: 90 },
   infoValue: { fontSize: 12, color: Colors.textPrimary, fontWeight: '600', flex: 1, textAlign: 'right' },
+  inputLabel: { fontSize: 12, color: Colors.textMuted, marginBottom: 6 },
+  urlInput: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bgGlass,
+    color: Colors.textPrimary,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+  },
+  connectionActions: { flexDirection: 'row', marginTop: 10, marginBottom: 8, gap: 10 },
+  connectionButton: { flex: 1 },
+  connectionHint: { fontSize: 11, color: Colors.textMuted, marginBottom: 8 },
   noteText: { fontSize: 13, color: Colors.textSecondary, marginBottom: 8 },
   syncButton: { marginTop: 4, borderRadius: Radius.md, overflow: 'hidden' },
   syncGradient: { paddingVertical: 14, alignItems: 'center' },

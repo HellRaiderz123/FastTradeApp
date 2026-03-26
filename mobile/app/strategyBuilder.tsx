@@ -1,8 +1,11 @@
-
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, SafeAreaView } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TextInput, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Picker } from '@react-native-picker/picker';
-import { strategyAPI, greeksAPI, marketAPI } from '../lib/api';
+import { greeksAPI, marketAPI } from '../lib/api';
+import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
+import { GlassCard, PrimaryButton, Tag } from '../components/ui';
 
 const NIFTY_LOT_SIZE = 50;
 const STRIKE_STEP = 50;
@@ -36,8 +39,8 @@ const StrategyBuilderScreen = () => {
   const [selectedExpiry, setSelectedExpiry] = useState('');
   const [loading, setLoading] = useState(false);
   const [template, setTemplate] = useState('CUSTOM');
-  const [error, setError] = useState(null);
-  const [greeks, setGreeks] = useState(null);
+  const [error, setError] = useState<string | null>(null);
+  const [greeks, setGreeks] = useState<any>(null);
 
   useEffect(() => {
     fetchMarketData();
@@ -67,22 +70,22 @@ const StrategyBuilderScreen = () => {
     setLegs([...legs, newLeg]);
   };
 
-  const removeLeg = (id) => setLegs(legs.filter(l => l.id !== id));
+  const removeLeg = (id: string) => setLegs(legs.filter((l: any) => l.id !== id));
 
-  const updateLeg = async (id, field, value) => {
-    setLegs(legs.map(l => {
+  const updateLeg = async (id: string, field: string, value: any) => {
+    setLegs(legs.map((l: any) => {
       if (l.id !== id) return l;
       const updated = { ...l, [field]: value };
       if (['strike', 'option_type'].includes(field)) {
-        fetchPremium(updated.strike, updated.option_type).then(premium => {
-          setLegs(legs => legs.map(x => x.id === id ? { ...x, premium } : x));
+        fetchPremium(updated.strike, updated.option_type).then((premium) => {
+          setLegs((prev: any[]) => prev.map((x) => x.id === id ? { ...x, premium } : x));
         });
       }
       return updated;
     }));
   };
 
-  const fetchPremium = async (strike, optionType) => {
+  const fetchPremium = async (strike: number, optionType: string) => {
     try {
       if (!selectedExpiry) return 0;
       const resp = await marketAPI.getOptionPremium('NIFTY', strike, optionType, selectedExpiry);
@@ -92,7 +95,7 @@ const StrategyBuilderScreen = () => {
     }
   };
 
-  const buildTemplate = async (tpl) => {
+  const buildTemplate = async (tpl: string) => {
     setTemplate(tpl);
     // ...template logic (see web for details, can be expanded in next steps)...
     // For now, just clear legs for custom
@@ -122,104 +125,200 @@ const StrategyBuilderScreen = () => {
 
   // UI rendering
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Strategy Builder</Text>
-        <Text style={styles.label}>Template</Text>
-        <Picker
-          selectedValue={template}
-          onValueChange={buildTemplate}
-          style={styles.input}
-        >
-          {STRATEGY_TEMPLATES.map(t => (
-            <Picker.Item key={t.value} label={t.label} value={t.value} />
-          ))}
-        </Picker>
-        <Text style={styles.label}>Expiry</Text>
-        <Picker
-          selectedValue={selectedExpiry}
-          onValueChange={setSelectedExpiry}
-          style={styles.input}
-        >
-          {expiryDates.map(e => (
-            <Picker.Item key={e} label={e} value={e} />
-          ))}
-        </Picker>
-        <Text style={styles.label}>Option Legs</Text>
-        {legs.map((leg, idx) => (
-          <View key={leg.id} style={styles.legBox}>
-            <Text>Leg {idx + 1}</Text>
-            <Picker
-              selectedValue={leg.type}
-              onValueChange={v => updateLeg(leg.id, 'type', v)}
-              style={styles.input}
-            >
-              <Picker.Item label="BUY" value="BUY" />
-              <Picker.Item label="SELL" value="SELL" />
-            </Picker>
-            <Picker
-              selectedValue={leg.option_type}
-              onValueChange={v => updateLeg(leg.id, 'option_type', v)}
-              style={styles.input}
-            >
-              <Picker.Item label="CE" value="CE" />
-              <Picker.Item label="PE" value="PE" />
-            </Picker>
-            <TextInput
-              style={styles.input}
-              value={String(leg.strike)}
-              onChangeText={v => updateLeg(leg.id, 'strike', Number(v))}
-              keyboardType="numeric"
-              placeholder="Strike"
-            />
-            <TextInput
-              style={styles.input}
-              value={String(leg.quantity)}
-              onChangeText={v => updateLeg(leg.id, 'quantity', Number(v))}
-              keyboardType="numeric"
-              placeholder="Lots"
-            />
-            <Text>Premium: ₹{leg.premium}</Text>
-            <TouchableOpacity onPress={() => removeLeg(leg.id)} style={styles.removeBtn}>
-              <Text style={{ color: '#fff' }}>Remove</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
-        <TouchableOpacity onPress={addLeg} style={styles.addBtn}>
-          <Text style={{ color: '#fff' }}>Add Leg</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={calculateGreeks} style={styles.calcBtn}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff' }}>Calculate Greeks</Text>}
-        </TouchableOpacity>
-        {greeks && (
-          <View style={styles.resultBox}>
-            <Text style={styles.resultTitle}>Greeks</Text>
-            <Text>Delta: {greeks.delta}</Text>
-            <Text>Gamma: {greeks.gamma}</Text>
-            <Text>Theta: {greeks.theta}</Text>
-            <Text>Vega: {greeks.vega}</Text>
-            <Text>Rho: {greeks.rho}</Text>
-          </View>
-        )}
-        {error && <Text style={styles.error}>{error}</Text>}
-      </ScrollView>
-    </SafeAreaView>
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" />
+      <SafeAreaView edges={['top']} style={styles.safeArea}>
+        <LinearGradient colors={Gradients.header} style={styles.header}>
+          <Text style={styles.title}>Strategy Builder</Text>
+          <Text style={styles.subtitle}>Build option legs and calculate Greeks from your phone</Text>
+        </LinearGradient>
+
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <GlassCard style={styles.summaryCard}>
+            <View style={styles.summaryTop}>
+              <Text style={styles.sectionTitle}>Market Snapshot</Text>
+              <Tag label="LIVE DATA" color={Colors.green} bg={Colors.greenBg} />
+            </View>
+            <View style={styles.metricRow}>
+              <Text style={styles.metricLabel}>Spot</Text>
+              <Text style={styles.metricValue}>₹{Number(spot).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</Text>
+            </View>
+            <View style={styles.metricRow}>
+              <Text style={styles.metricLabel}>ATM</Text>
+              <Text style={styles.metricValue}>{atm}</Text>
+            </View>
+          </GlassCard>
+
+          <GlassCard style={styles.configCard}>
+            <Text style={styles.sectionTitle}>Setup</Text>
+
+            <Text style={styles.label}>Template</Text>
+            <View style={styles.pickerWrap}>
+              <Picker
+                selectedValue={template}
+                onValueChange={buildTemplate}
+                style={styles.picker}
+                dropdownIconColor={Colors.textSecondary}
+              >
+                {STRATEGY_TEMPLATES.map((t) => (
+                  <Picker.Item key={t.value} label={t.label} value={t.value} />
+                ))}
+              </Picker>
+            </View>
+
+            <Text style={styles.label}>Expiry</Text>
+            <View style={styles.pickerWrap}>
+              <Picker
+                selectedValue={selectedExpiry}
+                onValueChange={setSelectedExpiry}
+                style={styles.picker}
+                dropdownIconColor={Colors.textSecondary}
+              >
+                {expiryDates.map((e: string) => (
+                  <Picker.Item key={e} label={e} value={e} />
+                ))}
+              </Picker>
+            </View>
+
+            <PrimaryButton title="Add Leg" onPress={addLeg} variant="success" />
+          </GlassCard>
+
+          <Text style={styles.sectionTitle}>Option Legs</Text>
+          {legs.length === 0 ? (
+            <GlassCard style={styles.emptyLegsCard}>
+              <Text style={styles.emptyLegsText}>No legs yet. Tap Add Leg to start building.</Text>
+            </GlassCard>
+          ) : (
+            legs.map((leg: any, idx: number) => (
+              <GlassCard key={leg.id} style={styles.legBox}>
+                <View style={styles.legHead}>
+                  <Text style={styles.legTitle}>Leg {idx + 1}</Text>
+                  <PrimaryButton title="Remove" onPress={() => removeLeg(leg.id)} variant="danger" small />
+                </View>
+
+                <Text style={styles.label}>Action</Text>
+                <View style={styles.pickerWrap}>
+                  <Picker selectedValue={leg.type} onValueChange={(v) => updateLeg(leg.id, 'type', v)} style={styles.picker} dropdownIconColor={Colors.textSecondary}>
+                    <Picker.Item label="BUY" value="BUY" />
+                    <Picker.Item label="SELL" value="SELL" />
+                  </Picker>
+                </View>
+
+                <Text style={styles.label}>Option Type</Text>
+                <View style={styles.pickerWrap}>
+                  <Picker selectedValue={leg.option_type} onValueChange={(v) => updateLeg(leg.id, 'option_type', v)} style={styles.picker} dropdownIconColor={Colors.textSecondary}>
+                    <Picker.Item label="CE" value="CE" />
+                    <Picker.Item label="PE" value="PE" />
+                  </Picker>
+                </View>
+
+                <View style={styles.rowInputs}>
+                  <View style={[styles.inputBlock, styles.halfInput]}>
+                    <Text style={styles.label}>Strike</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={String(leg.strike)}
+                      onChangeText={(v) => updateLeg(leg.id, 'strike', Number(v) || 0)}
+                      keyboardType="numeric"
+                      placeholder="Strike"
+                      placeholderTextColor={Colors.textFaint}
+                    />
+                  </View>
+                  <View style={[styles.inputBlock, styles.halfInput]}>
+                    <Text style={styles.label}>Lots</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={String(leg.quantity)}
+                      onChangeText={(v) => updateLeg(leg.id, 'quantity', Number(v) || 0)}
+                      keyboardType="numeric"
+                      placeholder="Lots"
+                      placeholderTextColor={Colors.textFaint}
+                    />
+                  </View>
+                </View>
+
+                <View style={styles.metricRow}>
+                  <Text style={styles.metricLabel}>Premium</Text>
+                  <Text style={[styles.metricValue, { color: Colors.accent }]}>₹{Number(leg.premium || 0).toFixed(2)}</Text>
+                </View>
+              </GlassCard>
+            ))
+          )}
+
+          <PrimaryButton title="Calculate Greeks" onPress={calculateGreeks} loading={loading} />
+
+          {greeks && (
+            <GlassCard style={styles.resultBox}>
+              <Text style={styles.sectionTitle}>Greeks</Text>
+              <MetricRow label="Delta" value={greeks.delta} />
+              <MetricRow label="Gamma" value={greeks.gamma} />
+              <MetricRow label="Theta" value={greeks.theta} />
+              <MetricRow label="Vega" value={greeks.vega} />
+              <MetricRow label="Rho" value={greeks.rho} />
+            </GlassCard>
+          )}
+
+          {error && <Text style={styles.error}>{error}</Text>}
+          <View style={{ height: 96 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </View>
   );
 };
 
+function MetricRow({ label, value }: { label: string; value: number | string }) {
+  return (
+    <View style={styles.metricRow}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricValue}>{Number(value || 0).toFixed(4)}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  scrollContent: { padding: 16 },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 16, color: '#0f172a' },
-  label: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#333' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: '#333', backgroundColor: '#f9f9f9', marginBottom: 8 },
-  legBox: { backgroundColor: '#f1f5f9', borderRadius: 10, padding: 12, marginBottom: 12 },
-  addBtn: { backgroundColor: '#10B981', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 12 },
-  removeBtn: { backgroundColor: '#EF4444', padding: 8, borderRadius: 8, alignItems: 'center', marginTop: 8 },
-  calcBtn: { backgroundColor: '#3B82F6', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 12 },
-  resultBox: { backgroundColor: '#f1f5f9', borderRadius: 10, padding: 16, marginTop: 20 },
-  resultTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10, color: '#1e293b' },
-  error: { color: '#EF4444', fontWeight: 'bold', marginTop: 10 },
+  root: { flex: 1, backgroundColor: Colors.bg },
+  safeArea: { flex: 1 },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg },
+  title: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
+  subtitle: { marginTop: 4, fontSize: 13, color: Colors.textMuted },
+  scrollContent: { padding: Spacing.lg },
+  sectionTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary, marginBottom: 8 },
+  summaryCard: { marginBottom: 12 },
+  summaryTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  configCard: { marginBottom: 12 },
+  label: { fontSize: 12, fontWeight: '600', color: Colors.textMuted, marginBottom: 6, marginTop: 4 },
+  pickerWrap: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bgGlass,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  picker: { color: Colors.textPrimary },
+  legBox: { marginBottom: 12 },
+  legHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  legTitle: { color: Colors.textPrimary, fontSize: 15, fontWeight: '700' },
+  rowInputs: { flexDirection: 'row', gap: 10 },
+  inputBlock: { marginBottom: 8 },
+  halfInput: { flex: 1 },
+  input: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bgGlass,
+    color: Colors.textPrimary,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+  },
+  emptyLegsCard: { marginBottom: 12 },
+  emptyLegsText: { color: Colors.textSecondary, fontSize: 13 },
+  resultBox: { marginTop: 12 },
+  metricRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  metricLabel: { fontSize: 13, color: Colors.textSecondary },
+  metricValue: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
+  error: { color: Colors.red, fontWeight: '700', marginTop: 12 },
 });
 
 export default StrategyBuilderScreen;

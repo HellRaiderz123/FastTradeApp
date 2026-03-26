@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 import { scannerAPI } from '../lib/api';
-import { Colors, Radius, Spacing } from '../lib/theme';
-import { EmptyState, GlassCard, LoadingSpinner, Tag } from '../components/ui';
+import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
+import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, Tag } from '../components/ui';
 
 const FALLBACK_STRATEGIES = [
   { id: 1, name: 'Momentum Breakout Lab', timeframe: 'Day', universe: 'NIFTY50', direction: 'BUY', is_active: true, last_signal_count: 4 },
@@ -15,6 +16,8 @@ const FALLBACK_STRATEGIES = [
 export default function ScannerScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanStatus, setScanStatus] = useState('');
   const [strategies, setStrategies] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -34,6 +37,36 @@ export default function ScannerScreen() {
     load();
   }, [load]);
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setScanStatus('');
+    await load();
+  };
+
+  const scanSelected = async () => {
+    if (!selected?.id) {
+      return;
+    }
+    setScanning(true);
+    setScanStatus('');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      const res = await scannerAPI.scanStrategy(selected.id);
+      const count = Array.isArray(res.data?.matches)
+        ? res.data.matches.length
+        : Array.isArray(res.data?.results)
+          ? res.data.results.length
+          : Number(res.data?.signal_count || 0);
+      setScanStatus(`Scan complete: ${count} signal${count === 1 ? '' : 's'} found`);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      setScanStatus('Scan failed. Please try again.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+    setScanning(false);
+  };
+
   const selected = useMemo(() => {
     return strategies.find((strategy) => strategy.id === selectedId) || strategies[0] || null;
   }, [selectedId, strategies]);
@@ -46,14 +79,14 @@ export default function ScannerScreen() {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
-        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+        <LinearGradient colors={Gradients.header} style={styles.header}>
           <Text style={styles.headerTitle}>Scanner</Text>
           <Text style={styles.headerSub}>Condition strategies and signals in a phone-first layout</Text>
         </LinearGradient>
 
         <ScrollView
           contentContainerStyle={styles.scroll}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.accent} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.metricGrid}>
@@ -78,7 +111,14 @@ export default function ScannerScreen() {
             strategies.map((strategy) => {
               const active = selected?.id === strategy.id;
               return (
-                <TouchableOpacity key={strategy.id} activeOpacity={0.9} onPress={() => setSelectedId(strategy.id)}>
+                <TouchableOpacity
+                  key={strategy.id}
+                  activeOpacity={0.9}
+                  onPress={() => {
+                    setSelectedId(strategy.id);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
+                >
                   <GlassCard style={[styles.strategyCard, active && styles.strategyCardActive]}>
                     <View style={styles.strategyTop}>
                       <View style={styles.strategyMeta}>
@@ -121,6 +161,16 @@ export default function ScannerScreen() {
                 <Text style={styles.detailLabel}>Last Signal Count</Text>
                 <Text style={styles.detailValue}>{selected.last_signal_count || 0}</Text>
               </View>
+
+              <PrimaryButton
+                title={scanning ? 'Scanning...' : 'Run Scan'}
+                onPress={scanSelected}
+                loading={scanning}
+                style={{ marginTop: 6 }}
+              />
+              {scanStatus ? (
+                <Text style={styles.scanStatus}>{scanStatus}</Text>
+              ) : null}
             </GlassCard>
           )}
 
@@ -157,4 +207,5 @@ const styles = StyleSheet.create({
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
   detailLabel: { fontSize: 12, color: Colors.textMuted },
   detailValue: { fontSize: 13, color: Colors.textPrimary, fontWeight: '600' },
+  scanStatus: { marginTop: 10, fontSize: 12, color: Colors.textSecondary },
 });

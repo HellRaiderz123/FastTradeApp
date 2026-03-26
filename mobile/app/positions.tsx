@@ -7,16 +7,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { journalAPI, exitAPI } from '../lib/api';
-import { Colors, Spacing, Radius } from '../lib/theme';
+import { Colors, Gradients, Spacing, Radius } from '../lib/theme';
 import { GlassCard, MetalCard, PnLBadge, SectionHeader, EmptyState, LoadingSpinner, Tag, ProgressBar } from '../components/ui';
 
 const EXCLUDED = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
+type PositionFilter = 'all' | 'live' | 'paper';
 
 export default function Positions() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [positions, setPositions] = useState<any[]>([]);
   const [closing, setClosing] = useState<string | null>(null);
+  const [filter, setFilter] = useState<PositionFilter>('all');
 
   const load = useCallback(async () => {
     try {
@@ -57,6 +59,26 @@ export default function Positions() {
   const totalEntry = positions.reduce((s, p) => s + (p.entry_credit || 0), 0);
   const pnlPct = totalEntry > 0 ? (totalPnL / totalEntry) * 100 : 0;
 
+  const isLivePosition = (position: any) => {
+    const mode = position.execution_result?.mode || '';
+    return String(mode).includes('ZERODHA_LIVE');
+  };
+
+  const filteredPositions = positions.filter((position) => {
+    if (filter === 'live') return isLivePosition(position);
+    if (filter === 'paper') return !isLivePosition(position);
+    return true;
+  });
+
+  const liveCount = positions.filter(isLivePosition).length;
+  const paperCount = positions.length - liveCount;
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await load();
+  };
+
   if (loading) return <View style={styles.root}><LoadingSpinner /></View>;
 
   return (
@@ -64,9 +86,9 @@ export default function Positions() {
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         {/* Header */}
-        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+        <LinearGradient colors={Gradients.header} style={styles.header}>
           <Text style={styles.headerTitle}>Positions</Text>
-          <Text style={styles.headerSub}>{positions.length} open</Text>
+          <Text style={styles.headerSub}>{positions.length} open · {liveCount} live</Text>
 
           {/* Summary Bar */}
           {positions.length > 0 && (
@@ -95,19 +117,40 @@ export default function Positions() {
 
         <ScrollView
           contentContainerStyle={styles.scroll}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.accent} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}
           showsVerticalScrollIndicator={false}
         >
-          {positions.length === 0 ? (
+          <View style={styles.filterRow}>
+            {([
+              { key: 'all', label: `ALL (${positions.length})` },
+              { key: 'live', label: `LIVE (${liveCount})` },
+              { key: 'paper', label: `PAPER (${paperCount})` },
+            ] as Array<{ key: PositionFilter; label: string }>).map((item) => {
+              const active = filter === item.key;
+              return (
+                <TouchableOpacity
+                  key={item.key}
+                  style={[styles.filterChip, active && styles.filterChipActive]}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setFilter(item.key);
+                  }}
+                >
+                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{item.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {filteredPositions.length === 0 ? (
             <EmptyState icon="📭" title="No Open Positions" subtitle="Execute a strategy to open a position" />
           ) : (
-            positions.map((p) => {
+            filteredPositions.map((p) => {
               const pnl = p.unrealized_pnl || 0;
               const entry = p.entry_credit || 0;
               const pct = entry > 0 ? (pnl / entry) * 100 : 0;
               const isPos = pnl >= 0;
-              const mode = p.execution_result?.mode || '';
-              const isLive = mode.includes('ZERODHA_LIVE');
+              const isLive = isLivePosition(p);
               const legs = p.ticket?.legs || [];
 
               return (
@@ -206,6 +249,18 @@ const styles = StyleSheet.create({
   summaryValue: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary, marginTop: 4 },
   summaryDivider: { width: 1, backgroundColor: Colors.border },
   scroll: { padding: Spacing.lg, flexGrow: 1 },
+  filterRow: { flexDirection: 'row', marginBottom: Spacing.md, gap: 8 },
+  filterChip: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.bgGlass,
+    borderRadius: Radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  filterChipActive: { borderColor: Colors.accent, backgroundColor: Colors.accentGlow },
+  filterText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  filterTextActive: { color: Colors.textPrimary },
   posCard: { marginBottom: 12, padding: Spacing.md },
   posTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   posLeft: { flex: 1 },

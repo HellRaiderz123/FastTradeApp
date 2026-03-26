@@ -55,18 +55,14 @@ All API calls are handled through `lib/api.ts`:
 
 ## Backend Connection
 
-Update the API endpoint in `lib/api.ts`:
+You can configure backend URL in two ways:
 
-```typescript
-// For Android emulator
-const API_BASE = 'http://10.0.2.2:8000';
+- Build-time: set `EXPO_PUBLIC_API_BASE_URL`.
+- Runtime: open **Settings → Connection** and save a backend base URL.
 
-// For iOS simulator
-const API_BASE = 'http://localhost:8000';
-
-// For physical device
-const API_BASE = 'http://YOUR_IP:8000';
-```
+Defaults:
+- Android emulator: `http://10.0.2.2:8000`
+- iOS simulator: `http://localhost:8000`
 
 ## State Management
 

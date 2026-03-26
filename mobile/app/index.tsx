@@ -1,15 +1,17 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  TouchableOpacity, StatusBar, Platform,
+  TouchableOpacity, StatusBar,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { journalAPI, systemAPI, autoTraderAPI, marketAPI } from '../lib/api';
-import { Colors, Spacing, Radius } from '../lib/theme';
+import { Colors, Spacing, Radius, Gradients } from '../lib/theme';
 import { GlassCard, MetalCard, PnLBadge, StatCard, LoadingSpinner, Tag } from '../components/ui';
 
 export default function Dashboard() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [positions, setPositions] = useState<any[]>([]);
@@ -63,18 +65,18 @@ export default function Dashboard() {
       >
         {/* Hero Header */}
         <LinearGradient
-          colors={['#0F172A', '#080C14']}
+          colors={Gradients.header}
           style={styles.hero}
         >
           <SafeAreaView edges={['top']}>
             <View style={styles.heroContent}>
               <View>
                 <Text style={styles.heroGreeting}>FastTrade</Text>
-                <Text style={styles.heroDate}>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</Text>
+                <Text style={styles.heroDate}>{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</Text>
               </View>
               <View style={styles.heroRight}>
                 <View style={[styles.statusDot, { backgroundColor: systemEnabled ? Colors.green : Colors.red }]} />
-                <Text style={styles.statusText}>{systemEnabled ? 'Live' : 'Off'}</Text>
+                <Text style={styles.statusText}>{systemEnabled ? 'Trading ON' : 'Trading OFF'}</Text>
               </View>
             </View>
 
@@ -87,6 +89,12 @@ export default function Dashboard() {
               {niftyLtp && (
                 <Text style={styles.niftyLtp}>NIFTY ₹{niftyLtp.toLocaleString('en-IN')}</Text>
               )}
+            </View>
+
+            <View style={styles.quickActionsRow}>
+              <QuickAction label="Scanner" value="Signals" onPress={() => router.push('/scanner')} />
+              <QuickAction label="Positions" value="Manage" onPress={() => router.push('/positions')} />
+              <QuickAction label="AI Desk" value="Ask" onPress={() => router.push('/ai')} />
             </View>
           </SafeAreaView>
         </LinearGradient>
@@ -165,6 +173,15 @@ export default function Dashboard() {
   );
 }
 
+function QuickAction({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={styles.quickActionBtn}>
+      <Text style={styles.quickActionValue}>{value}</Text>
+      <Text style={styles.quickActionLabel}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.bg },
   scroll: { flexGrow: 1 },
@@ -183,6 +200,23 @@ const styles = StyleSheet.create({
   heroPnLLabel: { fontSize: 13, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
   heroPnLValue: { fontSize: 42, fontWeight: '700', letterSpacing: -1, marginTop: 4 },
   niftyLtp: { fontSize: 13, color: Colors.textMuted, marginTop: 6 },
+  quickActionsRow: {
+    flexDirection: 'row',
+    paddingHorizontal: Spacing.lg,
+    marginTop: Spacing.md,
+    gap: 8,
+  },
+  quickActionBtn: {
+    flex: 1,
+    backgroundColor: Colors.bgGlass,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  quickActionValue: { color: Colors.textPrimary, fontSize: 14, fontWeight: '700' },
+  quickActionLabel: { color: Colors.textSecondary, fontSize: 11, marginTop: 2 },
   body: { padding: Spacing.lg },
   statsRow: { flexDirection: 'row', marginBottom: Spacing.md },
   card: { marginBottom: Spacing.md },
