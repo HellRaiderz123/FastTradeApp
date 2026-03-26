@@ -1,513 +1,213 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  SafeAreaView,
-  TextInput,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  Switch,
-} from 'react-native';
-import { settingsAPI } from '../lib/api';
+import React, { useCallback, useEffect, useState } from 'react';
+import { RefreshControl, ScrollView, StatusBar, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import { API_BASE, authAPI, systemAPI } from '../lib/api';
+import { Colors, Radius, Spacing } from '../lib/theme';
+import { GlassCard, LoadingSpinner, Tag } from '../components/ui';
+
+type ToggleState = {
+  faceId: boolean;
+  pushAlerts: boolean;
+  tradeHaptics: boolean;
+  compactCharts: boolean;
+};
 
 export default function SettingsScreen() {
-  const [apiKey, setApiKey] = useState('');
-  const [apiSecret, setApiSecret] = useState('');
-  const [accessToken, setAccessToken] = useState('');
-  const [executionMode, setExecutionMode] = useState('ZERODHA_DRY_RUN');
-  const [loading, setLoading] = useState(false);
-  const [savedStatus, setSavedStatus] = useState({
-    api_key: false,
-    access_token: false,
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [systemEnabled, setSystemEnabled] = useState(false);
+  const [profileName, setProfileName] = useState('FastTrade Operator');
+  const [toggles, setToggles] = useState<ToggleState>({
+    faceId: true,
+    pushAlerts: true,
+    tradeHaptics: true,
+    compactCharts: false,
   });
-  const [showApiSecret, setShowApiSecret] = useState(false);
-  const [showAccessToken, setShowAccessToken] = useState(false);
 
-  // Load current settings on mount
-  useEffect(() => {
-    loadSettings();
+  const load = useCallback(async () => {
+    try {
+      const [systemRes, profileRes] = await Promise.allSettled([
+        systemAPI.status(),
+        authAPI.me(),
+      ]);
+
+      if (systemRes.status === 'fulfilled') {
+        setSystemEnabled(Boolean(systemRes.value.data?.trading_enabled));
+      }
+      if (profileRes.status === 'fulfilled') {
+        const data = profileRes.value.data;
+        setProfileName(data?.username || data?.email || 'FastTrade Operator');
+      }
+    } catch {}
+
+    setLoading(false);
+    setRefreshing(false);
   }, []);
 
-  const loadSettings = async () => {
-    try {
-      setLoading(true);
-      const response = await settingsAPI.getZerodhaSettings();
-      setSavedStatus(response);
-      setExecutionMode(response.execution_mode || 'ZERODHA_DRY_RUN');
-    } catch (error) {
-      console.error('Error loading settings:', error);
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const setToggle = (key: keyof ToggleState) => {
+    setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleSaveCredentials = async () => {
-    if (!apiKey.trim() || !apiSecret.trim()) {
-      Alert.alert('Error', 'Please enter both API Key and API Secret');
-      return;
-    }
-
+  const handleTradingToggle = async () => {
     try {
-      setLoading(true);
-      await settingsAPI.saveZerodhaCredentials({
-        api_key: apiKey,
-        api_secret: apiSecret,
-      });
-      Alert.alert('Success', 'Zerodha credentials saved successfully');
-      setSavedStatus((prev) => ({ ...prev, api_key: true }));
-    } catch (error) {
-      Alert.alert('Error', error.message || 'Failed to save credentials');
-    } finally {
-      setLoading(false);
-    }
+      if (systemEnabled) {
+        await systemAPI.disable();
+        setSystemEnabled(false);
+      } else {
+        await systemAPI.enable();
+        setSystemEnabled(true);
+      }
+    } catch {}
   };
 
-  const handleSaveToken = async () => {
-    if (!accessToken.trim()) {
-      Alert.alert('Error', 'Please enter an access token');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      await settingsAPI.saveZerodhaToken({
-        access_token: accessToken,
-      });
-      Alert.alert('Success', 'Access token saved successfully');
-      setSavedStatus((prev) => ({ ...prev, access_token: true }));
-    } catch (error) {
-      Alert.alert('Error', error.message || 'Failed to save token');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleExecutionModeChange = async (mode: string) => {
-    try {
-      setLoading(true);
-      await settingsAPI.setExecutionMode(mode);
-      setExecutionMode(mode);
-      Alert.alert('Success', `Execution mode changed to ${mode}`);
-    } catch (error) {
-      Alert.alert('Error', error.message || 'Failed to change execution mode');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const modes = ['ZERODHA_LIVE', 'ZERODHA_DRY_RUN', 'PAPER_TRADING'];
+  if (loading) {
+    return <View style={styles.root}><LoadingSpinner /></View>;
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Settings ⚙️</Text>
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" />
+      <SafeAreaView edges={['top']} style={styles.safeArea}>
+        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+          <Text style={styles.headerTitle}>Settings</Text>
+          <Text style={styles.headerSub}>Personalize the iPhone UI and monitor backend connection status</Text>
+        </LinearGradient>
 
-        {/* Status Section */}
-        <View style={styles.statusSection}>
-          <Text style={styles.sectionTitle}>Connection Status</Text>
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>API Key:</Text>
-            <View
-              style={[
-                styles.statusBadge,
-                savedStatus.api_key ? styles.statusGood : styles.statusBad,
-              ]}
-            >
-              <Text style={styles.statusText}>
-                {savedStatus.api_key ? '✓ Configured' : '✗ Not Set'}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.statusRow}>
-            <Text style={styles.statusLabel}>Access Token:</Text>
-            <View
-              style={[
-                styles.statusBadge,
-                savedStatus.access_token ? styles.statusGood : styles.statusBad,
-              ]}
-            >
-              <Text style={styles.statusText}>
-                {savedStatus.access_token ? '✓ Configured' : '✗ Not Set'}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* API Credentials Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Zerodha API Credentials</Text>
-          <Text style={styles.sectionDescription}>
-            Enter your Zerodha API credentials. Get them from your Zerodha developer
-            console.
-          </Text>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>API Key</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="el4pv3dwria188j9"
-              value={apiKey}
-              onChangeText={setApiKey}
-              editable={!loading}
-              placeholderTextColor="#999"
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>API Secret</Text>
-            <View style={styles.passwordContainer}>
-              <TextInput
-                style={styles.inputPassword}
-                placeholder="your-api-secret"
-                value={apiSecret}
-                onChangeText={setApiSecret}
-                secureTextEntry={!showApiSecret}
-                editable={!loading}
-                placeholderTextColor="#999"
-              />
-              <TouchableOpacity
-                onPress={() => setShowApiSecret(!showApiSecret)}
-                style={styles.eyeIcon}
-              >
-                <Text>{showApiSecret ? '👁️' : '👁️‍🗨️'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.button, styles.primaryButton, loading && styles.buttonDisabled]}
-            onPress={handleSaveCredentials}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Save Credentials</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* Access Token Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Access Token</Text>
-          <Text style={styles.sectionDescription}>
-            Generate or paste your Zerodha access token. This is typically obtained
-            through Zerodha's web interface or generated via the Zerodha Connect API.
-          </Text>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Access Token</Text>
-            <View style={styles.passwordContainer}>
-              <TextInput
-                style={styles.inputPassword}
-                placeholder="Nz7epyXMdgkPN68MVo2jUbnx4jS3hCMy"
-                value={accessToken}
-                onChangeText={setAccessToken}
-                secureTextEntry={!showAccessToken}
-                editable={!loading}
-                placeholderTextColor="#999"
-              />
-              <TouchableOpacity
-                onPress={() => setShowAccessToken(!showAccessToken)}
-                style={styles.eyeIcon}
-              >
-                <Text>{showAccessToken ? '👁️' : '👁️‍🗨️'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={[styles.button, styles.secondaryButton, loading && styles.buttonDisabled]}
-            onPress={handleSaveToken}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#2196F3" />
-            ) : (
-              <Text style={styles.buttonTextSecondary}>Save Token</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* Execution Mode Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Execution Mode</Text>
-          <Text style={styles.sectionDescription}>
-            Choose how your trades will be executed. Live mode executes real trades.
-          </Text>
-
-          {modes.map((mode) => (
-            <TouchableOpacity
-              key={mode}
-              style={[
-                styles.modeButton,
-                executionMode === mode && styles.modeButtonActive,
-              ]}
-              onPress={() => handleExecutionModeChange(mode)}
-              disabled={loading}
-            >
-              <View style={styles.modeRadio}>
-                {executionMode === mode && <View style={styles.modeRadioInner} />}
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.accent} />}
+          showsVerticalScrollIndicator={false}
+        >
+          <GlassCard style={styles.profileCard}>
+            <View style={styles.profileTop}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{profileName.slice(0, 2).toUpperCase()}</Text>
               </View>
-              <View style={styles.modeContent}>
-                <Text
-                  style={[
-                    styles.modeText,
-                    executionMode === mode && styles.modeTextActive,
-                  ]}
-                >
-                  {mode}
-                </Text>
-                <Text style={styles.modeDescription}>
-                  {mode === 'ZERODHA_LIVE'
-                    ? 'Execute real trades on Zerodha'
-                    : mode === 'ZERODHA_DRY_RUN'
-                    ? 'Simulate trades without real execution'
-                    : 'Paper trading mode for backtesting'}
-                </Text>
+              <View style={styles.profileMeta}>
+                <Text style={styles.profileName}>{profileName}</Text>
+                <Text style={styles.profileSub}>Metallic iPhone command center</Text>
               </View>
-            </TouchableOpacity>
-          ))}
-        </View>
+            </View>
+            <View style={styles.statusRow}>
+              <Text style={styles.rowLabel}>Trading Engine</Text>
+              <View style={styles.rowRight}>
+                <Tag
+                  label={systemEnabled ? 'ENABLED' : 'DISABLED'}
+                  color={systemEnabled ? Colors.green : Colors.red}
+                  bg={systemEnabled ? Colors.greenBg : Colors.redBg}
+                />
+                <Switch
+                  value={systemEnabled}
+                  onValueChange={handleTradingToggle}
+                  trackColor={{ false: Colors.bgGlassStrong, true: Colors.greenGlow }}
+                  thumbColor={systemEnabled ? Colors.green : '#D1D5DB'}
+                />
+              </View>
+            </View>
+          </GlassCard>
 
-        {/* Info Section */}
-        <View style={styles.infoSection}>
-          <Text style={styles.infoTitle}>ℹ️ Setup Instructions</Text>
-          <Text style={styles.infoText}>
-            1. Go to your Zerodha account settings
-          </Text>
-          <Text style={styles.infoText}>
-            2. Navigate to "Settings → API Consultants"
-          </Text>
-          <Text style={styles.infoText}>
-            3. Create or retrieve your API Key and Secret
-          </Text>
-          <Text style={styles.infoText}>
-            4. Copy them here and save
-          </Text>
-          <Text style={styles.infoText}>
-            5. Log in to Zerodha to get an access token
-          </Text>
-          <Text style={styles.infoText}>
-            6. Paste the access token and save
-          </Text>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          <GlassCard style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Experience</Text>
+            <SettingRow title="Face ID unlock" subtitle="Keep app access instant and private" value={toggles.faceId} onToggle={() => setToggle('faceId')} />
+            <SettingRow title="Push alerts" subtitle="Trade events, scanner hits, and AI summaries" value={toggles.pushAlerts} onToggle={() => setToggle('pushAlerts')} />
+            <SettingRow title="Trade haptics" subtitle="Subtle feedback on action taps and confirmations" value={toggles.tradeHaptics} onToggle={() => setToggle('tradeHaptics')} />
+            <SettingRow title="Compact charts" subtitle="Denser summaries for smaller market cards" value={toggles.compactCharts} onToggle={() => setToggle('compactCharts')} />
+          </GlassCard>
+
+          <GlassCard style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Connection</Text>
+            <InfoRow label="Backend" value={API_BASE} />
+            <InfoRow label="Theme" value="Metallic Night" />
+            <InfoRow label="Layout" value="Expo Router tabs" />
+          </GlassCard>
+
+          <GlassCard style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Planned Next</Text>
+            <Text style={styles.noteText}>1. Native login flow</Text>
+            <Text style={styles.noteText}>2. Push notification registration</Text>
+            <Text style={styles.noteText}>3. Live broker and scanner settings sync</Text>
+          </GlassCard>
+
+          <TouchableOpacity style={styles.syncButton} activeOpacity={0.85} onPress={() => load()}>
+            <LinearGradient colors={['#1D4ED8', '#3B82F6']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.syncGradient}>
+              <Text style={styles.syncText}>Refresh Status</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+          <View style={{ height: 100 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </View>
+  );
+}
+
+function SettingRow({ title, subtitle, value, onToggle }: { title: string; subtitle: string; value: boolean; onToggle: () => void }) {
+  return (
+    <View style={styles.settingRow}>
+      <View style={styles.settingLeft}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        <Text style={styles.rowSubtitle}>{subtitle}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onToggle}
+        trackColor={{ false: Colors.bgGlassStrong, true: Colors.accentGlow }}
+        thumbColor={value ? Colors.accent : '#D1D5DB'}
+      />
+    </View>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.infoRow}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={styles.infoValue}>{value}</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  scrollContent: {
-    padding: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 24,
-    color: '#1a1a1a',
-  },
-  section: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  statusSection: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  statusLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
-  },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  statusGood: {
-    backgroundColor: '#d4edda',
-  },
-  statusBad: {
-    backgroundColor: '#f8d7da',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#1a1a1a',
-  },
-  sectionDescription: {
-    fontSize: 13,
-    color: '#666',
-    marginBottom: 16,
-    lineHeight: 20,
-  },
-  inputGroup: {
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#333',
-  },
-  input: {
+  root: { flex: 1, backgroundColor: Colors.bg },
+  safeArea: { flex: 1 },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg },
+  headerTitle: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
+  headerSub: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
+  scroll: { padding: Spacing.lg, flexGrow: 1 },
+  profileCard: { marginBottom: 12 },
+  profileTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  avatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: Colors.accentGlow,
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#333',
-    backgroundColor: '#f9f9f9',
-  },
-  passwordContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    backgroundColor: '#f9f9f9',
-    paddingRight: 10,
-  },
-  inputPassword: {
-    flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: '#333',
-  },
-  eyeIcon: {
-    padding: 8,
-  },
-  button: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
+    borderColor: Colors.borderAccent,
     justifyContent: 'center',
-  },
-  primaryButton: {
-    backgroundColor: '#4CAF50',
-  },
-  secondaryButton: {
-    backgroundColor: '#e3f2fd',
-    borderWidth: 1,
-    borderColor: '#2196F3',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  buttonTextSecondary: {
-    color: '#2196F3',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  modeButton: {
-    flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    marginBottom: 10,
-    backgroundColor: '#f9f9f9',
   },
-  modeButtonActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: '#f1f8f4',
-  },
-  modeRadio: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#ddd',
-    marginRight: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modeRadioInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#4CAF50',
-  },
-  modeContent: {
-    flex: 1,
-  },
-  modeText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
-  },
-  modeTextActive: {
-    color: '#4CAF50',
-  },
-  modeDescription: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 4,
-  },
-  infoSection: {
-    backgroundColor: '#e3f2fd',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 24,
-    borderLeftWidth: 4,
-    borderLeftColor: '#2196F3',
-  },
-  infoTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1976D2',
-    marginBottom: 10,
-  },
-  infoText: {
-    fontSize: 13,
-    color: '#0d47a1',
-    marginBottom: 6,
-    lineHeight: 18,
-  },
+  avatarText: { color: Colors.textPrimary, fontSize: 18, fontWeight: '700' },
+  profileMeta: { marginLeft: 14, flex: 1 },
+  profileName: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
+  profileSub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rowLabel: { fontSize: 15, fontWeight: '600', color: Colors.textPrimary },
+  rowRight: { flexDirection: 'row', alignItems: 'center' },
+  sectionCard: { marginBottom: 12 },
+  sectionTitle: { fontSize: 17, fontWeight: '700', color: Colors.textPrimary, marginBottom: 8 },
+  settingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10 },
+  settingLeft: { flex: 1, paddingRight: 12 },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: Colors.textPrimary },
+  rowSubtitle: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
+  infoLabel: { fontSize: 12, color: Colors.textMuted, width: 90 },
+  infoValue: { fontSize: 12, color: Colors.textPrimary, fontWeight: '600', flex: 1, textAlign: 'right' },
+  noteText: { fontSize: 13, color: Colors.textSecondary, marginBottom: 8 },
+  syncButton: { marginTop: 4, borderRadius: Radius.md, overflow: 'hidden' },
+  syncGradient: { paddingVertical: 14, alignItems: 'center' },
+  syncText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });

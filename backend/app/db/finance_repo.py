@@ -160,11 +160,11 @@ def get_budget_status(db: Session, category: str, month: str = None):
     else:
         next_month = datetime.strptime(month + "-01", "%Y-%m-%d").replace(month=int(month.split("-")[1]) + 1).date()
     
-    spent = db.query(FinanceTransaction).filter(
+    spent = db.query(func.sum(FinanceTransaction.debit)).filter(
         FinanceTransaction.category == category,
         FinanceTransaction.tran_date >= start_date,
         FinanceTransaction.tran_date < next_month,
-    ).with_entities(db.func.sum(FinanceTransaction.debit)).scalar() or 0
+    ).scalar() or 0
     
     return {
         "budget": budget,

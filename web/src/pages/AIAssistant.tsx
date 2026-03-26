@@ -13,13 +13,13 @@ interface Message {
 
 const SUGGESTIONS = [
   'Show my open positions',
-  'Which strategy is performing best?',
-  'Analyze my losing trades',
-  'What is my win rate?',
-  'Should I hold or exit my current positions?',
-  'What is my total P&L this month?',
-  'Which symbol made me the most money?',
-  'Explain iron condor strategy',
+  'Analyze my strategy performance',
+  'What scanner signals fired this week?',
+  'How much am I spending on brokerage?',
+  'Show my budget status',
+  'Which savings goals am I behind on?',
+  'What is my profit factor?',
+  'Which stock made me the most money?',
 ];
 
 export default function AIAssistant() {

@@ -1,88 +1,226 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, SafeAreaView } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { journalAPI } from '../lib/api';
+import { Colors, Radius, Spacing } from '../lib/theme';
+import { EmptyState, GlassCard, LoadingSpinner, PnLBadge, Tag } from '../components/ui';
 
-const JournalScreen = () => {
-  const [entries, setEntries] = useState([]);
+type FilterMode = 'all' | 'wins' | 'losses';
+
+const EXCLUDED = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
+
+export default function JournalScreen() {
+  const [entries, setEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterMode>('all');
 
-  useEffect(() => {
-    fetchJournal();
+  const load = useCallback(async () => {
+    try {
+      const response = await journalAPI.getExecutionIntents(100);
+      const all = Array.isArray(response.data) ? response.data : [];
+      setEntries(all.filter((entry) => !EXCLUDED.includes(entry.strategy)));
+    } catch {
+      setEntries([]);
+    }
+    setLoading(false);
+    setRefreshing(false);
   }, []);
 
-  const fetchJournal = async () => {
-    try {
-      setLoading(true);
-      const response = await journalAPI.getExecutionIntents(100);
-      setEntries(Array.isArray(response.data) ? response.data : []);
-    } catch (error) {
-      // Optionally show error
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    load();
+  }, [load]);
 
-  const renderEntry = (entry) => {
-    const expanded = expandedId === entry.id;
-    const entryPrice = Number(entry?.entry_credit ?? 0) || 0;
-    const pnl = Number(entry?.pnl ?? 0) || 0;
-    const exitPrice = entryPrice ? entryPrice - pnl : null;
-    const pnlPercent = entryPrice !== 0 ? (pnl / entryPrice) * 100 : 0;
-    const isProfitable = pnl >= 0;
-    return (
-      <TouchableOpacity
-        key={entry.id}
-        style={styles.entryContainer}
-        onPress={() => setExpandedId(expanded ? null : entry.id)}
-      >
-        <View style={styles.entryHeader}>
-          <Text style={styles.entryTitle}>{entry.strategy || 'Unknown'}</Text>
-          <Text style={[styles.pnl, isProfitable ? styles.green : styles.red]}>
-            ₹{pnl.toLocaleString()} ({pnlPercent.toFixed(2)}%)
-          </Text>
-        </View>
-        <Text style={styles.entrySub}>{entry.underlying || '-'}</Text>
-        {expanded && (
-          <View style={styles.entryDetails}>
-            <Text>Entry Price: ₹{entryPrice}</Text>
-            <Text>Exit Price: {exitPrice !== null ? `₹${exitPrice}` : 'N/A'}</Text>
-            <Text>Status: {entry.status}</Text>
-          </View>
-        )}
-      </TouchableOpacity>
-    );
-  };
+  const filteredEntries = useMemo(() => {
+    if (filter === 'wins') {
+      return entries.filter((entry) => (entry.pnl || 0) > 0);
+    }
+    if (filter === 'losses') {
+      return entries.filter((entry) => (entry.pnl || 0) < 0);
+    }
+    return entries;
+  }, [entries, filter]);
+
+  const closedEntries = entries.filter((entry) => entry.closed_at);
+  const totalPnL = closedEntries.reduce((sum, entry) => sum + (entry.pnl || 0), 0);
+  const wins = closedEntries.filter((entry) => (entry.pnl || 0) > 0).length;
+  const winRate = closedEntries.length ? Math.round((wins / closedEntries.length) * 100) : 0;
+
+  if (loading) {
+    return <View style={styles.root}><LoadingSpinner /></View>;
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Trade Journal</Text>
-        {loading ? (
-          <ActivityIndicator size="large" color="#10B981" />
-        ) : entries.length === 0 ? (
-          <Text style={styles.empty}>No journal entries found.</Text>
-        ) : (
-          entries.map(renderEntry)
-        )}
-      </ScrollView>
-    </SafeAreaView>
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" />
+      <SafeAreaView edges={['top']} style={styles.safeArea}>
+        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+          <Text style={styles.headerTitle}>Journal</Text>
+          <Text style={styles.headerSub}>Closed trades, clean and readable</Text>
+
+          <View style={styles.summaryStrip}>
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryLabel}>Closed</Text>
+              <Text style={styles.summaryValue}>{closedEntries.length}</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryLabel}>Win Rate</Text>
+              <Text style={[styles.summaryValue, { color: winRate >= 50 ? Colors.green : Colors.amber }]}>{winRate}%</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryItem}>
+              <Text style={styles.summaryLabel}>Total P&L</Text>
+              <Text style={[styles.summaryValue, { color: totalPnL >= 0 ? Colors.green : Colors.red }]}>₹{Math.abs(totalPnL).toLocaleString('en-IN')}</Text>
+            </View>
+          </View>
+        </LinearGradient>
+
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.accent} />}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.filterRow}>
+            {(['all', 'wins', 'losses'] as FilterMode[]).map((mode) => {
+              const active = filter === mode;
+              return (
+                <TouchableOpacity
+                  key={mode}
+                  style={[styles.filterChip, active && styles.filterChipActive]}
+                  onPress={() => setFilter(mode)}
+                >
+                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{mode.toUpperCase()}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {filteredEntries.length === 0 ? (
+            <EmptyState icon="📚" title="No Journal Entries" subtitle="Executed trades will appear here once they close." />
+          ) : (
+            filteredEntries.map((entry) => {
+              const expanded = expandedId === entry.intent_id;
+              const pnl = Number(entry?.pnl ?? 0) || 0;
+              const entryPrice = Number(entry?.entry_credit ?? 0) || 0;
+              const pct = entryPrice ? (pnl / entryPrice) * 100 : 0;
+              const profitable = pnl >= 0;
+              return (
+                <TouchableOpacity
+                  key={entry.intent_id}
+                  activeOpacity={0.9}
+                  onPress={() => setExpandedId(expanded ? null : entry.intent_id)}
+                >
+                  <GlassCard style={styles.entryCard}>
+                    <View style={styles.entryTop}>
+                      <View style={styles.entryLeft}>
+                        <Text style={styles.entryTitle}>{entry.underlying || 'Unknown'}</Text>
+                        <Text style={styles.entrySub}>{entry.strategy || 'Unknown Strategy'}</Text>
+                      </View>
+                      <View style={styles.entryRight}>
+                        <PnLBadge value={pnl} />
+                        <Text style={[styles.entryPct, { color: profitable ? Colors.greenLight : Colors.redLight }]}>
+                          {profitable ? '+' : ''}{pct.toFixed(2)}%
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.metaRow}>
+                      <Tag label={entry.status || 'CLOSED'} color={Colors.textSecondary} />
+                      <Text style={styles.metaText}>
+                        {entry.closed_at
+                          ? new Date(entry.closed_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                          : 'Open'}
+                      </Text>
+                    </View>
+
+                    {expanded && (
+                      <View style={styles.expanded}>
+                        <View style={styles.detailRow}>
+                          <Text style={styles.detailLabel}>Entry</Text>
+                          <Text style={styles.detailValue}>₹{entryPrice.toLocaleString('en-IN')}</Text>
+                        </View>
+                        <View style={styles.detailRow}>
+                          <Text style={styles.detailLabel}>Exit Reason</Text>
+                          <Text style={styles.detailValue}>{entry.exit_reason || 'Manual / n.a.'}</Text>
+                        </View>
+                        <View style={styles.detailRow}>
+                          <Text style={styles.detailLabel}>Opened</Text>
+                          <Text style={styles.detailValue}>
+                            {entry.created_at
+                              ? new Date(entry.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                              : 'n.a.'}
+                          </Text>
+                        </View>
+                        <View style={styles.detailRow}>
+                          <Text style={styles.detailLabel}>Closed</Text>
+                          <Text style={styles.detailValue}>
+                            {entry.closed_at
+                              ? new Date(entry.closed_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                              : 'Still open'}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                  </GlassCard>
+                </TouchableOpacity>
+              );
+            })
+          )}
+          <View style={{ height: 100 }} />
+        </ScrollView>
+      </SafeAreaView>
+    </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  scrollContent: { padding: 16 },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 16, color: '#0f172a' },
-  entryContainer: { backgroundColor: '#f1f5f9', borderRadius: 10, padding: 16, marginBottom: 12 },
-  entryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  entryTitle: { fontSize: 16, fontWeight: '600', color: '#1e293b' },
-  entrySub: { fontSize: 13, color: '#64748b', marginTop: 4 },
-  pnl: { fontWeight: 'bold', fontSize: 15 },
-  green: { color: '#10B981' },
-  red: { color: '#EF4444' },
-  entryDetails: { marginTop: 10 },
-  empty: { textAlign: 'center', color: '#64748b', marginTop: 40 },
+  root: { flex: 1, backgroundColor: Colors.bg },
+  safeArea: { flex: 1 },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg },
+  headerTitle: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
+  headerSub: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
+  summaryStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bgGlass,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    marginTop: Spacing.lg,
+  },
+  summaryItem: { flex: 1, alignItems: 'center' },
+  summaryLabel: { fontSize: 11, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.8 },
+  summaryValue: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary, marginTop: 4 },
+  summaryDivider: { width: 1, alignSelf: 'stretch', backgroundColor: Colors.border },
+  scroll: { padding: Spacing.lg, flexGrow: 1 },
+  filterRow: { flexDirection: 'row', marginBottom: Spacing.md },
+  filterChip: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.bgGlass,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    marginRight: 8,
+  },
+  filterChipActive: { backgroundColor: Colors.accentGlow, borderColor: Colors.accent },
+  filterText: { fontSize: 12, fontWeight: '600', color: Colors.textSecondary },
+  filterTextActive: { color: Colors.textPrimary },
+  entryCard: { marginBottom: 12 },
+  entryTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  entryLeft: { flex: 1, paddingRight: 12 },
+  entryRight: { alignItems: 'flex-end' },
+  entryTitle: { fontSize: 17, fontWeight: '700', color: Colors.textPrimary },
+  entrySub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  entryPct: { fontSize: 12, fontWeight: '600', marginTop: 6 },
+  metaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 },
+  metaText: { fontSize: 12, color: Colors.textMuted },
+  expanded: { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: Colors.border },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  detailLabel: { fontSize: 12, color: Colors.textMuted },
+  detailValue: { fontSize: 12, color: Colors.textPrimary, fontWeight: '600', maxWidth: '60%', textAlign: 'right' },
 });
-
-export default JournalScreen;

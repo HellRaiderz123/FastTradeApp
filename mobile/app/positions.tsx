@@ -1,334 +1,227 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
-import { useTradeStore } from '../lib/store';
-import { paperAPI } from '../lib/api';
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, StyleSheet, RefreshControl,
+  TouchableOpacity, Alert, StatusBar,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
+import { journalAPI, exitAPI } from '../lib/api';
+import { Colors, Spacing, Radius } from '../lib/theme';
+import { GlassCard, MetalCard, PnLBadge, SectionHeader, EmptyState, LoadingSpinner, Tag, ProgressBar } from '../components/ui';
 
-const PositionsScreen = () => {
-  const { trades, setTrades } = useTradeStore();
-  const [loading, setLoading] = useState(false);
+const EXCLUDED = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
 
-  const fetchPositions = useCallback(async () => {
-    setLoading(true);
+export default function Positions() {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [positions, setPositions] = useState<any[]>([]);
+  const [closing, setClosing] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
     try {
-      const response = await paperAPI.getPositions();
-      if (Array.isArray(response.data)) {
-        setTrades(response.data);
-      }
-    } catch (error) {
-      // Optionally show error
-    } finally {
-      setLoading(false);
-    }
-  }, [setTrades]);
+      const res = await journalAPI.getExecutionIntents(100);
+      const all = res.data || [];
+      setPositions(all.filter((p: any) =>
+        p.status === 'EXECUTED' && !p.closed_at && !EXCLUDED.includes(p.strategy)
+      ));
+    } catch {}
+    setLoading(false);
+    setRefreshing(false);
+  }, []);
 
-  useEffect(() => {
-    fetchPositions();
-    const interval = setInterval(fetchPositions, 30000); // Poll every 30s
-    return () => clearInterval(interval);
-  }, [fetchPositions]);
+  useEffect(() => { load(); }, []);
 
-  const openPositions = trades.filter((t) => t.status === 'EXECUTED');
-  const totalPnL = openPositions.reduce((sum, t) => sum + t.pnl, 0);
+  const handleClose = (intentId: string, symbol: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Alert.alert('Close Position', `Close ${symbol}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Close', style: 'destructive',
+        onPress: async () => {
+          setClosing(intentId);
+          try {
+            await exitAPI.manualExit(intentId);
+            setPositions(prev => prev.filter(p => p.intent_id !== intentId));
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          } catch {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          }
+          setClosing(null);
+        },
+      },
+    ]);
+  };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
-          <Text style={styles.title}>Open Positions</Text>
-          <TouchableOpacity onPress={fetchPositions} disabled={loading} style={{padding:8}}>
-            <Text style={{color:'#3B82F6', fontWeight:'bold'}}>{loading ? 'Refreshing...' : 'Refresh'}</Text>
-          </TouchableOpacity>
-        </View>
+  const totalPnL = positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
+  const totalEntry = positions.reduce((s, p) => s + (p.entry_credit || 0), 0);
+  const pnlPct = totalEntry > 0 ? (totalPnL / totalEntry) * 100 : 0;
 
-        {/* Summary Cards */}
-        <View style={styles.summaryContainer}>
-          <SummaryCard label="Open" value={openPositions.length.toString()} />
-          <SummaryCard
-            label="P&L"
-            value={`₹${totalPnL.toLocaleString()}`}
-            color={totalPnL >= 0 ? '#10B981' : '#EF4444'}
-          />
-        </View>
-
-        {/* Positions List */}
-        {openPositions.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <View style={styles.positionsList}>
-            {openPositions.map((position) => (
-              <PositionCard key={position.id} position={position} />
-            ))}
-          </View>
-        )}
-
-        {/* Risk Metrics */}
-        <RiskMetricsSection />
-
-        {/* Coming Soon */}
-        <ComingSoonFeatures />
-      </ScrollView>
-    </SafeAreaView>
-  );
-};
-
-const SummaryCard = ({ label, value, color = '#fff' }) => (
-  <View style={styles.summaryCard}>
-    <Text style={styles.summaryLabel}>{label}</Text>
-    <Text style={[styles.summaryValue, { color }]}>{value}</Text>
-  </View>
-);
-
-const PositionCard = ({ position }) => (
-  <View style={styles.positionCard}>
-    <View style={styles.positionHeader}>
-      <View>
-        <Text style={styles.positionStrategy}>{position.strategy}</Text>
-        <Text style={styles.positionUnderlying}>{position.underlying}</Text>
-      </View>
-      <Text
-        style={[
-          styles.positionPnL,
-          { color: position.pnl >= 0 ? '#10B981' : '#EF4444' },
-        ]}
-      >
-        {position.pnl >= 0 ? '+' : ''}₹{Math.abs(position.pnl).toLocaleString()}
-      </Text>
-    </View>
-
-    <View style={styles.positionDetails}>
-      <Detail label="Entry" value={`₹${position.entry_price}`} />
-      <Detail label="Current" value={`₹${position.current_price}`} />
-      <Detail
-        label="Return"
-        value={`${position.pnl_percent.toFixed(2)}%`}
-        color={position.pnl >= 0 ? '#10B981' : '#EF4444'}
-      />
-    </View>
-
-    <TouchableOpacity style={styles.closeButton}>
-      <Text style={styles.closeButtonText}>Close Position</Text>
-    </TouchableOpacity>
-  </View>
-);
-
-const Detail = ({ label, value, color = '#fff' }) => (
-  <View>
-    <Text style={styles.detailLabel}>{label}</Text>
-    <Text style={[styles.detailValue, { color }]}>{value}</Text>
-  </View>
-);
-
-const EmptyState = () => (
-  <View style={styles.emptyState}>
-    <Text style={styles.emptyStateText}>No open positions</Text>
-    <Text style={styles.emptyStateSubtext}>Execute a strategy to open a position</Text>
-  </View>
-);
-
-const RiskMetricsSection = () => (
-  <View style={styles.metricsSection}>
-    <Text style={styles.sectionTitle}>Risk Metrics</Text>
-    <View style={styles.metricsGrid}>
-      <MetricBox label="Portfolio Heat" value="2.5%" status="good" />
-      <MetricBox label="Max Drawdown" value="-1.2%" status="warning" />
-    </View>
-  </View>
-);
-
-const MetricBox = ({ label, value, status }) => {
-  const statusColor = {
-    good: '#10B981',
-    warning: '#F59E0B',
-  }[status];
+  if (loading) return <View style={styles.root}><LoadingSpinner /></View>;
 
   return (
-    <View style={styles.metricBox}>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={[styles.metricValue, { color: statusColor }]}>{value}</Text>
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" />
+      <SafeAreaView edges={['top']} style={styles.safeArea}>
+        {/* Header */}
+        <LinearGradient colors={['#0F172A', '#080C14']} style={styles.header}>
+          <Text style={styles.headerTitle}>Positions</Text>
+          <Text style={styles.headerSub}>{positions.length} open</Text>
+
+          {/* Summary Bar */}
+          {positions.length > 0 && (
+            <View style={styles.summaryBar}>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Total P&L</Text>
+                <Text style={[styles.summaryValue, { color: totalPnL >= 0 ? Colors.green : Colors.red }]}>
+                  {totalPnL >= 0 ? '+' : ''}₹{Math.abs(totalPnL).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </Text>
+              </View>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Return</Text>
+                <Text style={[styles.summaryValue, { color: pnlPct >= 0 ? Colors.green : Colors.red }]}>
+                  {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+                </Text>
+              </View>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryLabel}>Invested</Text>
+                <Text style={styles.summaryValue}>₹{totalEntry.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</Text>
+              </View>
+            </View>
+          )}
+        </LinearGradient>
+
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={Colors.accent} />}
+          showsVerticalScrollIndicator={false}
+        >
+          {positions.length === 0 ? (
+            <EmptyState icon="📭" title="No Open Positions" subtitle="Execute a strategy to open a position" />
+          ) : (
+            positions.map((p) => {
+              const pnl = p.unrealized_pnl || 0;
+              const entry = p.entry_credit || 0;
+              const pct = entry > 0 ? (pnl / entry) * 100 : 0;
+              const isPos = pnl >= 0;
+              const mode = p.execution_result?.mode || '';
+              const isLive = mode.includes('ZERODHA_LIVE');
+              const legs = p.ticket?.legs || [];
+
+              return (
+                <MetalCard key={p.intent_id} style={styles.posCard}
+                  colors={isPos ? ['#0A1F14', '#0D1421'] : ['#1A0A0A', '#0D1421']}>
+                  {/* Top Row */}
+                  <View style={styles.posTop}>
+                    <View style={styles.posLeft}>
+                      <View style={styles.posSymbolRow}>
+                        <Text style={styles.posSymbol}>{p.underlying}</Text>
+                        {isLive && <Tag label="LIVE" color={Colors.red} bg={Colors.redBg} />}
+                      </View>
+                      <Text style={styles.posStrategy}>{p.strategy}</Text>
+                    </View>
+                    <View style={styles.posRight}>
+                      <Text style={[styles.posPnL, { color: isPos ? Colors.green : Colors.red }]}>
+                        {isPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </Text>
+                      <Text style={[styles.posPct, { color: isPos ? Colors.greenLight : Colors.redLight }]}>
+                        {isPos ? '+' : ''}{pct.toFixed(2)}%
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Progress bar */}
+                  <ProgressBar
+                    value={Math.abs(pct)}
+                    color={isPos ? Colors.green : Colors.red}
+                    height={3}
+                    style={{ marginVertical: 10 }}
+                  />
+
+                  {/* Metrics */}
+                  <View style={styles.posMetrics}>
+                    <View style={styles.posMetric}>
+                      <Text style={styles.posMetricLabel}>Entry</Text>
+                      <Text style={styles.posMetricValue}>₹{entry.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</Text>
+                    </View>
+                    {p.tp && (
+                      <View style={styles.posMetric}>
+                        <Text style={styles.posMetricLabel}>TP</Text>
+                        <Text style={[styles.posMetricValue, { color: Colors.green }]}>₹{p.tp}</Text>
+                      </View>
+                    )}
+                    {p.sl && (
+                      <View style={styles.posMetric}>
+                        <Text style={styles.posMetricLabel}>SL</Text>
+                        <Text style={[styles.posMetricValue, { color: Colors.red }]}>₹{p.sl}</Text>
+                      </View>
+                    )}
+                    <View style={styles.posMetric}>
+                      <Text style={styles.posMetricLabel}>Legs</Text>
+                      <Text style={styles.posMetricValue}>{legs.length}</Text>
+                    </View>
+                  </View>
+
+                  {/* Opened */}
+                  <View style={styles.posFooter}>
+                    <Text style={styles.posDate}>
+                      {p.created_at ? new Date(p.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => handleClose(p.intent_id, p.underlying)}
+                      disabled={closing === p.intent_id}
+                      style={styles.closeBtn}
+                    >
+                      <LinearGradient colors={['#7F1D1D', '#EF4444']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.closeBtnGrad}>
+                        <Text style={styles.closeBtnText}>{closing === p.intent_id ? 'Closing...' : 'Close'}</Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </View>
+                </MetalCard>
+              );
+            })
+          )}
+          <View style={{ height: 100 }} />
+        </ScrollView>
+      </SafeAreaView>
     </View>
   );
-};
-
-const ComingSoonFeatures = () => (
-  <View style={styles.comingSoon}>
-    <Text style={styles.comingSoonTitle}>More Features Coming</Text>
-    <View style={styles.featureGrid}>
-      {['Hedge', 'Adjust', 'Add To', 'Share'].map((feature) => (
-        <View key={feature} style={styles.featureCard}>
-          <Text style={styles.featureText}>{feature}</Text>
-        </View>
-      ))}
-    </View>
-  </View>
-);
+}
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f172a',
+  root: { flex: 1, backgroundColor: Colors.bg },
+  safeArea: { flex: 1 },
+  header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg },
+  headerTitle: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
+  headerSub: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
+  summaryBar: {
+    flexDirection: 'row', marginTop: Spacing.lg,
+    backgroundColor: Colors.bgGlass, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.border, padding: Spacing.md,
   },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 20,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 20,
-  },
-  summaryContainer: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 24,
-  },
-  summaryCard: {
-    flex: 1,
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
-    padding: 16,
-  },
-  summaryLabel: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginBottom: 8,
-  },
-  summaryValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  positionsList: {
-    marginBottom: 24,
-  },
-  positionCard: {
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-  },
-  positionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-  },
-  positionStrategy: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  positionUnderlying: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginTop: 4,
-  },
-  positionPnL: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  positionDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#334155',
-    marginBottom: 12,
-  },
-  detailLabel: {
-    fontSize: 11,
-    color: '#94a3b8',
-    marginBottom: 4,
-  },
-  detailValue: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  closeButton: {
-    backgroundColor: '#EF4444',
-    borderRadius: 8,
-    paddingVertical: 10,
-  },
-  closeButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    textAlign: 'center',
-    fontSize: 13,
-  },
-  emptyState: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyStateText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#cbd5e1',
-    marginBottom: 8,
-  },
-  emptyStateSubtext: {
-    fontSize: 13,
-    color: '#64748b',
-  },
-  metricsSection: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 12,
-  },
-  metricsGrid: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  metricBox: {
-    flex: 1,
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
-    padding: 12,
-  },
-  metricLabel: {
-    fontSize: 11,
-    color: '#94a3b8',
-    marginBottom: 6,
-  },
-  metricValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  comingSoon: {
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
-    padding: 16,
-    opacity: 0.6,
-  },
-  comingSoonTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#cbd5e1',
-    marginBottom: 12,
-  },
-  featureGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  featureCard: {
-    flex: 1,
-    minWidth: '45%',
-    backgroundColor: '#0f172a',
-    borderRadius: 8,
-    paddingVertical: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  featureText: {
-    color: '#94a3b8',
-    fontSize: 12,
-    fontWeight: '500',
-  },
+  summaryItem: { flex: 1, alignItems: 'center' },
+  summaryLabel: { fontSize: 11, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  summaryValue: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary, marginTop: 4 },
+  summaryDivider: { width: 1, backgroundColor: Colors.border },
+  scroll: { padding: Spacing.lg, flexGrow: 1 },
+  posCard: { marginBottom: 12, padding: Spacing.md },
+  posTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  posLeft: { flex: 1 },
+  posSymbolRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  posSymbol: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
+  posStrategy: { fontSize: 12, color: Colors.textMuted, marginTop: 3 },
+  posRight: { alignItems: 'flex-end' },
+  posPnL: { fontSize: 20, fontWeight: '700' },
+  posPct: { fontSize: 13, fontWeight: '500', marginTop: 2 },
+  posMetrics: { flexDirection: 'row', gap: 16 },
+  posMetric: {},
+  posMetricLabel: { fontSize: 11, color: Colors.textMuted },
+  posMetricValue: { fontSize: 13, fontWeight: '600', color: Colors.textPrimary, marginTop: 2 },
+  posFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
+  posDate: { fontSize: 11, color: Colors.textMuted },
+  closeBtn: { borderRadius: Radius.sm, overflow: 'hidden' },
+  closeBtnGrad: { paddingHorizontal: 16, paddingVertical: 7 },
+  closeBtnText: { fontSize: 13, fontWeight: '600', color: '#fff' },
 });
-
-export default PositionsScreen;

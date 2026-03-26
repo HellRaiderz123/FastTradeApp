@@ -222,9 +222,9 @@ def main() -> int:
 
         saved = []
         if args.save_top and top_items:
-            existing = _load_strategies()
-            existing_names = {s.get("name") for s in existing}
-            next_id = _next_id(existing)
+            from app.db.models_condition_strategy import ConditionStrategy, ConditionStrategyBacktest
+            from app.core.utils.time import now_ist
+            existing_names = {name for (name,) in db.query(ConditionStrategy.name).all()}
             for rank, item in enumerate(top_items, start=1):
                 strategy = dict(item["strategy"])
                 base_name = strategy["name"]
@@ -234,21 +234,38 @@ def main() -> int:
                     save_name = f"{base_name} #{suffix}"
                     suffix += 1
 
-                strategy["id"] = next_id
-                next_id += 1
-                strategy["name"] = save_name
-                strategy["created_at"] = __import__("datetime").datetime.now().isoformat()
-                strategy["last_scan"] = None
-                strategy["last_signal_count"] = 0
-                strategy["discovery_metadata"] = {
-                    "rank": rank,
-                    "score": item["score"],
-                    "summary": item["summary"],
-                }
-                existing.append(strategy)
+                row = ConditionStrategy(
+                    name=save_name,
+                    description=f"[LAB] rank #{rank} | score={item['score']} | return={item['summary'].get('total_return_pct')}%",
+                    strategy_type=strategy.get("strategy_type", "Equity Swing"),
+                    direction=strategy.get("direction", "BUY"),
+                    timeframe=strategy.get("timeframe", "Day"),
+                    universe=strategy.get("universe", "NIFTY50"),
+                    instruments=strategy.get("instruments", []),
+                    entry_conditions=strategy.get("entry_conditions", []),
+                    exit_config=strategy.get("exit_config", {}),
+                    is_active=True,
+                    auto_scan_enabled=False,
+                    auto_amount=10000.0,
+                )
+                db.add(row)
+                db.flush()
+                bt = ConditionStrategyBacktest(
+                    strategy_id=row.id,
+                    strategy_name=save_name,
+                    start_date=args.start_date or "",
+                    end_date=args.end_date or "",
+                    initial_capital=args.initial_capital,
+                    final_capital=item.get("final_capital"),
+                    result={"summary": item["summary"], "strategy": strategy},
+                )
+                db.add(bt)
+                db.flush()
+                row.last_backtest_at = now_ist()
+                row.last_backtest_id = bt.id
                 existing_names.add(save_name)
-                saved.append({"id": strategy["id"], "name": save_name, "rank": rank})
-            _save_strategies(existing)
+                saved.append({"id": row.id, "name": save_name, "rank": rank})
+            db.commit()
 
         payload = {
             "generated_count": len(candidates),
@@ -292,7 +309,7 @@ def main() -> int:
                     f"sharpe={summary.get('sharpe_ratio', 0)} | trades={summary.get('total_trades', 0)}"
                 )
             if saved:
-                print(f"Saved {len(saved)} strategies to condition_strategies.json")
+                print(f"Saved {len(saved)} strategies to DB (visible in CreateScanner)")
 
         return 0
     finally:

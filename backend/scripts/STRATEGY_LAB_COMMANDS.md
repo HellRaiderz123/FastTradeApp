@@ -48,18 +48,7 @@ docker exec -it fasttrade-backend python3 /app/scripts/discover_condition_strate
 
 ### 2. Fixed SL/TP only — no TSL (recommended based on observation)
 ```
-docker exec -it fasttrade-backend python3 /app/scripts/discover_condition_strategies.py \
-  --timeframe Day \
-  --max-candidates 300 \
-  --top 5 \
-  --start-date 2023-09-11 \
-  --end-date 2026-03-23 \
-  --workers 8 \
-  --optimize-exits \
-  --tsl-grid 0 \
-  --sl-grid 2,3,4,5 \
-  --tp-grid 6,8,10,12,15 \
-  --save-top
+docker exec -it fasttrade-backend python3 /app/scripts/discover_condition_strategies.py --timeframe Day --max-candidates 300 --top 5 --start-date 2023-09-11 --end-date 2026-03-23 --workers 12 --tsl-grid 0 --sl-grid 2,3,4,5 --tp-grid 6,8,10,12,15 --save-top
 ```
 
 ### 3. Wider SL/TP sweep — more combos
