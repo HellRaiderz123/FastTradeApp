@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { tradeCostAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
@@ -17,6 +18,7 @@ import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag
 type Tab = 'calculator' | 'summary' | 'history';
 
 export default function TradeCostTrackerScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('calculator');
@@ -98,6 +100,7 @@ export default function TradeCostTrackerScreen() {
           title="Trade Costs"
           subtitle="Calculator, summary, and historical charge tracking"
           badge={<Tag label={`${history.length} RECORDS`} color={Colors.accent} bg={Colors.accentSoft} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

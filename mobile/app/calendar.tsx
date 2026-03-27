@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { calendarAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, ScreenHeader, Tag } from '../components/ui';
@@ -16,6 +17,7 @@ import { EmptyState, GlassCard, LoadingSpinner, ScreenHeader, Tag } from '../com
 type Tab = 'today' | 'week' | 'events';
 
 export default function CalendarScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<Tab>('today');
@@ -67,6 +69,7 @@ export default function CalendarScreen() {
           title="Calendar"
           subtitle="Economic and market events across upcoming sessions"
           badge={<Tag label={`${events.length} EVENTS`} color={Colors.accent} bg={Colors.accentSoft} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

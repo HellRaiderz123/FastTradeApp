@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, StatusBar, TextInput, Dimensions, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import Svg, { Polyline, Polygon, Line, Text as SvgText } from 'react-native-svg';
 import { backtestAPI, scannerAPI } from '../lib/api';
 import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
@@ -11,12 +12,20 @@ import { GlassCard, PrimaryButton, Tag } from '../components/ui';
 const SCREEN_W = Dimensions.get('window').width;
 
 const BacktestScreen = () => {
+  const router = useRouter();
   const params = useLocalSearchParams<{
     strategyId?: string;
     strategyName?: string;
     universe?: string;
     timeframe?: string;
     backtestType?: string;
+    slPct?: string;
+    tpPct?: string;
+    tslPct?: string;
+    exitMode?: string;
+    positionSizePct?: string;
+    maxOpenTrades?: string;
+    initialCapital?: string;
   }>();
   const prefilledStrategyId = params.strategyId ? Number(params.strategyId) : null;
   const initialUnderlying = params.universe ? String(params.universe) : 'NIFTY';
@@ -28,9 +37,12 @@ const BacktestScreen = () => {
   const [strategyId, setStrategyId] = useState(prefilledStrategyId ? String(prefilledStrategyId) : '');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [capital, setCapital] = useState('100000');
-  const [slPct, setSlPct] = useState('');
-  const [tpPct, setTpPct] = useState('');
+  const [capital, setCapital] = useState(params.initialCapital ? String(params.initialCapital) : '100000');
+  const [slPct, setSlPct] = useState(params.slPct ? String(params.slPct) : '');
+  const [tpPct, setTpPct] = useState(params.tpPct ? String(params.tpPct) : '');
+  const [tslPct, setTslPct] = useState(params.tslPct ? String(params.tslPct) : '0');
+  const [positionSizePct, setPositionSizePct] = useState(params.positionSizePct ? String(params.positionSizePct) : '10');
+  const [maxOpenTrades, setMaxOpenTrades] = useState(params.maxOpenTrades ? String(params.maxOpenTrades) : '5');
   const [loading, setLoading] = useState(false);
   const [dateRangeLoading, setDateRangeLoading] = useState(initialType === 'scanner');
   const [dateRangeInfo, setDateRangeInfo] = useState<string | null>(null);
@@ -85,8 +97,8 @@ const BacktestScreen = () => {
       if (backtestType === 'scanner') {
         let payload: any = {
           initial_capital: Number(capital) || 100000,
-          position_size_pct: 10,
-          max_open_trades: 5,
+          position_size_pct: Number(positionSizePct) || 10,
+          max_open_trades: Number(maxOpenTrades) || 5,
           start_date: startDate,
           end_date: endDate,
         };
@@ -155,6 +167,9 @@ const BacktestScreen = () => {
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <LinearGradient colors={Gradients.header} style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Ionicons name="chevron-back" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
           <Text style={styles.title}>Backtest Lab</Text>
           <Text style={styles.subtitle}>Run historical strategy checks with fast mobile inputs</Text>
         </LinearGradient>
@@ -234,6 +249,33 @@ const BacktestScreen = () => {
               <TextInput style={styles.input} value={capital} onChangeText={setCapital} keyboardType="numeric" placeholder="100000" placeholderTextColor={Colors.textFaint} />
             </View>
 
+            {backtestType === 'scanner' ? (
+              <View style={styles.rowInputs}>
+                <View style={[styles.inputGroup, styles.halfInput]}>
+                  <Text style={styles.label}>Position Size %</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={positionSizePct}
+                    onChangeText={setPositionSizePct}
+                    keyboardType="decimal-pad"
+                    placeholder="10"
+                    placeholderTextColor={Colors.textFaint}
+                  />
+                </View>
+                <View style={[styles.inputGroup, styles.halfInput]}>
+                  <Text style={styles.label}>Max Open Trades</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={maxOpenTrades}
+                    onChangeText={setMaxOpenTrades}
+                    keyboardType="number-pad"
+                    placeholder="5"
+                    placeholderTextColor={Colors.textFaint}
+                  />
+                </View>
+              </View>
+            ) : null}
+
             <View style={styles.rowInputs}>
               <View style={[styles.inputGroup, styles.halfInput]}>
                 <Text style={styles.label}>SL % (optional)</Text>
@@ -260,8 +302,15 @@ const BacktestScreen = () => {
             </View>
 
             {backtestType === 'scanner' ? (
+              <View style={styles.strategyInfoRow}>
+                <Text style={styles.strategyInfoLabel}>Scanner Exit Setup</Text>
+                <Text style={styles.strategyInfoValue}>SL {slPct || '5'}% · TP {tpPct || '10'}% · TSL {tslPct || '0'}% · {params.exitMode || 'percentage'}</Text>
+              </View>
+            ) : null}
+
+            {backtestType === 'scanner' ? (
               <Text style={styles.helperText}>
-                Scanner mode uses strategy exit config; TP/SL inputs are ignored.{`\n`}Strategy IDs: check Scanner tab (e.g. ID 7 = Day, ID 1 = 1 Hour).
+                Scanner mode uses the strategy's saved exit config shown above. Position size and max open trades can still be adjusted here.
               </Text>
             ) : (
               <Text style={styles.helperText}>
@@ -314,6 +363,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.bg },
   safeArea: { flex: 1 },
   header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg },
+  backButton: { alignSelf: 'flex-start', marginBottom: 10 },
   title: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
   subtitle: { marginTop: 4, fontSize: 13, color: Colors.textMuted },
   scrollContent: { padding: Spacing.lg },

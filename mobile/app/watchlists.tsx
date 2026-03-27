@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { watchlistAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
@@ -20,6 +21,7 @@ import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag
 const PRESET_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
 
 export default function WatchlistsScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [watchlists, setWatchlists] = useState<any[]>([]);
@@ -157,6 +159,7 @@ export default function WatchlistsScreen() {
           title="Watchlists"
           subtitle="Track your favourite symbols in organised lists"
           badge={<Tag label={`${watchlists.length} LISTS`} color={Colors.accent} bg={Colors.accentSoft} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

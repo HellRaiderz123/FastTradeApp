@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Line, Path, Rect } from 'react-native-svg';
+import { useRouter } from 'expo-router';
 import { financeAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ProgressBar, ScreenHeader, StatCard, Tag } from '../components/ui';
@@ -128,6 +129,7 @@ const formatMonthLabel = (key: string) => {
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export default function FinanceScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [savingTransaction, setSavingTransaction] = useState(false);
@@ -346,6 +348,7 @@ export default function FinanceScreen() {
           title="Finance"
           subtitle="Month filters, trends, budgets, and transaction management"
           badge={<Tag label="EXPANDED" color={Colors.green} bg={Colors.greenBg} />}
+          onBack={() => router.back()}
         >
           <View style={styles.headerActions}>
             <PrimaryButton title="Add Tx" onPress={() => setTransactionModalVisible(true)} small style={styles.headerButton} />

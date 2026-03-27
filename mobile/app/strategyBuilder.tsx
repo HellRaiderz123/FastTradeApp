@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, TextInput, StatusBar } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TextInput, StatusBar, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import { greeksAPI, marketAPI } from '../lib/api';
 import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
@@ -32,6 +34,7 @@ const defaultLeg = (atm) => ({
 });
 
 const StrategyBuilderScreen = () => {
+  const router = useRouter();
   const [legs, setLegs] = useState([]);
   const [atm, setAtm] = useState(20000);
   const [spot, setSpot] = useState(20000);
@@ -129,6 +132,9 @@ const StrategyBuilderScreen = () => {
       <StatusBar barStyle="light-content" />
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <LinearGradient colors={Gradients.header} style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Ionicons name="chevron-back" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
           <Text style={styles.title}>Strategy Builder</Text>
           <Text style={styles.subtitle}>Build option legs and calculate Greeks from your phone</Text>
         </LinearGradient>
@@ -279,6 +285,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.bg },
   safeArea: { flex: 1 },
   header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg },
+  backButton: { alignSelf: 'flex-start', marginBottom: 10 },
   title: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
   subtitle: { marginTop: 4, fontSize: 13, color: Colors.textMuted },
   scrollContent: { padding: Spacing.lg },

@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { marketAPI, optionsAPI } from '../lib/api';
 import { Colors, Spacing, Radius, Gradients } from '../lib/theme';
 import { ScreenHeader, Tag, GlassCard } from '../components/ui';
@@ -40,6 +41,7 @@ interface ChainData {
 }
 
 export default function OptionChainScreen() {
+  const router = useRouter();
   const [symbol, setSymbol] = useState('NIFTY');
   const [chain, setChain] = useState<ChainData | null>(null);
   const [expiries, setExpiries] = useState<string[]>([]);
@@ -123,6 +125,7 @@ export default function OptionChainScreen() {
             <Text style={styles.liveBadgeText}>LIVE</Text>
           </View>
         }
+        onBack={() => router.back()}
       />
 
       <SafeAreaView edges={['bottom']} style={styles.flex}>

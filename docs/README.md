@@ -12,6 +12,7 @@ backtesting, and personal finance tracking in a single application.
 
 | Document                                  | Description                                      |
 |-------------------------------------------|--------------------------------------------------|
+| [SELF_HOST_SETUP.md](./SELF_HOST_SETUP.md)| **Start here** — full self-host deployment guide |
 | [ARCHITECTURE.md](./ARCHITECTURE.md)      | System design, tech stack, data flow diagrams    |
 | [FEATURES.md](./FEATURES.md)              | Complete feature reference across all modules    |
 | [FUNCTIONAL_SPEC.md](./FUNCTIONAL_SPEC.md)| API reference, user flows, data structures       |
@@ -53,8 +54,10 @@ Once backend is running: http://localhost:8000/docs
 
 1. Set `EXECUTION_MODE=PAPER_TRADING` to start safely (no real orders)
 2. Add Zerodha API keys to `backend/.env`
-3. Set `AUTH_ENABLED=false` for local dev (change for production)
+3. Set `AUTH_ENABLED=true` and generate a strong `AUTH_SECRET_KEY`
 4. Set `RISK_PER_TRADE=2` and `MAX_TRADES_PER_DAY=5` as starting risk limits
+
+See [SELF_HOST_SETUP.md](./SELF_HOST_SETUP.md) for the full step-by-step guide.
 
 ---
 

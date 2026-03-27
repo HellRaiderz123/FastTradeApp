@@ -43,6 +43,7 @@ export default function SettingsScreen() {
   const [apiBaseInput, setApiBaseInput] = useState('');
   const [aiApiBaseInput, setAiApiBaseInput] = useState('');
   const [savingApiBase, setSavingApiBase] = useState(false);
+  const [savingAiApiBase, setSavingAiApiBase] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -68,7 +69,7 @@ export default function SettingsScreen() {
 
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [biometricEnabled]);
 
   useEffect(() => {
     load();
@@ -101,7 +102,9 @@ export default function SettingsScreen() {
         await systemAPI.enable();
         setSystemEnabled(true);
       }
-    } catch {}
+    } catch {
+      Alert.alert('Action failed', 'Could not update trading engine status. Check backend connectivity and try again.');
+    }
   };
 
   const handleSaveApiBase = async () => {
@@ -131,7 +134,7 @@ export default function SettingsScreen() {
       return;
     }
 
-    setSavingApiBase(true);
+    setSavingAiApiBase(true);
     try {
       await persistAiApiBaseUrl(nextUrl);
       setAiApiBaseInput(getAiApiBaseUrl());
@@ -139,17 +142,35 @@ export default function SettingsScreen() {
     } catch {
       Alert.alert('Failed', 'Could not save AI URL. Please try again.');
     }
+    setSavingAiApiBase(false);
+  };
+
+  const handleResetApiBase = async () => {
+    const fallbackUrl = getDefaultApiBaseUrl();
+    setSavingApiBase(true);
+    try {
+      await persistApiBaseUrl(fallbackUrl);
+      setApiBaseInput(getApiBaseUrl());
+      Alert.alert('Reset complete', 'Backend URL was reset to the app default.');
+    } catch {
+      setApiBaseInput(fallbackUrl);
+      Alert.alert('Reset failed', 'Could not persist the default backend URL.');
+    }
     setSavingApiBase(false);
   };
 
-  const handleResetApiBase = () => {
-    const fallbackUrl = getDefaultApiBaseUrl();
-    setApiBaseInput(fallbackUrl);
-  };
-
-  const handleResetAiApiBase = () => {
+  const handleResetAiApiBase = async () => {
     const fallbackUrl = getDefaultAiApiBaseUrl();
-    setAiApiBaseInput(fallbackUrl);
+    setSavingAiApiBase(true);
+    try {
+      await persistAiApiBaseUrl(fallbackUrl);
+      setAiApiBaseInput(getAiApiBaseUrl());
+      Alert.alert('Reset complete', 'AI URL was reset to the app default.');
+    } catch {
+      setAiApiBaseInput(fallbackUrl);
+      Alert.alert('Reset failed', 'Could not persist the default AI URL.');
+    }
+    setSavingAiApiBase(false);
   };
 
   const handleLogout = () => {
@@ -210,6 +231,11 @@ export default function SettingsScreen() {
                 />
               </View>
             </View>
+            <View style={styles.infoBlock}>
+              <InfoRow label="API" value={getApiBaseUrl()} />
+              <InfoRow label="AI API" value={getAiApiBaseUrl()} />
+              <InfoRow label="Biometric" value={toggles.faceId ? 'Enabled' : 'Disabled'} />
+            </View>
           </GlassCard>
 
           <GlassCard style={styles.sectionCard}>
@@ -229,7 +255,7 @@ export default function SettingsScreen() {
               onChangeText={setApiBaseInput}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="http:// 192.168.1.103:8000"
+              placeholder="http://192.168.1.103:8000"
               placeholderTextColor={Colors.textFaint}
               style={styles.urlInput}
             />
@@ -250,7 +276,7 @@ export default function SettingsScreen() {
               style={styles.urlInput}
             />
             <View style={styles.connectionActions}>
-              <PrimaryButton title="Save AI URL" onPress={handleSaveAiApiBase} loading={savingApiBase} style={styles.connectionButton} />
+              <PrimaryButton title="Save AI URL" onPress={handleSaveAiApiBase} loading={savingAiApiBase} style={styles.connectionButton} />
               <PrimaryButton title="Reset AI" onPress={handleResetAiApiBase} variant="ghost" style={styles.connectionButton} />
             </View>
             <InfoRow label="Active AI URL" value={getAiApiBaseUrl()} />
@@ -329,6 +355,7 @@ const styles = StyleSheet.create({
   profileName: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
   profileSub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
   statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  infoBlock: { marginTop: 14, borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 10 },
   rowLabel: { fontSize: 15, fontWeight: '600', color: Colors.textPrimary },
   rowRight: { flexDirection: 'row', alignItems: 'center' },
   sectionCard: { marginBottom: 12 },

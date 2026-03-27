@@ -24,7 +24,7 @@ type AuthState = {
   signOut: () => Promise<void>;
   refreshUser: () => Promise<void>;
   setBiometricEnabled: (enabled: boolean) => Promise<{ ok: boolean; reason?: string }>;
-  unlockWithBiometrics: () => Promise<boolean>;
+  unlockWithBiometrics: () => Promise<{ success: boolean; error: string | null }>;
   lockIfNeeded: () => void;
   handleAppStateChange: (nextState: AppStateStatus) => void;
 };
@@ -144,22 +144,33 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const state = get();
     if (!state.biometricEnabled) {
       set({ isLocked: false });
-      return true;
+      return { success: true, error: null };
     }
 
     const result = await LocalAuthentication.authenticateAsync({
       promptMessage: 'Unlock FastTrade',
       cancelLabel: 'Cancel',
+      // Keep device passcode as an iOS fallback — Face ID is tried first, passcode
+      // is shown automatically by iOS if biometrics fail or are locked out.
       disableDeviceFallback: false,
-      fallbackLabel: 'Use device passcode',
     });
 
     if (result.success) {
       set({ isLocked: false });
-      return true;
+      return { success: true, error: null };
     }
 
-    return false;
+    const errorCode = (result as any).error ?? 'unknown';
+
+    // If biometrics are not enrolled at all, auto-disable the feature so the
+    // user isn't stuck on the lock screen forever.
+    if (errorCode === 'not_enrolled') {
+      await AsyncStorage.setItem(FACE_UNLOCK_STORAGE_KEY, 'false');
+      set({ biometricEnabled: false, isLocked: false });
+      return { success: true, error: null };
+    }
+
+    return { success: false, error: errorCode as string };
   },
 
   lockIfNeeded: () => {

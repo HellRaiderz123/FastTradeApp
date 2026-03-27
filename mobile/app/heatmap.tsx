@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { marketDashboardAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, ScreenHeader, Tag } from '../components/ui';
@@ -21,6 +22,7 @@ type HeatmapStock = {
 };
 
 export default function HeatmapScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stocks, setStocks] = useState<HeatmapStock[]>([]);
@@ -79,6 +81,7 @@ export default function HeatmapScreen() {
           title="Market Heatmap"
           subtitle="NIFTY performance snapshot refreshed every 30s"
           badge={<Tag label={`${stocks.length} STOCKS`} color={Colors.accent} bg={Colors.accentSoft} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

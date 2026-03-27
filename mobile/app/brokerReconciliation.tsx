@@ -8,11 +8,13 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { reconcileAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
 
 export default function BrokerReconciliationScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -66,6 +68,7 @@ export default function BrokerReconciliationScreen() {
           title="Reconciliation"
           subtitle="Sync broker-closed positions back into FastTrade"
           badge={<Tag label={`${status?.open_count ?? 0} OPEN`} color={Colors.amber} bg={Colors.amberBg} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

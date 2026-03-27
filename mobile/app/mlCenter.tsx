@@ -9,11 +9,13 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { mlAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ProgressBar, ScreenHeader, Tag } from '../components/ui';
 
 export default function MLCenterScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [training, setTraining] = useState(false);
@@ -119,6 +121,7 @@ export default function MLCenterScreen() {
           title="ML Center"
           subtitle="Train, backfill, and monitor model health"
           badge={<Tag label={String(metrics?.model_status || 'unknown').toUpperCase()} color={Colors.accentLight} bg={Colors.accentSoft} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

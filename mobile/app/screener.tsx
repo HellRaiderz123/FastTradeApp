@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { screenerAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
@@ -32,6 +33,7 @@ const DEFAULT_FILTERS = {
 };
 
 export default function ScreenerScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -122,6 +124,7 @@ export default function ScreenerScreen() {
           title="Stock Screener"
           subtitle="Filter NIFTY stocks with quick technical criteria"
           badge={<Tag label={`${results.length} MATCHES`} color={Colors.accent} bg={Colors.accentSoft} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

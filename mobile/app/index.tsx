@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, RefreshControl,
+  Alert, View, Text, ScrollView, StyleSheet, RefreshControl,
   TouchableOpacity, StatusBar, Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -25,6 +25,8 @@ export default function Dashboard() {
   const ltpPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const posPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevPnLRef = useRef<number>(0);
+  const [atActionLoading, setAtActionLoading] = useState(false);
+  const atActionRef = useRef(false);
 
   // Pulsing LIVE dot
   useEffect(() => {
@@ -86,16 +88,16 @@ export default function Dashboard() {
       ]);
       if (posRes.status === 'fulfilled') {
         const all = posRes.value.data || [];
-        setPositions(all.filter((p: any) =>
+        const open = all.filter((p: any) =>
           p.status === 'EXECUTED' && !p.closed_at &&
           !['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'].includes(p.strategy)
-        ));
+        );
+        setPositions(open);
+        prevPnLRef.current = open.reduce((sum: number, position: any) => sum + (position.unrealized_pnl || 0), 0);
       }
       if (sysRes.status === 'fulfilled') setSystemEnabled(sysRes.value.data?.trading_enabled);
       if (atRes.status === 'fulfilled') setAutoTrader(atRes.value.data);
       if (ltpRes.status === 'fulfilled') setNiftyLtp(ltpRes.value.data?.ltp);
-      const pnl = positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
-      prevPnLRef.current = pnl;
       setLastUpdated(new Date());
     } catch {}
     setLoading(false);
@@ -104,9 +106,43 @@ export default function Dashboard() {
 
   useEffect(() => { load(); }, []);
 
+  const runAtAction = async (action: 'start' | 'stop' | 'pause') => {
+    if (atActionRef.current) return;
+    atActionRef.current = true;
+    setAtActionLoading(true);
+    try {
+      if (action === 'start') await autoTraderAPI.start();
+      else if (action === 'stop') await autoTraderAPI.stop();
+      else await autoTraderAPI.pause();
+      const r = await autoTraderAPI.getStatus();
+      setAutoTrader((prev: any) => ({ ...prev, ...r.data }));
+    } catch (err: any) {
+      Alert.alert('Error', err?.response?.data?.detail || `${action} failed`);
+    }
+    setAtActionLoading(false);
+    atActionRef.current = false;
+  };
+
   const totalPnL = positions.reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
   const winners = positions.filter(p => (p.unrealized_pnl || 0) > 0).length;
   const winRate = positions.length > 0 ? Math.round(winners / positions.length * 100) : 0;
+  const rawAutoTraderStatus = String(autoTrader?.status || 'STOPPED').toUpperCase();
+  const effectiveAutoTraderStatus = !systemEnabled
+    ? 'ENGINE OFF'
+    : !autoTrader?.enabled
+      ? 'DISABLED'
+      : rawAutoTraderStatus;
+  const autoTraderRunning = effectiveAutoTraderStatus === 'RUNNING';
+  const autoTraderPaused = effectiveAutoTraderStatus === 'PAUSED';
+  const openSlots = autoTrader?.max_positions != null
+    ? Math.max(Number(autoTrader.max_positions || 0) - Number(autoTrader.open_positions || 0), 0)
+    : 0;
+  const trackedSymbols = Array.isArray(autoTrader?.underlyings) && autoTrader.underlyings.length > 0
+    ? autoTrader.underlyings.join(', ')
+    : 'NIFTY';
+  const lastScanLabel = autoTrader?.last_scan_at
+    ? new Date(autoTrader.last_scan_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    : 'Not scanned';
 
   if (loading) return (
     <View style={styles.root}>
@@ -184,34 +220,107 @@ export default function Dashboard() {
             <StatCard label="Winners" value={winners.toString()} color={Colors.green} />
           </View>
 
+          <View style={styles.statsRow}>
+            <StatCard label="Engine" value={systemEnabled ? 'ON' : 'OFF'} color={systemEnabled ? Colors.green : Colors.red} style={{ marginRight: 8 }} />
+            <StatCard label="Trades Today" value={String(autoTrader?.daily_trades || 0)} color={Colors.accent} style={{ marginRight: 8 }} />
+            <StatCard label="Open Slots" value={String(openSlots)} color={openSlots > 0 ? Colors.green : Colors.amber} />
+          </View>
+
           {/* Auto Trader Status */}
           {autoTrader && (
             <MetalCard style={styles.card} colors={
-              autoTrader.status === 'RUNNING'
+              autoTraderRunning
                 ? ['#064E3B', '#0D1421']
+                : autoTraderPaused
+                  ? ['#3A2A05', '#0D1421']
                 : ['#111827', '#0D1421']
             }>
               <View style={styles.row}>
                 <View>
                   <Text style={styles.cardTitle}>Auto Trader</Text>
-                  <Text style={styles.cardSub}>Mode: {autoTrader.mode || 'PAPER'}</Text>
+                  <Text style={styles.cardSub}>Mode: {autoTrader.mode || 'PAPER'}  ·  Engine {systemEnabled ? 'ON' : 'OFF'}</Text>
                 </View>
                 <Tag
-                  label={autoTrader.status || 'STOPPED'}
-                  color={autoTrader.status === 'RUNNING' ? Colors.green : autoTrader.status === 'PAUSED' ? Colors.amber : Colors.textMuted}
+                  label={effectiveAutoTraderStatus}
+                  color={autoTraderRunning ? Colors.green : autoTraderPaused ? Colors.amber : Colors.red}
                 />
               </View>
-              {autoTrader.status === 'RUNNING' && (
-                <View style={[styles.row, { marginTop: 12 }]}>
-                  <Text style={styles.metricLabel}>Daily P&L</Text>
-                  <Text style={[styles.metricValue, { color: (autoTrader.daily_pnl || 0) >= 0 ? Colors.green : Colors.red }]}>
-                    ₹{(autoTrader.daily_pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                  </Text>
-                  <Text style={styles.metricLabel}>Trades Today</Text>
-                  <Text style={styles.metricValue}>{autoTrader.daily_trades || 0}</Text>
-                </View>
-              )}
+              <View style={[styles.row, { marginTop: 12 }] }>
+                <Text style={styles.metricLabel}>Daily P&L</Text>
+                <Text style={[styles.metricValue, { color: (autoTrader.daily_pnl || 0) >= 0 ? Colors.green : Colors.red }] }>
+                  ₹{(autoTrader.daily_pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </Text>
+                <Text style={styles.metricLabel}>Trades Today</Text>
+                <Text style={styles.metricValue}>{autoTrader.daily_trades || 0}</Text>
+              </View>
+              <View style={[styles.row, { marginTop: 10 }] }>
+                <Text style={styles.metricLabel}>Open Positions</Text>
+                <Text style={styles.metricValue}>{autoTrader.open_positions || 0}/{autoTrader.max_positions || 0}</Text>
+                <Text style={styles.metricLabel}>Last Scan</Text>
+                <Text style={styles.metricValue}>{lastScanLabel}</Text>
+              </View>
+              <Text style={styles.inlineMeta}>Underlyings: {trackedSymbols}</Text>
+              {autoTrader.error_message ? <Text style={styles.errorText}>{autoTrader.error_message}</Text> : null}
+              {/* Quick controls */}
+              <View style={styles.atControlRow}>
+                <TouchableOpacity
+                  style={[styles.atBtn, styles.atBtnStart, (autoTraderRunning || atActionLoading) && styles.atBtnDisabled]}
+                  disabled={autoTraderRunning || atActionLoading}
+                  onPress={() => runAtAction('start')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.atBtnText}>Start</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.atBtn, styles.atBtnPause, (!autoTraderRunning && !autoTraderPaused || atActionLoading) && styles.atBtnDisabled]}
+                  disabled={!autoTraderRunning && !autoTraderPaused || atActionLoading}
+                  onPress={() => runAtAction(autoTraderPaused ? 'start' : 'pause')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.atBtnText}>{autoTraderPaused ? 'Resume' : 'Pause'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.atBtn, styles.atBtnStop, (!autoTraderRunning && !autoTraderPaused || atActionLoading) && styles.atBtnDisabled]}
+                  disabled={!autoTraderRunning && !autoTraderPaused || atActionLoading}
+                  onPress={() =>
+                    Alert.alert('Stop Auto Trader', 'This will halt all automated trading. Continue?', [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Stop', style: 'destructive', onPress: () => runAtAction('stop') },
+                    ])
+                  }
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.atBtnText}>Stop</Text>
+                </TouchableOpacity>
+              </View>
             </MetalCard>
+          )}
+
+          {autoTrader && (
+            <GlassCard style={styles.card}>
+              <View style={styles.sectionHeadCompact}>
+                <Text style={styles.sectionTitle}>System Snapshot</Text>
+                <Tag label={niftyLtp ? 'MARKET LINKED' : 'WAITING'} color={niftyLtp ? Colors.green : Colors.amber} bg={niftyLtp ? Colors.greenBg : Colors.amberBg} />
+              </View>
+              <View style={styles.snapshotGrid}>
+                <View style={styles.snapshotItem}>
+                  <Text style={styles.snapshotLabel}>Scan Interval</Text>
+                  <Text style={styles.snapshotValue}>{autoTrader.scan_interval_sec || 0}s</Text>
+                </View>
+                <View style={styles.snapshotItem}>
+                  <Text style={styles.snapshotLabel}>Capital</Text>
+                  <Text style={styles.snapshotValue}>₹{Number(autoTrader.capital || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</Text>
+                </View>
+                <View style={styles.snapshotItem}>
+                  <Text style={styles.snapshotLabel}>Tracked</Text>
+                  <Text style={styles.snapshotValue}>{Array.isArray(autoTrader.underlyings) ? autoTrader.underlyings.length : 1}</Text>
+                </View>
+                <View style={styles.snapshotItem}>
+                  <Text style={styles.snapshotLabel}>Mode</Text>
+                  <Text style={styles.snapshotValue}>{autoTrader.mode || 'PAPER'}</Text>
+                </View>
+              </View>
+            </GlassCard>
           )}
 
           {/* Open Positions Preview */}
@@ -322,9 +431,14 @@ const styles = StyleSheet.create({
   cardSub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
   metricLabel: { fontSize: 11, color: Colors.textMuted },
   metricValue: { fontSize: 15, fontWeight: '600', color: Colors.textPrimary, marginLeft: 4, marginRight: 12 },
+  inlineMeta: { fontSize: 12, color: Colors.textSecondary, marginTop: 10 },
+  errorText: { fontSize: 12, color: Colors.red, marginTop: 8 },
   sectionHead: {
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between', marginBottom: Spacing.sm, marginTop: Spacing.sm,
+  },
+  sectionHeadCompact: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.md,
   },
   sectionTitle: { fontSize: 18, fontWeight: '600', color: Colors.textPrimary },
   sectionCount: {
@@ -332,6 +446,14 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.accentGlow, paddingHorizontal: 8,
     paddingVertical: 2, borderRadius: Radius.full,
   },
+  snapshotGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4 },
+  snapshotItem: {
+    width: '50%',
+    paddingHorizontal: 4,
+    marginBottom: 10,
+  },
+  snapshotLabel: { fontSize: 11, color: Colors.textMuted, marginBottom: 4, textTransform: 'uppercase' },
+  snapshotValue: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary },
   posCard: { marginBottom: 8, padding: Spacing.md },
   posLeft: { flex: 1 },
   posSymbol: { fontSize: 16, fontWeight: '600', color: Colors.textPrimary },
@@ -340,4 +462,11 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 16, color: Colors.textSecondary, fontWeight: '500' },
   emptySubText: { fontSize: 13, color: Colors.textMuted, marginTop: 6 },
   moreText: { fontSize: 13, color: Colors.accent, textAlign: 'center', marginTop: 8 },
+  atControlRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  atBtn: { flex: 1, paddingVertical: 8, borderRadius: Radius.sm, alignItems: 'center' },
+  atBtnStart: { backgroundColor: Colors.green },
+  atBtnPause: { backgroundColor: Colors.accent },
+  atBtnStop: { backgroundColor: Colors.red },
+  atBtnDisabled: { opacity: 0.35 },
+  atBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
 });

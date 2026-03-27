@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { autoTraderAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
@@ -33,6 +34,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function AutoTraderScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [status, setStatus] = useState<any>(null);
@@ -127,12 +129,19 @@ export default function AutoTraderScreen() {
     setSaving(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
+      const parsedMinConf = editMinConf ? Number(editMinConf) : undefined;
+      const normalizedMinConf = parsedMinConf === undefined || Number.isNaN(parsedMinConf)
+        ? undefined
+        : parsedMinConf <= 1
+          ? Math.round(parsedMinConf * 100)
+          : Math.round(parsedMinConf);
+
       await autoTraderAPI.updateConfig({
         capital: Number(editCapital) || undefined,
         lots: Number(editLots) || undefined,
         mode: editMode,
         risk_mode: editRiskMode,
-        min_confidence: editMinConf ? Number(editMinConf) : undefined,
+        min_confidence: normalizedMinConf,
         max_open_positions: editMaxPos ? Number(editMaxPos) : undefined,
         max_daily_loss: editMaxLoss ? Number(editMaxLoss) : undefined,
         scan_interval_sec: editScanInterval ? Number(editScanInterval) : undefined,
@@ -152,7 +161,8 @@ export default function AutoTraderScreen() {
     return <View style={styles.root}><LoadingSpinner /></View>;
   }
 
-  const engineStatus = status?.status || 'idle';
+  // Normalize to lowercase so comparisons work regardless of what backend returns
+  const engineStatus = String(status?.status || 'idle').toLowerCase();
   const isRunning = engineStatus === 'running';
   const isPaused = engineStatus === 'paused';
   const dailyPnL = status?.daily_pnl ?? config?.daily_pnl ?? 0;
@@ -166,6 +176,7 @@ export default function AutoTraderScreen() {
           title="Auto Trader"
           subtitle="Autonomous trading engine control"
           badge={<StatusBadge status={engineStatus} />}
+          onBack={() => router.back()}
         />
 
         {/* Tab bar */}
@@ -227,7 +238,7 @@ export default function AutoTraderScreen() {
                     small
                     style={[styles.ctrlBtn, (!isRunning && !isPaused) && { opacity: 0.4 }]}
                     disabled={!isRunning && !isPaused || actionLoading}
-                    onPress={() => runAction('pause', 'Pause')}
+                    onPress={() => runAction(isPaused ? 'start' : 'pause', isPaused ? 'Resume' : 'Pause')}
                   />
                   <PrimaryButton
                     title="Stop"
@@ -304,7 +315,7 @@ export default function AutoTraderScreen() {
 
               <ConfigInput label="Capital (₹)" value={editCapital} onChange={setEditCapital} keyboardType="numeric" />
               <ConfigInput label="Lots" value={editLots} onChange={setEditLots} keyboardType="number-pad" />
-              <ConfigInput label="Min Confidence (0–1)" value={editMinConf} onChange={setEditMinConf} keyboardType="decimal-pad" />
+              <ConfigInput label="Min Confidence (%)" value={editMinConf} onChange={setEditMinConf} keyboardType="decimal-pad" />
               <ConfigInput label="Max Open Positions" value={editMaxPos} onChange={setEditMaxPos} keyboardType="number-pad" />
               <ConfigInput label="Max Daily Loss (₹)" value={editMaxLoss} onChange={setEditMaxLoss} keyboardType="numeric" />
               <ConfigInput label="Scan Interval (sec)" value={editScanInterval} onChange={setEditScanInterval} keyboardType="number-pad" />

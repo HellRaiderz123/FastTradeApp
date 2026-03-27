@@ -4,6 +4,7 @@ import {
   ViewStyle, ActivityIndicator, StyleProp,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Radius, Spacing, Typography } from '../lib/theme';
 
 export function GlassCard({ children, style, padding = Spacing.md }: {
@@ -149,17 +150,24 @@ export function ScreenHeader({
   subtitle,
   badge,
   children,
+  onBack,
 }: {
   title: string;
   subtitle?: string;
   badge?: React.ReactNode;
   children?: React.ReactNode;
+  onBack?: () => void;
 }) {
   return (
     <LinearGradient colors={Gradients.header} style={styles.screenHeader}>
       <View style={styles.headerGlowOne} />
       <View style={styles.headerGlowTwo} />
       <View style={styles.screenHeaderRow}>
+        {onBack ? (
+          <TouchableOpacity onPress={onBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={22} color={Colors.textPrimary} />
+          </TouchableOpacity>
+        ) : null}
         <View style={{ flex: 1 }}>
           <Text style={styles.screenHeaderTitle}>{title}</Text>
           {subtitle ? <Text style={styles.screenHeaderSubtitle}>{subtitle}</Text> : null}
@@ -228,6 +236,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     zIndex: 2,
+  },
+  backBtn: {
+    marginRight: 8,
+    padding: 2,
   },
   screenHeaderTitle: {
     fontSize: 28,

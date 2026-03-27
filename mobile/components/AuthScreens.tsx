@@ -94,20 +94,32 @@ export function LoginScreen() {
   );
 }
 
+// Errors where showing a permanent lockout message is useful
+const LOCKOUT_ERRORS = new Set(['locked_out', 'permanent_lockout', 'biometric_lockout_temporary']);
+
 export function BiometricLockScreen() {
   const unlockWithBiometrics = useAuthStore((state) => state.unlockWithBiometrics);
   const signOut = useAuthStore((state) => state.signOut);
   const user = useAuthStore((state) => state.user);
   const [loading, setLoading] = useState(false);
 
-  const handleUnlock = async () => {
+  const handleUnlock = React.useCallback(async (isAutoPrompt = false) => {
     setLoading(true);
-    const success = await unlockWithBiometrics();
-    if (!success) {
-      Alert.alert('Unlock failed', 'Biometric authentication was cancelled or unsuccessful.');
+    const result = await unlockWithBiometrics();
+    // Only show an alert on explicit user tap, and only for permanent lockout.
+    // Everything else (wrong face, cancel, iOS passcode fallback, etc.) is
+    // handled silently — iOS shows its own UI for retries and passcode entry.
+    if (!isAutoPrompt && !result.success && result.error && LOCKOUT_ERRORS.has(result.error)) {
+      Alert.alert('Too many failed attempts', 'Biometrics are temporarily locked. Use your device passcode to unlock.');
     }
     setLoading(false);
-  };
+  }, [unlockWithBiometrics]);
+
+  // Auto-prompt as soon as the lock screen appears
+  React.useEffect(() => {
+    const timer = setTimeout(() => handleUnlock(true), 300);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <View style={styles.root}>
@@ -121,7 +133,7 @@ export function BiometricLockScreen() {
             </View>
             <Text style={styles.title}>Unlock FastTrade</Text>
             <Text style={styles.subtitle}>{user?.username ? `Signed in as ${user.username}` : 'Authenticate to continue'}</Text>
-            <PrimaryButton title="Unlock" onPress={handleUnlock} loading={loading} style={{ marginTop: 10 }} />
+            <PrimaryButton title="Unlock" onPress={() => handleUnlock(false)} loading={loading} style={{ marginTop: 10 }} />
             <TouchableOpacity onPress={() => signOut()} style={styles.secondaryAction}>
               <Text style={styles.secondaryActionText}>Sign out instead</Text>
             </TouchableOpacity>

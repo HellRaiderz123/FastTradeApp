@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import { useRouter } from 'expo-router';
 import { analyticsAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PnLBadge, ScreenHeader, Tag } from '../components/ui';
@@ -9,6 +10,7 @@ import { EmptyState, GlassCard, LoadingSpinner, PnLBadge, ScreenHeader, Tag } fr
 type SortKey = 'total_pnl' | 'win_rate' | 'total_trades' | 'profit_factor';
 
 export default function StrategyPnLScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [rows, setRows] = useState<any[]>([]);
@@ -69,6 +71,7 @@ export default function StrategyPnLScreen() {
           title="Strategy P&L"
           subtitle="Lifetime performance breakdown by strategy"
           badge={<Tag label={`${rows.length} STRATEGIES`} color={Colors.accent} bg={Colors.accentSoft} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

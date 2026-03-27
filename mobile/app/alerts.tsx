@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { alertsAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
@@ -25,6 +26,7 @@ const OPERATORS = [
 ];
 
 export default function AlertsScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -130,6 +132,7 @@ export default function AlertsScreen() {
           title="Price Alerts"
           subtitle="Get notified when symbols hit your target prices"
           badge={<Tag label={`${activeCount} ACTIVE`} color={Colors.green} bg={Colors.greenBg} />}
+          onBack={() => router.back()}
         />
 
         <ScrollView

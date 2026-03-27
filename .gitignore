@@ -9,7 +9,6 @@ __pycache__/
 *.so
 .Python
 .env
-.env.*
 .venv/
 venv/
 ENV/
@@ -135,3 +134,4 @@ tmp/
 *.bak
 *.backup
 .#*
+backups/fasttrade_20260327_100926.sql

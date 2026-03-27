@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
   TouchableOpacity, Alert, StatusBar,
@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { journalAPI, exitAPI } from '../lib/api';
+import { journalAPI, exitAPI, getApiBaseUrl } from '../lib/api';
 import { Colors, Spacing, Radius } from '../lib/theme';
 import { GlassCard, MetalCard, PnLBadge, EmptyState, LoadingSpinner, ScreenHeader, Tag, ProgressBar } from '../components/ui';
 
@@ -19,20 +19,91 @@ export default function Positions() {
   const [positions, setPositions] = useState<any[]>([]);
   const [closing, setClosing] = useState<string | null>(null);
   const [filter, setFilter] = useState<PositionFilter>('all');
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
+
+  const applyOpenPositions = useCallback((all: any[]) => {
+    setPositions(
+      (all || []).filter(
+        (p: any) => p.status === 'EXECUTED' && !p.closed_at && !EXCLUDED.includes(p.strategy)
+      )
+    );
+  }, []);
 
   const load = useCallback(async () => {
     try {
       const res = await journalAPI.getExecutionIntents(100);
-      const all = res.data || [];
-      setPositions(all.filter((p: any) =>
-        p.status === 'EXECUTED' && !p.closed_at && !EXCLUDED.includes(p.strategy)
-      ));
+      applyOpenPositions(res.data || []);
     } catch {}
     setLoading(false);
     setRefreshing(false);
+  }, [applyOpenPositions]);
+
+  const wsUrlFromHttpBase = useCallback((httpBase: string) => {
+    const trimmed = String(httpBase || '').replace(/\/+$/, '');
+    if (trimmed.startsWith('https://')) return `wss://${trimmed.slice(8)}/ws/positions`;
+    if (trimmed.startsWith('http://')) return `ws://${trimmed.slice(7)}/ws/positions`;
+    return `ws://${trimmed}/ws/positions`;
   }, []);
 
-  useEffect(() => { load(); }, []);
+  const connectWebSocket = useCallback(() => {
+    if (unmountedRef.current) return;
+
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    const url = wsUrlFromHttpBase(getApiBaseUrl());
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      if (unmountedRef.current) return;
+      setWsConnected(true);
+    };
+
+    ws.onmessage = (event) => {
+      if (unmountedRef.current) return;
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type === 'positions_update' && Array.isArray(payload.intents)) {
+          applyOpenPositions(payload.intents);
+          setLoading(false);
+          setRefreshing(false);
+        }
+      } catch {}
+    };
+
+    ws.onerror = () => {
+      if (unmountedRef.current) return;
+      setWsConnected(false);
+    };
+
+    ws.onclose = () => {
+      if (unmountedRef.current) return;
+      setWsConnected(false);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = setTimeout(() => connectWebSocket(), 3000);
+    };
+  }, [applyOpenPositions, wsUrlFromHttpBase]);
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    load();
+    connectWebSocket();
+
+    return () => {
+      unmountedRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [connectWebSocket, load]);
 
   const handleClose = (intentId: string, symbol: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -88,7 +159,7 @@ export default function Positions() {
         <ScreenHeader
           title="Positions"
           subtitle={`${positions.length} open · ${liveCount} live`}
-          badge={<Tag label="ACTIVE" color={Colors.green} bg={Colors.greenBg} />}
+          badge={<Tag label={wsConnected ? 'LIVE FEED' : 'POLLING'} color={wsConnected ? Colors.green : '#F59E0B'} bg={wsConnected ? Colors.greenBg : 'rgba(245,158,11,0.12)'} />}
         >
           {positions.length > 0 && (
             <View style={styles.summaryBar}>

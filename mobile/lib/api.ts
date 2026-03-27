@@ -182,12 +182,16 @@ export const systemAPI = {
 export const scannerAPI = {
   listStrategies: () => api.get('/condition-scanner/strategies'),
   getStrategy: (id: number) => api.get(`/condition-scanner/strategies/${id}`),
+  deleteStrategy: (id: number) => api.delete(`/condition-scanner/strategies/${id}`),
   scanStrategy: (id: number) => api.post(`/condition-scanner/scan/${id}`),
   runBacktest: (id: number, payload?: any) => api.post(`/condition-scanner/backtest/${id}`, payload || {}),
   getCandleRange: (timeframe: string, universe = 'NIFTY50') =>
     api.get(`/condition-scanner/candle-range/${encodeURIComponent(timeframe)}`, { params: { universe } }),
   getHistory: (params?: any) => api.get('/condition-scanner/history', { params }),
   executeSignal: (body: any) => api.post('/condition-scanner/execute-signal', body),
+  startAutoScan: (id: number) => api.post(`/condition-scanner/scheduler/start/${id}`),
+  stopAutoScan: (id: number) => api.post(`/condition-scanner/scheduler/stop/${id}`),
+  setAutoAmount: (id: number, amount: number) => api.put(`/condition-scanner/scheduler/amount/${id}`, null, { params: { amount } }),
 };
 
 // ── Auto Trader ──────────────────────────────────────────────────────
