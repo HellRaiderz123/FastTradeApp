@@ -5,11 +5,12 @@ import logging
 import time
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.core.execution.paper import PaperExecutionAdapter
 from app.core.execution.zerodha import ZerodhaExecutionAdapter
 from app.core.broker.zerodha.client import get_kite_client
+from app.core.auth import authenticate_websocket
 from app.core.utils.time import now_ist
 from app.db.models_intent import ExecutionIntent
 from app.db.session import SessionLocal
@@ -101,6 +102,12 @@ def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) 
 
 @router.websocket("/ws/positions")
 async def ws_positions(websocket: WebSocket):
+    try:
+        authenticate_websocket(websocket)
+    except HTTPException:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+
     await websocket.accept()
     logger.info("✅ WebSocket client connected for positions")
 

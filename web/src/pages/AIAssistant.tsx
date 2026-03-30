@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Loader2 } from 'lucide-react';
 import axios from 'axios';
 
-const API = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8000';
-
 interface TableRow { [key: string]: string }
 interface Message {
   role: 'user' | 'bot';
@@ -43,7 +41,7 @@ export default function AIAssistant() {
       const history = updatedMessages
         .slice(1)
         .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
-      const { data } = await axios.post(`${API}/ai-chat/query`, { message: text, history });
+      const { data } = await axios.post('/api/ai-chat/query', { message: text, history });
       setMessages(prev => [...prev, { role: 'bot', text: data.answer, table: data.table }]);
     } catch {
       setMessages(prev => [...prev, { role: 'bot', text: 'Failed to reach server.' }]);

@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { journalAPI, exitAPI, getApiBaseUrl } from '../lib/api';
+import { journalAPI, exitAPI, getApiBaseUrl, authTokenStore } from '../lib/api';
 import { Colors, Spacing, Radius } from '../lib/theme';
 import { GlassCard, MetalCard, PnLBadge, EmptyState, LoadingSpinner, ScreenHeader, Tag, ProgressBar } from '../components/ui';
 
@@ -20,8 +20,12 @@ export default function Positions() {
   const [closing, setClosing] = useState<string | null>(null);
   const [filter, setFilter] = useState<PositionFilter>('all');
   const [wsConnected, setWsConnected] = useState(false);
+  const [wsAuthFailed, setWsAuthFailed] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
   const unmountedRef = useRef(false);
 
   const applyOpenPositions = useCallback((all: any[]) => {
@@ -36,10 +40,12 @@ export default function Positions() {
     try {
       const res = await journalAPI.getExecutionIntents(100);
       applyOpenPositions(res.data || []);
-    } catch {}
+    } catch {
+      setStatusMessage('Could not refresh positions. Check connection and retry.');
+    }
     setLoading(false);
     setRefreshing(false);
-  }, [applyOpenPositions]);
+  }, [applyOpenPositions, wsConnected]);
 
   const wsUrlFromHttpBase = useCallback((httpBase: string) => {
     const trimmed = String(httpBase || '').replace(/\/+$/, '');
@@ -49,6 +55,7 @@ export default function Positions() {
   }, []);
 
   const connectWebSocket = useCallback(() => {
+    const doConnect = async () => {
     if (unmountedRef.current) return;
 
     if (wsRef.current) {
@@ -56,13 +63,23 @@ export default function Positions() {
       wsRef.current = null;
     }
 
-    const url = wsUrlFromHttpBase(getApiBaseUrl());
-    const ws = new WebSocket(url);
+    const baseUrl = wsUrlFromHttpBase(getApiBaseUrl());
+    const token = await authTokenStore.get();
+    const wsUrl = token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl;
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
       if (unmountedRef.current) return;
+      // Cancel any pending "disconnected" banner
+      if (statusMessageTimerRef.current) {
+        clearTimeout(statusMessageTimerRef.current);
+        statusMessageTimerRef.current = null;
+      }
+      reconnectAttemptRef.current = 0;
       setWsConnected(true);
+      setWsAuthFailed(false);
+      setStatusMessage(null);
     };
 
     ws.onmessage = (event) => {
@@ -82,12 +99,36 @@ export default function Positions() {
       setWsConnected(false);
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (unmountedRef.current) return;
       setWsConnected(false);
+
+      // Policy violation (1008) is used by backend for auth rejection.
+      // Do not reconnect indefinitely in that case.
+      if (event.code === 1008) {
+        setWsAuthFailed(true);
+        setStatusMessage('Session expired for live feed. Please sign in again.');
+        return;
+      }
+
+      // Delay showing the disconnect banner by 5 s — brief drops stay invisible.
+      if (statusMessageTimerRef.current) clearTimeout(statusMessageTimerRef.current);
+      statusMessageTimerRef.current = setTimeout(() => {
+        if (!unmountedRef.current) setStatusMessage('Live feed disconnected. Reconnecting...');
+      }, 5000);
+
+      // Exponential backoff: 3 s → 6 s → 12 s … capped at 30 s
+      reconnectAttemptRef.current += 1;
+      const delay = Math.min(3000 * Math.pow(2, reconnectAttemptRef.current - 1), 30000);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = setTimeout(() => connectWebSocket(), 3000);
+      reconnectTimerRef.current = setTimeout(() => connectWebSocket(), delay);
     };
+    };
+
+    doConnect().catch(() => {
+      if (unmountedRef.current) return;
+      setWsConnected(false);
+    });
   }, [applyOpenPositions, wsUrlFromHttpBase]);
 
   useEffect(() => {
@@ -98,12 +139,22 @@ export default function Positions() {
     return () => {
       unmountedRef.current = true;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (statusMessageTimerRef.current) clearTimeout(statusMessageTimerRef.current);
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
   }, [connectWebSocket, load]);
+
+  // HTTP polling fallback — runs every 10 s when WebSocket is not connected
+  useEffect(() => {
+    if (wsConnected) return;
+    const pollId = setInterval(() => {
+      if (!unmountedRef.current) load();
+    }, 10000);
+    return () => clearInterval(pollId);
+  }, [wsConnected, load]);
 
   const handleClose = (intentId: string, symbol: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -159,8 +210,15 @@ export default function Positions() {
         <ScreenHeader
           title="Positions"
           subtitle={`${positions.length} open · ${liveCount} live`}
-          badge={<Tag label={wsConnected ? 'LIVE FEED' : 'POLLING'} color={wsConnected ? Colors.green : '#F59E0B'} bg={wsConnected ? Colors.greenBg : 'rgba(245,158,11,0.12)'} />}
+          badge={
+            <Tag
+              label={wsConnected ? 'LIVE FEED' : wsAuthFailed ? 'AUTH' : 'POLLING'}
+              color={wsConnected ? Colors.green : wsAuthFailed ? Colors.red : '#F59E0B'}
+              bg={wsConnected ? Colors.greenBg : wsAuthFailed ? Colors.redBg : 'rgba(245,158,11,0.12)'}
+            />
+          }
         >
+          {statusMessage ? <Text style={styles.statusNotice}>{statusMessage}</Text> : null}
           {positions.length > 0 && (
             <View style={styles.summaryBar}>
               <View style={styles.summaryItem}>
@@ -317,6 +375,12 @@ const styles = StyleSheet.create({
   summaryLabel: { fontSize: 11, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
   summaryValue: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary, marginTop: 4 },
   summaryDivider: { width: 1, backgroundColor: Colors.border },
+  statusNotice: {
+    marginTop: 10,
+    fontSize: 12,
+    color: Colors.amber,
+    fontWeight: '600',
+  },
   scroll: { padding: Spacing.lg, flexGrow: 1 },
   filterRow: { flexDirection: 'row', marginBottom: Spacing.md, gap: 8 },
   filterChip: {

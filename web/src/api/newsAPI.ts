@@ -13,6 +13,11 @@ export interface NewsItem {
   category: string;
   sentiment: 'bullish' | 'bearish' | 'neutral';
   source: string;
+  // LLM (NVIDIA) impact scoring — present when LLM is configured
+  llm_impact?: 'bullish' | 'bearish' | 'neutral';
+  llm_magnitude?: 'high' | 'medium' | 'low';
+  llm_symbols?: string[];
+  llm_reason?: string;
 }
 
 export interface SentimentSummary {

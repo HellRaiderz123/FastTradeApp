@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Gradients, Radius, Spacing } from '../lib/theme';
 import { GlassCard, PrimaryButton, Tag } from './ui';
 import { useAuthStore } from '../lib/auth';
+import { getApiBaseUrl, persistApiBaseUrl, getDefaultApiBaseUrl } from '../lib/api';
 
 export function LoginScreen() {
   const signIn = useAuthStore((state) => state.signIn);
@@ -14,6 +15,9 @@ export function LoginScreen() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [apiBaseInput, setApiBaseInput] = useState(getApiBaseUrl());
+  const [savingApiBase, setSavingApiBase] = useState(false);
 
   const canSubmit = useMemo(() => username.trim().length > 0 && password.length > 0 && !loading, [username, password, loading]);
 
@@ -30,12 +34,86 @@ export function LoginScreen() {
     setLoading(false);
   };
 
+  const handleSaveApiBase = async () => {
+    if (!apiBaseInput.trim()) {
+      Alert.alert('Invalid URL', 'Please enter a valid API URL');
+      return;
+    }
+    setSavingApiBase(true);
+    try {
+      await persistApiBaseUrl(apiBaseInput.trim());
+      Alert.alert('Success', `API URL updated to:\n${apiBaseInput.trim()}`);
+      setShowSettings(false);
+    } catch (err: any) {
+      Alert.alert('Error', 'Failed to update API URL');
+    }
+    setSavingApiBase(false);
+  };
+
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" />
       <LinearGradient colors={Gradients.header} style={StyleSheet.absoluteFill} />
       <SafeAreaView style={styles.safeArea}>
+        {/* Settings Gear Icon (top-right) */}
+        <TouchableOpacity
+          onPress={() => setShowSettings(!showSettings)}
+          style={styles.settingsButton}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="settings-outline" size={20} color={Colors.textMuted} />
+        </TouchableOpacity>
+
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          {/* Settings Panel */}
+          {showSettings && (
+            <View style={styles.settingsPanel}>
+              <GlassCard style={styles.settingsCard}>
+                <TouchableOpacity
+                  onPress={() => setShowSettings(false)}
+                  style={styles.settingsClose}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-outline" size={20} color={Colors.textSecondary} />
+                </TouchableOpacity>
+
+                <Text style={styles.settingsTitle}>API Configuration</Text>
+                <Text style={styles.settingsSubtitle}>Network Error? Update the API URL</Text>
+
+                <View style={styles.settingsField}>
+                  <Text style={styles.settingsLabel}>API Base URL</Text>
+                  <Text style={styles.settingsHint}>Current: {getApiBaseUrl()}</Text>
+                  <TextInput
+                    value={apiBaseInput}
+                    onChangeText={setApiBaseInput}
+                    placeholder="e.g. http://192.168.1.103:8000"
+                    placeholderTextColor={Colors.textMuted}
+                    style={styles.settingsInput}
+                  />
+                  <Text style={styles.settingsHelp}>
+                    🔍 Find your IP: Check your device's network settings or router. Default: {getDefaultApiBaseUrl()}
+                  </Text>
+                </View>
+
+                <View style={styles.settingsActions}>
+                  <PrimaryButton
+                    title="Cancel"
+                    onPress={() => setShowSettings(false)}
+                    variant="ghost"
+                    style={{ marginRight: 8, flex: 1 }}
+                  />
+                  <PrimaryButton
+                    title={savingApiBase ? 'Saving...' : 'Save'}
+                    onPress={handleSaveApiBase}
+                    loading={savingApiBase}
+                    variant="success"
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </GlassCard>
+            </View>
+          )}
+
           <View style={styles.loginWrap}>
             <GlassCard style={styles.loginCard}>
               <View style={styles.brandWrap}>
@@ -210,4 +288,16 @@ const styles = StyleSheet.create({
   },
   secondaryAction: { marginTop: 16, padding: 8 },
   secondaryActionText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  settingsButton: { position: 'absolute', top: 16, right: Spacing.lg, zIndex: 100 },
+  settingsPanel: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: Spacing.lg, zIndex: 99 },
+  settingsCard: { padding: Spacing.lg, borderRadius: Radius.lg },
+  settingsClose: { alignSelf: 'flex-end', marginBottom: 12 },
+  settingsTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary, marginBottom: 4 },
+  settingsSubtitle: { fontSize: 12, color: Colors.textMuted, marginBottom: 16 },
+  settingsField: { marginBottom: 14 },
+  settingsLabel: { fontSize: 12, fontWeight: '600', color: Colors.textMuted, marginBottom: 4 },
+  settingsHint: { fontSize: 11, color: Colors.textSecondary, marginBottom: 6 },
+  settingsInput: { borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.bgGlass, color: Colors.textPrimary, paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, marginBottom: 8 },
+  settingsHelp: { fontSize: 10, color: Colors.textMuted, fontStyle: 'italic', lineHeight: 16 },
+  settingsActions: { flexDirection: 'row', marginTop: 16, gap: 8 },
 });

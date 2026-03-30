@@ -209,6 +209,58 @@ class NSERSSFeedService:
         else:
             return 'neutral'
 
+    def enrich_with_llm_impact(
+        self,
+        news_items: List[Dict[str, Any]],
+        max_items: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """
+        Add LLM-scored market impact fields to news items (in-place).
+
+        Adds to each item (if LLM is available):
+          llm_impact    : "bullish" | "bearish" | "neutral"
+          llm_magnitude : "high" | "medium" | "low"
+          llm_symbols   : list of affected NSE symbols
+          llm_reason    : one-line rationale
+
+        Only processes the first *max_items* to stay within free-tier rate limits.
+        Items beyond that are returned unchanged.
+        """
+        try:
+            from app.services.llm_service import call_llm, extract_json, is_available
+        except ImportError:
+            return news_items
+
+        if not is_available():
+            return news_items
+
+        for item in news_items[:max_items]:
+            try:
+                title = item.get("title", "")
+                summary = (item.get("description") or item.get("summary") or "")[:200]
+                text = f"{title}. {summary}".strip()
+
+                prompt = (
+                    f"Score the market impact of this Indian financial news for NSE stocks.\n\n"
+                    f'News: "{text}"\n\n'
+                    f"Reply with ONLY this JSON (no extra text):\n"
+                    f'{{"impact": "bullish"|"bearish"|"neutral", '
+                    f'"magnitude": "high"|"medium"|"low", '
+                    f'"affected_symbols": ["NSE_SYMBOL", ...], '
+                    f'"reason": "<10 words>"}}'
+                )
+                response = call_llm(prompt, max_tokens=100, temperature=0.0)
+                data = extract_json(response or "")
+                if data:
+                    item["llm_impact"]     = data.get("impact", "neutral")
+                    item["llm_magnitude"]  = data.get("magnitude", "low")
+                    item["llm_symbols"]    = data.get("affected_symbols", [])
+                    item["llm_reason"]     = data.get("reason", "")
+            except Exception as e:
+                logger.debug("LLM news scoring failed for item: %s", e)
+
+        return news_items
+
 
 # Singleton instance
 _rss_service = None

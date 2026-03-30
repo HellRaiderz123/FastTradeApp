@@ -4,7 +4,7 @@ import {
   Zap, Filter, Star, Search, MoreVertical, Activity,
   TrendingUp, TrendingDown, Settings2, Eye, Download,
   AlertTriangle, CheckCircle, XCircle, Loader2, ArrowRight,
-  BarChart3, Calendar
+  BarChart3, Calendar, Sparkles
 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api, { tradeCostAPI } from '../lib/api';
@@ -270,6 +270,25 @@ const CreateScanner: React.FC = () => {
   const [backfilling, setBackfilling] = useState(false);
   const [restoredSelection, setRestoredSelection] = useState(false);
 
+  // LLM explainer state
+  const [explaining, setExplaining] = useState(false);
+  const [explanation, setExplanation] = useState<string | null>(null);
+
+  const explainStrategy = useCallback(async () => {
+    if (!selectedId) return;
+    setExplaining(true);
+    setExplanation(null);
+    try {
+      const res = await api.get(`/condition-scanner/strategies/${selectedId}/explain`);
+      setExplanation(res.data.explanation || null);
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || 'LLM not available — set LLM_API_KEY in .env';
+      setExplanation(`⚠️ ${msg}`);
+    } finally {
+      setExplaining(false);
+    }
+  }, [selectedId]);
+
   // ── Data loading ───────────────────────────────────────────────────────
 
   const loadData = useCallback(async () => {
@@ -308,6 +327,7 @@ const CreateScanner: React.FC = () => {
     setEditorAutoQty(strategy.auto_amount || 10000);
     setEditing(true);
     setScanResult(null);
+    setExplanation(null);
 
     if (strategy.last_backtest_result?.summary) {
       setBacktestResult(strategy.last_backtest_result);
@@ -1032,13 +1052,33 @@ const CreateScanner: React.FC = () => {
                 onChange={e => setEditorName(e.target.value)}
                 className="text-xl font-bold text-white bg-transparent border-none outline-none w-full placeholder-slate-600 mb-1"
               />
-              <input
-                type="text"
-                placeholder="Description (optional)"
-                value={editorDescription}
-                onChange={e => setEditorDescription(e.target.value)}
-                className="text-sm text-slate-400 bg-transparent border-none outline-none w-full placeholder-slate-600"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Description (optional)"
+                  value={editorDescription}
+                  onChange={e => { setEditorDescription(e.target.value); setExplanation(null); }}
+                  className="text-sm text-slate-400 bg-transparent border-none outline-none flex-1 placeholder-slate-600"
+                />
+                {selectedId && (
+                  <button
+                    onClick={explainStrategy}
+                    disabled={explaining}
+                    title="Generate AI explanation using NVIDIA LLM"
+                    className="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-violet-600/20 hover:bg-violet-600/40 border border-violet-500/40 text-violet-300 transition-colors disabled:opacity-50 shrink-0"
+                  >
+                    {explaining
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <Sparkles className="w-3 h-3" />}
+                    {explaining ? 'Thinking…' : 'Explain'}
+                  </button>
+                )}
+              </div>
+              {explanation && (
+                <div className="mt-2 p-2.5 rounded-lg bg-violet-900/20 border border-violet-500/30 text-xs text-violet-200 leading-relaxed">
+                  {explanation}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-6 p-6">

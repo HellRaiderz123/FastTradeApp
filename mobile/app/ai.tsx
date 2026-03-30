@@ -42,7 +42,7 @@ export default function AIScreen() {
 
     try {
       const res = await aiAPI.query(outgoing, nextHistory);
-      const reply = res.data?.response || res.data?.message || 'Connected, but no response body was returned from the backend.';
+      const reply = res.data?.answer || res.data?.response || res.data?.message || 'Connected, but no response body was returned from the backend.';
       setHistory((prev) => [...prev, { role: 'assistant', content: reply }]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error: any) {

@@ -51,6 +51,12 @@ async def get_news_feed(
         if sentiment:
             news_items = [n for n in news_items if n.get('sentiment', '').lower() == sentiment.lower()]
         
+        # Enrich with LLM impact scoring (NVIDIA) — non-blocking, fails gracefully
+        try:
+            news_items = rss_service.enrich_with_llm_impact(news_items)
+        except Exception as _llm_err:
+            logger.debug("LLM enrichment skipped: %s", _llm_err)
+
         # Limit results
         news_items = news_items[:limit]
         

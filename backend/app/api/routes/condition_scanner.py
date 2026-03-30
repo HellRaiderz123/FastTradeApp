@@ -876,7 +876,74 @@ async def get_strategy(strategy_id: int, db: Session = Depends(get_db)):
     return _strategy_with_backtest(db, row)
 
 
-@router.put("/strategies/{strategy_id}")
+@router.get("/strategies/{strategy_id}/explain")
+async def explain_strategy(strategy_id: int, db: Session = Depends(get_db)):
+    """
+    Generate a plain-English explanation of a strategy using the configured LLM
+    (NVIDIA / Groq). Includes backtest context when available.
+
+    Returns:
+        { strategy_id, strategy_name, explanation, generated_at }
+    """
+    from app.services.llm_service import call_llm, is_available
+
+    if not is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="LLM not configured — set LLM_API_KEY in .env",
+        )
+
+    row = _get_strategy_or_404(db, strategy_id)
+    d = _strategy_with_backtest(db, row)
+
+    # Build conditions text
+    conditions_text = "\n".join(
+        f"  - {c.get('indicator')} {c.get('params', {})} {c.get('comparator')} {c.get('value')}"
+        for c in row.entry_conditions_list
+    )
+    ec = row.exit_config_dict
+    exit_text = (
+        f"Stop-loss {ec.get('sl_pct', 0)}% | "
+        f"Take-profit {ec.get('tp_pct', 0)}% | "
+        f"Trailing SL {ec.get('tsl_pct', 0)}%"
+    )
+
+    bt_lines = ""
+    if "last_backtest_result" in d:
+        summary = d["last_backtest_result"].get("summary", {})
+        bt_lines = (
+            f"\nBacktest summary (NIFTY50 universe, Indian stocks):\n"
+            f"  - Annual return: {summary.get('annual_return_pct', 'N/A')}%\n"
+            f"  - Win rate: {summary.get('win_rate', 'N/A')}%\n"
+            f"  - Total trades: {summary.get('total_trades', 'N/A')}\n"
+            f"  - Sharpe ratio: {summary.get('sharpe_ratio', 'N/A')}\n"
+            f"  - Max drawdown: {summary.get('max_drawdown_pct', 'N/A')}%"
+        )
+
+    prompt = (
+        f"Explain this Indian stock trading strategy in plain English for a retail trader. "
+        f"Keep it under 120 words. Avoid jargon.\n\n"
+        f"Strategy: {row.name}\n"
+        f"Direction: {row.direction} | Timeframe: {row.timeframe} | Universe: {row.universe}\n"
+        f"Entry conditions (ALL must be true simultaneously):\n{conditions_text}\n"
+        f"Exit rules: {exit_text}"
+        f"{bt_lines}\n\n"
+        f"Write 2-3 sentences covering: what it does, when it fires, and its historical edge."
+    )
+
+    explanation = call_llm(prompt, max_tokens=200, temperature=0.3)
+    if not explanation:
+        raise HTTPException(status_code=503, detail="LLM call failed — check logs")
+
+    return {
+        "strategy_id": strategy_id,
+        "strategy_name": row.name,
+        "explanation": explanation,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+
 async def update_strategy(strategy_id: int, data: StrategyUpdate, db: Session = Depends(get_db)):
     row = _get_strategy_or_404(db, strategy_id)
 

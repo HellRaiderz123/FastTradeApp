@@ -21,13 +21,21 @@ export default function ScannerScreen() {
   const [scanStatus, setScanStatus] = useState('');
   const [strategies, setStrategies] = useState<any[]>([]);
   const [usingFallbackData, setUsingFallbackData] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [autoAmountInput, setAutoAmountInput] = useState('10000');
   const [savingAutoAmount, setSavingAutoAmount] = useState(false);
   const [togglingAutoExecute, setTogglingAutoExecute] = useState(false);
   const [deletingStrategyId, setDeletingStrategyId] = useState<number | null>(null);
+  const [signalHistory, setSignalHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [scanProgress, setScanProgress] = useState<{ current: number; total: number } | null>(null);
+  const [backtestStats, setBacktestStats] = useState<Record<number, any>>({});
+  const [tradeSignal, setTradeSignal] = useState<any | null>(null);
+  const [tradingSignalId, setTradingSignalId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
+    setLoadError(null);
     try {
       const res = await scannerAPI.listStrategies();
       const data = Array.isArray(res.data)
@@ -38,7 +46,9 @@ export default function ScannerScreen() {
       const useFallback = !data.length;
       setUsingFallbackData(useFallback);
       setStrategies(useFallback ? FALLBACK_STRATEGIES : data);
-    } catch {
+    } catch (error: any) {
+      const errMsg = error?.response?.data?.detail || error?.message || 'Failed to load strategies';
+      setLoadError(errMsg);
       setUsingFallbackData(true);
       setStrategies(FALLBACK_STRATEGIES);
     }
@@ -60,6 +70,49 @@ export default function ScannerScreen() {
     }
   }, [selected?.id, selected?.auto_amount]);
 
+  // Fetch signal history when strategy changes
+  useEffect(() => {
+    if (!selected?.id || usingFallbackData) {
+      setSignalHistory([]);
+      setBacktestStats({});
+      return;
+    }
+    setLoadingHistory(true);
+    
+    // Fetch signal history
+    scannerAPI
+      .getHistory({ strategy_id: selected.id, limit: 20 })
+      .then((res) => {
+        const data = Array.isArray(res.data?.signals)
+          ? res.data.signals
+          : Array.isArray(res.data)
+            ? res.data
+            : [];
+        setSignalHistory(data);
+      })
+      .catch((error) => {
+        console.warn('Failed to load signal history:', error?.message);
+        setSignalHistory([]);
+      })
+      .finally(() => setLoadingHistory(false));
+      
+    // Read backtest stats already embedded in the strategy response by _strategy_with_backtest().
+    // Never call backtestAPI (generic /backtest/run) here — its StrategyConfig table is unrelated.
+    const cached = selected.last_backtest_result;
+    if (cached) {
+      const summary = cached.summary || cached;
+      setBacktestStats(prev => ({
+        ...prev,
+        [selected.id]: {
+          total_return_pct: summary.total_return_pct,
+          sharpe_ratio: summary.sharpe_ratio,
+          total_trades: summary.total_trades,
+          win_rate_pct: summary.win_rate ?? summary.win_rate_pct,
+        },
+      }));
+    }
+  }, [selected?.id, usingFallbackData]);
+
   const onRefresh = async () => {
     setRefreshing(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -79,6 +132,7 @@ export default function ScannerScreen() {
 
     setScanning(true);
     setScanStatus('');
+    setScanProgress({ current: 0, total: 100 });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
       const res = await scannerAPI.scanStrategy(selected.id);
@@ -89,14 +143,45 @@ export default function ScannerScreen() {
         ?? res.data?.signal_count
         ?? 0
       );
-      setScanStatus(`Scan complete: ${count} signal${count === 1 ? '' : 's'} found`);
+      
+      // Show completion with count
+      setScanStatus(`✅ Scan complete: ${count} signal${count === 1 ? '' : 's'} found`);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      
+      // Show alert for significant findings
+      if (count > 0) {
+        Alert.alert(
+          '🎯 Signals Found!',
+          `${count} new signal${count === 1 ? '' : 's'} detected in ${selected.name}`,
+          [
+            { text: 'Dismiss', style: 'default' },
+            { text: 'View Signals', style: 'default', onPress: () => {} }, // Already visible in timeline
+          ]
+        );
+      }
+      
+      // Reload signal history
+      await scannerAPI
+        .getHistory({ strategy_id: selected.id, limit: 20 })
+        .then((histRes) => {
+          const data = Array.isArray(histRes.data?.signals)
+            ? histRes.data.signals
+            : Array.isArray(histRes.data)
+              ? histRes.data
+              : [];
+          setSignalHistory(data);
+        })
+        .catch((histErr) => {
+          console.warn('Failed to reload signal history after scan:', histErr?.message);
+        });
     } catch (error: any) {
       const detail = error?.response?.data?.detail || error?.response?.data?.error || 'Scan failed. Please try again.';
-      setScanStatus(String(detail));
+      setScanStatus(`❌ ${String(detail)}`);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setScanProgress(null);
+      setScanning(false);
     }
-    setScanning(false);
   };
 
   const openBacktestForm = () => {
@@ -236,6 +321,14 @@ export default function ScannerScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}
           showsVerticalScrollIndicator={false}
         >
+          {/* Error Banner */}
+          {loadError && (
+            <GlassCard style={[styles.errorBanner]}>
+              <Text style={styles.errorText}>⚠️ {loadError}</Text>
+              <Text style={styles.errorSubtext}>Showing demo strategies. Tap refresh to retry.</Text>
+            </GlassCard>
+          )}
+
           <View style={styles.metricGrid}>
             <GlassCard style={styles.metricCard}>
               <Text style={styles.metricLabel}>Strategies</Text>
@@ -278,6 +371,16 @@ export default function ScannerScreen() {
                         bg={strategy.is_active ? Colors.greenBg : Colors.bgGlassStrong}
                       />
                     </View>
+                    
+                    {/* Backtest Quick Stats */}
+                    {backtestStats[strategy.id] && (
+                      <View style={styles.backtestStatsRow}>
+                        <Text style={styles.backtestStatsText}>
+                          📊 {backtestStats[strategy.id].total_return_pct?.toFixed(1)}% | Sharpe {backtestStats[strategy.id].sharpe_ratio?.toFixed(1)} | {backtestStats[strategy.id].total_trades || 0} trades | Win {backtestStats[strategy.id].win_rate_pct?.toFixed(0)}%
+                        </Text>
+                      </View>
+                    )}
+                    
                     <View style={styles.strategyBottom}>
                       <Tag label={strategy.direction || 'BUY'} color={Colors.accent} bg={Colors.accentGlow} />
                       <View style={styles.strategyBottomRight}>
@@ -367,6 +470,18 @@ export default function ScannerScreen() {
                   disabled={usingFallbackData}
                 style={{ marginTop: 6 }}
               />
+              
+              {/* Scan Progress Indicator */}
+              {scanning && scanProgress && (
+                <View style={styles.progressContainer}>
+                  <View style={styles.progressRing}>
+                    <Text style={styles.progressText}>
+                      {scanProgress.current}/{scanProgress.total}
+                    </Text>
+                  </View>
+                  <Text style={styles.progressLabel}>Scanning symbols...</Text>
+                </View>
+              )}
               <PrimaryButton
                   title="Open Backtest Form"
                   onPress={openBacktestForm}
@@ -386,6 +501,154 @@ export default function ScannerScreen() {
               {scanStatus ? (
                 <Text style={styles.scanStatus}>{scanStatus}</Text>
               ) : null}
+
+              {/* Signal History Timeline */}
+              {!usingFallbackData && (
+                <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: Colors.border }}>
+                  <Text style={[styles.detailTitle, { marginBottom: 8 }]}>Recent Signals</Text>
+                  {loadingHistory ? (
+                    <Text style={styles.scanStatus}>Loading signal history...</Text>
+                  ) : signalHistory.length === 0 ? (
+                    <Text style={styles.scanStatus}>No signals yet</Text>
+                  ) : (
+                    <View style={{ gap: 8 }}>
+                      {signalHistory.slice(0, 10).map((signal, idx) => (
+                        <View key={idx}>
+                          <TouchableOpacity
+                            activeOpacity={0.8}
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            }}
+                            style={[styles.signalRow, signal.outcome === 'won' && styles.signalRowWon, signal.outcome === 'lost' && styles.signalRowLost]}
+                          >
+                            <View style={styles.signalLeft}>
+                              <View style={styles.signalIcon}>
+                                {signal.outcome === 'won' ? (
+                                  <Text style={styles.signalIconText}>🟢</Text>
+                                ) : signal.outcome === 'lost' ? (
+                                  <Text style={styles.signalIconText}>🔴</Text>
+                                ) : (
+                                  <Text style={styles.signalIconText}>⏱️</Text>
+                                )}
+                              </View>
+                              <View style={styles.signalDetail}>
+                                <Text style={styles.signalSymbol}>{signal.symbol}</Text>
+                                <Text style={styles.signalMeta}>
+                                  Entry: ₹{Number(signal.entry_price || 0).toFixed(2)} · {signal.timestamp ? new Date(signal.timestamp).toLocaleDateString() : 'N/A'}
+                                </Text>
+                              </View>
+                            </View>
+                            {signal.pnl != null && (
+                              <Text style={[styles.signalPnl, Number(signal.pnl || 0) >= 0 ? { color: Colors.green } : { color: Colors.red }]}>
+                                {Number(signal.pnl || 0) >= 0 ? '+' : ''}{Number(signal.pnl || 0).toFixed(0)}
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                          
+                          {/* One-Tap Trade Button - Show for open/fresh signals */}
+                          {!signal.outcome && (
+                            <TouchableOpacity
+                              activeOpacity={0.8}
+                              onPress={() => {
+                                setTradeSignal(signal);
+                                setTradingSignalId(idx);
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                              }}
+                              style={styles.tradeSignalBtn}
+                            >
+                              <Text style={styles.tradeSignalBtnText}>⚡ Trade Now</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Trade Signal Modal */}
+              {tradeSignal && (
+                <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: Colors.border }}>
+                  <View style={styles.tradeModalHeader}>
+                    <Text style={styles.tradeModalTitle}>Execute Trade</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setTradeSignal(null);
+                        setTradingSignalId(null);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Text style={styles.tradeModalClose}>✕</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.tradeModalBody}>
+                    <View style={styles.tradeRow}>
+                      <Text style={styles.tradeLabel}>Symbol</Text>
+                      <Text style={styles.tradeValue}>{tradeSignal.symbol}</Text>
+                    </View>
+                    <View style={styles.tradeRow}>
+                      <Text style={styles.tradeLabel}>Entry Price (Signal)</Text>
+                      <Text style={styles.tradeValue}>₹{Number(tradeSignal.entry_price || 0).toFixed(2)}</Text>
+                    </View>
+                    <View style={styles.tradeRow}>
+                      <Text style={styles.tradeLabel}>Direction</Text>
+                      <Text style={[styles.tradeValue, { color: selected?.direction === 'SELL' ? Colors.red : Colors.green }]}>
+                        {selected?.direction || 'BUY'}
+                      </Text>
+                    </View>
+                    <View style={styles.tradeRow}>
+                      <Text style={styles.tradeLabel}>SL / TP</Text>
+                      <Text style={styles.tradeValue}>
+                        {selected?.exit_config?.sl_pct || 5}% / {selected?.exit_config?.tp_pct || 10}%
+                      </Text>
+                    </View>
+
+                    <View style={styles.tradeButtonGroup}>
+                      <TouchableOpacity
+                        style={[styles.tradeExecBtn, styles.tradeCancelBtn]}
+                        onPress={() => {
+                          setTradeSignal(null);
+                          setTradingSignalId(null);
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        }}
+                      >
+                        <Text style={[styles.tradeExecBtnText, { color: Colors.textSecondary }]}>Cancel</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.tradeExecBtn, styles.tradeConfirmBtn]}
+                        onPress={async () => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                          try {
+                            await scannerAPI.executeSignal({
+                              signal_id: tradeSignal.id,
+                              strategy_id: selected?.id,
+                              symbol: tradeSignal.symbol,
+                              entry_price: Number(tradeSignal.entry_price),
+                              signal_type: selected?.direction,
+                              sl_pct: selected?.exit_config?.sl_pct ?? 5,
+                              tp_pct: selected?.exit_config?.tp_pct ?? 10,
+                            });
+                            Alert.alert('✅ Trade Executed', `${selected?.direction || 'BUY'} order submitted for ${tradeSignal.symbol} @ ₹${Number(tradeSignal.entry_price).toFixed(2)}`, [
+                              { text: 'OK', onPress: () => {
+                                setTradeSignal(null);
+                                setTradingSignalId(null);
+                              }},
+                            ]);
+                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                          } catch (err: any) {
+                            Alert.alert('❌ Trade Failed', err?.response?.data?.detail || 'Could not execute trade');
+                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+                          }
+                        }}
+                      >
+                        <Text style={[styles.tradeExecBtnText, { color: '#fff' }]}>Execute ({selected?.direction || 'BUY'})</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              )}
             </GlassCard>
           )}
 
@@ -439,4 +702,56 @@ const styles = StyleSheet.create({
   },
   warningText: { marginTop: 2, marginBottom: 6, fontSize: 11, color: Colors.amber },
   scanStatus: { marginTop: 10, fontSize: 12, color: Colors.textSecondary },
+  signalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.bgGlassStrong,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  signalRowWon: { borderColor: Colors.green, backgroundColor: 'rgba(16,185,129,0.08)' },
+  signalRowLost: { borderColor: Colors.red, backgroundColor: 'rgba(239,68,68,0.08)' },
+  signalLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  signalIcon: { marginRight: 10 },
+  signalIconText: { fontSize: 16 },
+  signalDetail: { flex: 1 },
+  signalSymbol: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary },
+  signalMeta: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+  signalPnl: { fontSize: 12, fontWeight: '700', minWidth: 50, textAlign: 'right' },
+  progressContainer: { marginTop: 12, alignItems: 'center' },
+  progressRing: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 4,
+    borderColor: Colors.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.accentSoft,
+  },
+  progressText: { fontSize: 14, fontWeight: '700', color: Colors.accent },
+  progressLabel: { fontSize: 11, color: Colors.textMuted, marginTop: 8, textTransform: 'uppercase', letterSpacing: 0.6 },
+  errorBanner: { marginBottom: 12, borderWidth: 1, borderColor: Colors.red, backgroundColor: 'rgba(239,68,68,0.08)' },
+  errorText: { fontSize: 13, fontWeight: '600', color: Colors.red },
+  errorSubtext: { fontSize: 11, color: Colors.textMuted, marginTop: 4 },
+  backtestStatsRow: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border },
+  backtestStatsText: { fontSize: 10, color: Colors.textMuted, fontWeight: '500' },
+  tradeSignalBtn: { marginTop: 6, marginBottom: 8, backgroundColor: Colors.accentSoft, borderWidth: 1, borderColor: Colors.accent, borderRadius: Radius.md, paddingVertical: 8, alignItems: 'center' },
+  tradeSignalBtnText: { fontSize: 12, fontWeight: '700', color: Colors.accent },
+  tradeModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  tradeModalTitle: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary, textTransform: 'uppercase', letterSpacing: 0.8 },
+  tradeModalClose: { fontSize: 18, color: Colors.textMuted },
+  tradeModalBody: { gap: 10 },
+  tradeRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  tradeLabel: { fontSize: 12, color: Colors.textMuted },
+  tradeValue: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary, textAlign: 'right' },
+  tradeButtonGroup: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  tradeExecBtn: { flex: 1, paddingVertical: 10, borderRadius: Radius.md, alignItems: 'center' },
+  tradeCancelBtn: { backgroundColor: Colors.bgGlass, borderWidth: 1, borderColor: Colors.border },
+  tradeConfirmBtn: { backgroundColor: Colors.green },
+  tradeExecBtnText: { fontSize: 12, fontWeight: '700' },
 });

@@ -22,7 +22,7 @@ const getDefaultApiBaseUrl = () => {
   if (Platform.OS === 'android') {
     return 'http://192.168.1.103:8000';
   }
-  return 'http://localhost:8000';
+  return 'http://192.168.1.103:8000';
 };
 
 const getDefaultAiApiBaseUrl = () => getDefaultApiBaseUrl();
@@ -247,10 +247,22 @@ export const calendarAPI = {
 // ── AI Chat ──────────────────────────────────────────────────────────
 const AI_TIMEOUT = 120000; // 2 min — LLM inference is slow
 
+const hasChatAnswerShape = (data: any): boolean => {
+  if (!data) return false;
+  if (typeof data === 'string') return false;
+  return Boolean(data.answer || data.response || data.message);
+};
+
 export const aiAPI = {
   query: async (message: string, history: any[] = []) => {
     try {
-      return await aiApi.post('/ai-chat/query', { message, history }, { timeout: AI_TIMEOUT });
+      const primary = await aiApi.post('/ai-chat/query', { message, history }, { timeout: AI_TIMEOUT });
+      // AI base can be reachable but mispointed (health/html payload). In that case,
+      // retry through main API base which is typically user-configured and verified.
+      if (hasChatAnswerShape(primary?.data)) {
+        return primary;
+      }
+      return api.post('/ai-chat/query', { message, history }, { timeout: AI_TIMEOUT });
     } catch (error: any) {
       const status = error?.response?.status;
       // Fallback to main backend when AI backend is down/unreachable/misconfigured.

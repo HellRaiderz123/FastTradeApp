@@ -7,7 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { journalAPI, systemAPI, autoTraderAPI, marketAPI } from '../lib/api';
+import { journalAPI, systemAPI, autoTraderAPI, marketAPI, getApiBaseUrl, authTokenStore } from '../lib/api';
 import { Colors, Spacing, Radius, Gradients } from '../lib/theme';
 import { GlassCard, MetalCard, PnLBadge, StatCard, LoadingSpinner, Tag } from '../components/ui';
 import { sendLocalNotification } from '../lib/notifications';
@@ -24,7 +24,11 @@ export default function Dashboard() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const ltpPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const posPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
   const prevPnLRef = useRef<number>(0);
+  const [wsLive, setWsLive] = useState(false);
   const [atActionLoading, setAtActionLoading] = useState(false);
   const atActionRef = useRef(false);
 
@@ -52,31 +56,75 @@ export default function Dashboard() {
     return () => { if (ltpPollRef.current) clearInterval(ltpPollRef.current); };
   }, []);
 
-  // Position P&L polling — every 30 seconds
+  // ── Real-time positions via WebSocket (/ws/positions) ────────────────────
+  const handlePositionPayload = useCallback((intents: any[]) => {
+    const open = intents.filter((p: any) =>
+      p.status === 'EXECUTED' && !p.closed_at &&
+      !['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'].includes(p.strategy)
+    );
+    setPositions(open);
+    const newPnL = open.reduce((s: number, p: any) => s + (p.unrealized_pnl || 0), 0);
+    const prev = prevPnLRef.current;
+    if (prev !== 0 && newPnL - prev < -5000) {
+      sendLocalNotification(
+        '⚠️ P&L Alert',
+        `Portfolio P&L dropped ₹${Math.abs(newPnL - prev).toFixed(0)} to ₹${newPnL.toFixed(0)}`
+      );
+    }
+    prevPnLRef.current = newPnL;
+  }, []);
+
+  const connectDashboardWS = useCallback(() => {
+    const doConnect = async () => {
+      if (unmountedRef.current) return;
+      const base = getApiBaseUrl().replace(/\/+$/, '');
+      const wsBase = base.startsWith('https://') ? `wss://${base.slice(8)}` : `ws://${base.slice(7)}`;
+      const token = await authTokenStore.get();
+      const url = token ? `${wsBase}/ws/positions?token=${encodeURIComponent(token)}` : `${wsBase}/ws/positions`;
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => { if (!unmountedRef.current) setWsLive(true); };
+      ws.onmessage = (e) => {
+        if (unmountedRef.current) return;
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg?.type === 'positions_update' && Array.isArray(msg.intents)) handlePositionPayload(msg.intents);
+        } catch {}
+      };
+      ws.onclose = () => {
+        if (unmountedRef.current) return;
+        setWsLive(false);
+        // Retry after 8 s — dashboard WS is lower priority than positions screen
+        if (wsReconnectRef.current) clearTimeout(wsReconnectRef.current);
+        wsReconnectRef.current = setTimeout(() => connectDashboardWS(), 8000);
+      };
+      ws.onerror = () => { if (!unmountedRef.current) setWsLive(false); };
+    };
+    doConnect().catch(() => {});
+  }, [handlePositionPayload]);
+
   useEffect(() => {
+    unmountedRef.current = false;
+    connectDashboardWS();
+    return () => {
+      unmountedRef.current = true;
+      if (wsReconnectRef.current) clearTimeout(wsReconnectRef.current);
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    };
+  }, [connectDashboardWS]);
+
+  // HTTP fallback poll — every 30 s when WS is not yet live
+  useEffect(() => {
+    if (wsLive) return;
     posPollRef.current = setInterval(async () => {
       try {
         const res = await journalAPI.getExecutionIntents(50);
-        const all = res.data || [];
-        const open = all.filter((p: any) =>
-          p.status === 'EXECUTED' && !p.closed_at &&
-          !['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'].includes(p.strategy)
-        );
-        setPositions(open);
-        const newPnL = open.reduce((s: number, p: any) => s + (p.unrealized_pnl || 0), 0);
-        const prev = prevPnLRef.current;
-        // Notify if P&L dropped by more than ₹5,000 since last check
-        if (prev !== 0 && newPnL - prev < -5000) {
-          sendLocalNotification(
-            '⚠️ P&L Alert',
-            `Portfolio P&L dropped ₹${Math.abs(newPnL - prev).toFixed(0)} to ₹${newPnL.toFixed(0)}`
-          );
-        }
-        prevPnLRef.current = newPnL;
+        handlePositionPayload(res.data || []);
       } catch {}
     }, 30000);
     return () => { if (posPollRef.current) clearInterval(posPollRef.current); };
-  }, []);
+  }, [wsLive, handlePositionPayload]);
 
   const load = useCallback(async () => {
     try {
@@ -86,15 +134,7 @@ export default function Dashboard() {
         autoTraderAPI.getStatus(),
         marketAPI.getLTP('NIFTY'),
       ]);
-      if (posRes.status === 'fulfilled') {
-        const all = posRes.value.data || [];
-        const open = all.filter((p: any) =>
-          p.status === 'EXECUTED' && !p.closed_at &&
-          !['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'].includes(p.strategy)
-        );
-        setPositions(open);
-        prevPnLRef.current = open.reduce((sum: number, position: any) => sum + (position.unrealized_pnl || 0), 0);
-      }
+      if (posRes.status === 'fulfilled') handlePositionPayload(posRes.value.data || []);
       if (sysRes.status === 'fulfilled') setSystemEnabled(sysRes.value.data?.trading_enabled);
       if (atRes.status === 'fulfilled') setAutoTrader(atRes.value.data);
       if (ltpRes.status === 'fulfilled') setNiftyLtp(ltpRes.value.data?.ltp);
@@ -102,7 +142,7 @@ export default function Dashboard() {
     } catch {}
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [handlePositionPayload]);
 
   useEffect(() => { load(); }, []);
 
@@ -171,8 +211,8 @@ export default function Dashboard() {
                 <Text style={styles.heroDate}>{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</Text>
               </View>
               <View style={styles.heroRight}>
-                <Animated.View style={[styles.liveDot, { opacity: pulseAnim }]} />
-                <Text style={styles.statusText}>LIVE</Text>
+                <Animated.View style={[styles.liveDot, { opacity: pulseAnim, backgroundColor: wsLive ? Colors.green : Colors.amber }]} />
+                <Text style={styles.statusText}>{wsLive ? 'LIVE' : 'POLL'}</Text>
               </View>
             </View>
 
@@ -225,6 +265,50 @@ export default function Dashboard() {
             <StatCard label="Trades Today" value={String(autoTrader?.daily_trades || 0)} color={Colors.accent} style={{ marginRight: 8 }} />
             <StatCard label="Open Slots" value={String(openSlots)} color={openSlots > 0 ? Colors.green : Colors.amber} />
           </View>
+
+          {/* P&L Analytics Card */}
+          <GlassCard style={styles.card}>
+            <View style={styles.sectionHeadCompact}>
+              <Text style={styles.sectionTitle}>Trading Analytics</Text>
+              <Tag label="THIS SESSION" color={Colors.accent} bg={Colors.accentSoft} />
+            </View>
+            <View style={styles.analyticsGrid}>
+              <View style={styles.analyticsItem}>
+                <Text style={styles.analyticsLabel}>Total P&L</Text>
+                <Text style={[styles.analyticsValue, { color: totalPnL >= 0 ? Colors.green : Colors.red }]}>
+                  {totalPnL >= 0 ? '+' : ''}₹{Math.abs(totalPnL).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </Text>
+              </View>
+              <View style={styles.analyticsItem}>
+                <Text style={styles.analyticsLabel}>Win Rate</Text>
+                <Text style={[styles.analyticsValue, { color: winRate >= 50 ? Colors.green : Colors.amber }]}>
+                  {winRate}%
+                </Text>
+              </View>
+              <View style={styles.analyticsItem}>
+                <Text style={styles.analyticsLabel}>Daily P&L</Text>
+                <Text style={[styles.analyticsValue, { color: (autoTrader?.daily_pnl || 0) >= 0 ? Colors.green : Colors.red }]}>
+                  {(autoTrader?.daily_pnl || 0) >= 0 ? '+' : ''}₹{Math.abs(autoTrader?.daily_pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </Text>
+              </View>
+              <View style={styles.analyticsItem}>
+                <Text style={styles.analyticsLabel}>Total Trades</Text>
+                <Text style={styles.analyticsValue}>
+                  {(autoTrader?.daily_trades || 0) + positions.length}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.analyticsBar}>
+              <View style={styles.analyticsBarLabel}>
+                <Text style={styles.analyticsBarText}>Winners</Text>
+                <Text style={[styles.analyticsBarValue, { color: Colors.green }]}>{winners}</Text>
+              </View>
+              <View style={styles.analyticsBarLabel}>
+                <Text style={styles.analyticsBarText}>Losers</Text>
+                <Text style={[styles.analyticsBarValue, { color: Colors.red }]}>{positions.length - winners}</Text>
+              </View>
+            </View>
+          </GlassCard>
 
           {/* Auto Trader Status */}
           {autoTrader && (
@@ -462,6 +546,14 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 16, color: Colors.textSecondary, fontWeight: '500' },
   emptySubText: { fontSize: 13, color: Colors.textMuted, marginTop: 6 },
   moreText: { fontSize: 13, color: Colors.accent, textAlign: 'center', marginTop: 8 },
+  analyticsGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginBottom: 12 },
+  analyticsItem: { width: '50%', paddingHorizontal: 4, marginBottom: 12 },
+  analyticsLabel: { fontSize: 11, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.6 },
+  analyticsValue: { fontSize: 18, fontWeight: '700', marginTop: 4, color: Colors.textPrimary },
+  analyticsBar: { flexDirection: 'row', gap: 8 },
+  analyticsBarLabel: { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 8 },
+  analyticsBarText: { fontSize: 12, color: Colors.textMuted },
+  analyticsBarValue: { fontSize: 16, fontWeight: '700' },
   atControlRow: { flexDirection: 'row', gap: 8, marginTop: 14 },
   atBtn: { flex: 1, paddingVertical: 8, borderRadius: Radius.sm, alignItems: 'center' },
   atBtnStart: { backgroundColor: Colors.green },

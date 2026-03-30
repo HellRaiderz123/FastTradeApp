@@ -181,6 +181,8 @@ const BacktestScreen = () => {
               <Tag label="HISTORICAL" color={Colors.accent} bg={Colors.accentSoft} />
             </View>
 
+            {/* Mode switch — hidden when pre-filled from scanner (type is already locked) */}
+            {!prefilledStrategyId && (
             <View style={styles.modeSwitchRow}>
               <TouchableOpacity
                 activeOpacity={0.8}
@@ -197,6 +199,7 @@ const BacktestScreen = () => {
                 <Text style={[styles.modeSwitchText, backtestType === 'scanner' && styles.modeSwitchTextActive]}>Scanner</Text>
               </TouchableOpacity>
             </View>
+            )}
 
             {prefilledStrategyId ? (
               <View style={styles.strategyInfoRow}>
@@ -330,10 +333,17 @@ const BacktestScreen = () => {
                   <Text style={styles.sectionTitle}>Results</Text>
                   {/* Equity Curve Chart */}
                   {(result as any).equity_curve?.length > 1 && (
-                    <EquityChart
-                      data={(result as any).equity_curve}
-                      initial={parseInt(capital) || 100000}
-                    />
+                    <>
+                      <EquityChart
+                        data={(result as any).equity_curve}
+                        initial={parseInt(capital) || 100000}
+                      />
+                      {/* Drawdown Chart */}
+                      <DrawdownChart
+                        data={(result as any).equity_curve}
+                        initial={parseInt(capital) || 100000}
+                      />
+                    </>
                   )}
                   {summary.map((item) => (
                     <View key={item.label} style={styles.metricRow}>
@@ -467,6 +477,67 @@ function EquityChart({ data, initial }: { data: number[]; initial: number }) {
         {/* Labels */}
         <SvgText x={padL} y={H - 4} fontSize={10} fill={Colors.textMuted}>{startLabel}</SvgText>
         <SvgText x={padL + chartW} y={H - 4} fontSize={10} fill={lineColor} textAnchor="end">{endLabel}</SvgText>
+      </Svg>
+    </View>
+  );
+}
+
+function DrawdownChart({ data, initial }: { data: number[]; initial: number }) {
+  const W = SCREEN_W - Spacing.lg * 2 - Spacing.md * 2; // card padding
+  const H = 100;
+  const padT = 12, padB = 24, padL = 8, padR = 8;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  if (!data || data.length < 2) return null;
+
+  // Calculate running max and drawdown from peak
+  let runningMax = data[0];
+  const drawdownData = data.map((equity) => {
+    if (equity > runningMax) runningMax = equity;
+    return ((equity - runningMax) / runningMax) * 100; // DD as %
+  });
+
+  const minDD = Math.min(...drawdownData);
+  const maxDD = Math.max(...drawdownData);
+  const range = maxDD - minDD || 1;
+
+  const toX = (i: number) => padL + (i / (drawdownData.length - 1)) * chartW;
+  const toY = (dd: number) => padT + (1 - (dd - minDD) / range) * chartH;
+
+  const linePoints = drawdownData.map((dd, i) => `${toX(i).toFixed(1)},${toY(dd).toFixed(1)}`).join(' ');
+  const fillPoints =
+    `${(padL).toFixed(1)},${(padT + chartH).toFixed(1)} ` +
+    linePoints +
+    ` ${toX(drawdownData.length - 1).toFixed(1)},${(padT + chartH).toFixed(1)}`;
+
+  const worstDD = drawdownData[drawdownData.length - 1];
+  const minLabel = `${minDD.toFixed(1)}%`;
+  const endLabel = `${worstDD.toFixed(1)}%`;
+
+  return (
+    <View style={{ marginTop: 8, marginBottom: 12 }}>
+      <Text style={{ fontSize: 11, color: Colors.textMuted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.8 }}>Drawdown Chart</Text>
+      <Svg width={W} height={H}>
+        {/* Baseline */}
+        <Line
+          x1={padL} y1={padT + chartH}
+          x2={padL + chartW} y2={padT + chartH}
+          stroke={Colors.border} strokeWidth={1}
+        />
+        {/* Mid grid */}
+        <Line
+          x1={padL} y1={padT + chartH / 2}
+          x2={padL + chartW} y2={padT + chartH / 2}
+          stroke={Colors.border} strokeWidth={0.5} strokeDasharray="4,4"
+        />
+        {/* Fill area (always red/orange since drawdown is negative) */}
+        <Polygon points={fillPoints} fill="rgba(239,68,68,0.15)" />
+        {/* Line */}
+        <Polyline points={linePoints} fill="none" stroke={Colors.red} strokeWidth={2} strokeLinejoin="round" />
+        {/* Labels */}
+        <SvgText x={padL} y={H - 4} fontSize={10} fill={Colors.textMuted}>{minLabel}</SvgText>
+        <SvgText x={padL + chartW} y={H - 4} fontSize={10} fill={Colors.red} textAnchor="end">{endLabel}</SvgText>
       </Svg>
     </View>
   );

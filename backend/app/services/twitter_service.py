@@ -5,9 +5,11 @@ Real-time market sentiment from Twitter using tweepy and TextBlob
 
 import os
 import re
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
+from urllib.parse import unquote
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, and_, or_
 
@@ -69,8 +71,10 @@ class TwitterSentimentService:
         self.api_secret = os.getenv("TWITTER_API_SECRET", "")
         self.access_token = os.getenv("TWITTER_ACCESS_TOKEN", "")
         self.access_secret = os.getenv("TWITTER_ACCESS_SECRET", "")
-        self.bearer_token = os.getenv("TWITTER_BEARER_TOKEN", "")
-        
+        # URL-decode the bearer token — .env values are sometimes stored percent-encoded
+        # (e.g. %2B instead of +) which breaks tweepy authentication.
+        self.bearer_token = unquote(os.getenv("TWITTER_BEARER_TOKEN", ""))
+
         self.client = None
         self.enabled = bool(self.bearer_token or (self.api_key and self.api_secret))
         
@@ -147,53 +151,89 @@ class TwitterSentimentService:
         
         return targets[:3]  # Max 3 targets per tweet
     
+    def _analyze_sentiment_llm(self, text: str) -> Optional[Dict[str, Any]]:
+        """Use NVIDIA/LLM for finance-aware sentiment — falls back to TextBlob on failure."""
+        try:
+            from app.services.llm_service import call_llm, extract_json
+            prompt = (
+                f'Analyze the sentiment of this Indian stock market tweet.\n\n'
+                f'Tweet: "{text[:400]}"\n\n'
+                f'Reply with ONLY this JSON (no extra text):\n'
+                f'{{"sentiment": "bullish"|"bearish"|"neutral", "score": <float -1.0 to 1.0>, "confidence": <float 0.0 to 1.0>}}'
+            )
+            response = call_llm(prompt, max_tokens=60, temperature=0.0)
+            data = extract_json(response or "")
+            if not data:
+                return None
+            sentiment = data.get("sentiment", "neutral")
+            if sentiment not in ("bullish", "bearish", "neutral"):
+                sentiment = "neutral"
+            score = float(data.get("score", 0.0))
+            confidence = float(data.get("confidence", 0.5))
+            return {
+                "sentiment": sentiment,
+                "score": max(-1.0, min(1.0, score)),
+                "confidence": max(0.0, min(1.0, confidence)),
+                "bullish_keywords": 0,
+                "bearish_keywords": 0,
+                "source": "llm",
+            }
+        except Exception as e:
+            logger.debug("LLM sentiment skipped: %s", e)
+            return None
+
     def analyze_sentiment(self, text: str) -> Dict[str, Any]:
-        """Analyze sentiment of tweet text"""
+        """Analyze sentiment of tweet text.
+
+        Priority: NVIDIA LLM (finance-aware) → TextBlob → keyword fallback.
+        """
+        # 1. Try LLM first (most accurate for market language)
+        llm_result = self._analyze_sentiment_llm(text)
+        if llm_result:
+            return llm_result
+
         sentiment = "neutral"
         score = 0.0
         confidence = 0.5
-        
+
         text_lower = text.lower()
-        
+
         # Count keyword matches
         bullish_count = sum(1 for kw in BULLISH_KEYWORDS if kw in text_lower)
         bearish_count = sum(1 for kw in BEARISH_KEYWORDS if kw in text_lower)
-        
-        # Use TextBlob if available
+
+        # 2. TextBlob fallback
         if TEXTBLOB_AVAILABLE:
             try:
                 blob = TextBlob(text)
-                polarity = blob.sentiment.polarity  # -1 to 1
-                subjectivity = blob.sentiment.subjectivity  # 0 to 1
-                
-                # Combine TextBlob with keyword analysis
+                polarity = blob.sentiment.polarity
+                subjectivity = blob.sentiment.subjectivity
                 keyword_bias = (bullish_count - bearish_count) * 0.15
                 score = max(-1.0, min(1.0, polarity + keyword_bias))
                 confidence = max(0.3, min(1.0, (1 - subjectivity) * 0.7 + 0.3))
-                
             except Exception as e:
-                logger.warning(f"TextBlob analysis failed: {e}")
+                logger.warning("TextBlob analysis failed: %s", e)
         else:
-            # Fallback: keyword-based sentiment
+            # 3. Pure keyword fallback
             total_keywords = bullish_count + bearish_count
             if total_keywords > 0:
                 score = (bullish_count - bearish_count) / total_keywords
                 confidence = min(0.8, total_keywords * 0.2 + 0.3)
-        
-        # Determine sentiment label
+
         if score > 0.15:
             sentiment = "bullish"
         elif score < -0.15:
             sentiment = "bearish"
         else:
             sentiment = "neutral"
-        
+
         return {
             "sentiment": sentiment,
             "score": round(score, 3),
             "confidence": round(confidence, 3),
             "bullish_keywords": bullish_count,
-            "bearish_keywords": bearish_count
+            "bearish_keywords": bearish_count,
+            "source": "textblob",
         }
     
     def calculate_engagement_score(self, tweet_data: Dict) -> float:

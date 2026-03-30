@@ -17,8 +17,18 @@ from app.db.models_trade_costs import TradeCost
 
 router = APIRouter(prefix="/ai-chat", tags=["AI Chat"])
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+# ── LLM provider config ────────────────────────────────────────────────────
+# Default: Groq (free, fast — get key at console.groq.com)
+# Fallback: OpenAI-compatible endpoint (set LLM_BASE_URL + LLM_API_KEY)
+# If no key is configured the AI screen shows a friendly setup message.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")   # groq | openai | custom
+LLM_API_KEY  = os.getenv("LLM_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+LLM_MODEL    = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")  # fast Groq default
+_LLM_BASE: dict[str, str] = {
+    "groq":   "https://api.groq.com/openai/v1",
+    "openai": "https://api.openai.com/v1",
+}
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or _LLM_BASE.get(LLM_PROVIDER, _LLM_BASE["groq"])
 
 
 def get_db():
@@ -285,7 +295,15 @@ Rules:
 ================================"""
 
 
-def _call_ollama(message: str, history: list, db: Session) -> str:
+def _call_llm(message: str, history: list, db: Session) -> str:
+    if not LLM_API_KEY:
+        return (
+            "⚙️ AI not configured.\n\n"
+            "Set **GROQ_API_KEY** in your .env file (free at console.groq.com) "
+            "and restart the backend.\n\n"
+            "Model used: " + LLM_MODEL
+        )
+
     context = _build_context(db)
     system = SYSTEM_PROMPT.format(context=context)
 
@@ -296,16 +314,18 @@ def _call_ollama(message: str, history: list, db: Session) -> str:
 
     try:
         resp = httpx.post(
-            f"{OLLAMA_URL}/api/chat",
-            json={"model": OLLAMA_MODEL, "messages": messages, "stream": False},
-            timeout=120.0,
+            f"{LLM_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
+            json={"model": LLM_MODEL, "messages": messages},
+            timeout=30.0,
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"]
-    except httpx.ConnectError:
-        return "⚠️ Ollama is not running. Pull a model:\n  docker exec fasttrade-ollama ollama pull llama3.2:3b"
+        return resp.json()["choices"][0]["message"]["content"]
     except httpx.TimeoutException:
-        return "⚠️ Ollama timed out — model may still be loading. Try again in a moment."
+        return "⚠️ LLM request timed out. Check your connection."
+    except httpx.HTTPStatusError as e:
+        body = e.response.text[:300]
+        return f"⚠️ LLM API error {e.response.status_code}: {body}"
     except Exception as e:
         return f"⚠️ LLM error: {e}"
 
@@ -313,7 +333,7 @@ def _call_ollama(message: str, history: list, db: Session) -> str:
 @router.post("/query")
 def chat_query(req: ChatRequest, db: Session = Depends(get_db)):
     try:
-        answer = _call_ollama(req.message, req.history, db)
+        answer = _call_llm(req.message, req.history, db)
         return {"ok": True, "answer": answer}
     except Exception as e:
         return {"ok": False, "answer": f"Error: {str(e)}"}

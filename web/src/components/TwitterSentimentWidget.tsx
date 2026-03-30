@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Twitter, TrendingUp, TrendingDown, Minus, AlertTriangle, ExternalLink } from 'lucide-react';
+import { Twitter, TrendingUp, TrendingDown, Minus, AlertTriangle, ExternalLink, Sparkles } from 'lucide-react';
 import { twitterAPI } from '../lib/api';
 
 interface Tweet {
@@ -13,6 +13,8 @@ interface Tweet {
   retweets: number;
   likes: number;
   created_at: string;
+  // Added by LLM sentiment analyser
+  source?: 'llm' | 'textblob';
 }
 
 interface TrendingSymbol {
@@ -158,6 +160,11 @@ const TwitterSentimentWidget: React.FC<TwitterSentimentWidgetProps> = ({
         <div className="flex items-center gap-2">
           <Twitter className="w-5 h-5 text-blue-400" />
           <h3 className="text-lg font-semibold text-white">Twitter Sentiment</h3>
+          {tweets.some(t => t.source === 'llm') && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-violet-600/20 border border-violet-500/30 text-violet-300">
+              <Sparkles className="w-2.5 h-2.5" /> AI
+            </span>
+          )}
         </div>
         <span className="text-xs text-slate-500">{timeframe}</span>
       </div>
@@ -230,6 +237,11 @@ const TwitterSentimentWidget: React.FC<TwitterSentimentWidgetProps> = ({
                 <span className={`text-xs capitalize ${getSentimentColor(tweet.sentiment)}`}>
                   {tweet.sentiment}
                 </span>
+                {tweet.source === 'llm' && (
+                  <span className="flex items-center gap-0.5 text-[10px] text-violet-400" title="Scored by NVIDIA LLM">
+                    <Sparkles className="w-2.5 h-2.5" /> AI
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-500">
                 <span>❤️ {tweet.likes}</span>

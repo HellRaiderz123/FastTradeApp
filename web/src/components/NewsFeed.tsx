@@ -304,7 +304,26 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
               )}
               <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
                 <span>{formatTimestamp(item.published)}</span>
+                {item.llm_impact && (
+                  <div className="flex items-center gap-1.5">
+                    <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${getSentimentColor(item.llm_impact)}`}>
+                      {item.llm_impact.toUpperCase()}
+                    </span>
+                    {item.llm_magnitude && (
+                      <span className={`px-1.5 py-0.5 rounded border text-[10px] ${getImpactBadgeColor(item.llm_magnitude)}`}>
+                        {item.llm_magnitude}
+                      </span>
+                    )}
+                    {item.llm_symbols && item.llm_symbols.length > 0 && (
+                      <span className="text-slate-400">{item.llm_symbols.slice(0, 2).join(', ')}</span>
+                    )}
+                    <span className="text-[9px] text-slate-600 italic">AI</span>
+                  </div>
+                )}
               </div>
+              {item.llm_reason && (
+                <p className="text-[10px] text-slate-500 mt-1 italic">{item.llm_reason}</p>
+              )}
             </a>
           ))
         )}

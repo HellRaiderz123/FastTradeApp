@@ -122,11 +122,15 @@ const Terminal: React.FC = () => {
       try {
         // Top movers
         const movers = await marketDashboardAPI.getTopMovers(5, universe);
-        setTopMovers(movers);
+        setTopMovers({
+          gainers: Array.isArray(movers?.gainers) ? movers.gainers : [],
+          losers: Array.isArray(movers?.losers) ? movers.losers : [],
+          most_active: Array.isArray(movers?.most_active) ? movers.most_active : [],
+        });
 
         // Sector performance
         const sectorData = await marketDashboardAPI.getSectorPerformance();
-        setSectors(sectorData.sectors.slice(0, 6));
+        setSectors((sectorData?.sectors ?? []).slice(0, 6));
 
         // Overall sentiment
         const sentimentData = await sentimentAPI.getOverallSentiment();
@@ -142,8 +146,8 @@ const Terminal: React.FC = () => {
       // Swing opportunities — isolated so failure doesn't block other fetches
       try {
         const opportunities = await swingScannerAPI.scan('all', 50, universe);
-        setSwingOpportunities(opportunities.opportunities.slice(0, 5));
-        setSwingDataSource(opportunities.data_source || 'unknown');
+        setSwingOpportunities((opportunities?.opportunities ?? []).slice(0, 5));
+        setSwingDataSource(opportunities?.data_source || 'unknown');
       } catch (swingErr) {
         console.warn('Swing scanner unavailable:', swingErr);
         setSwingOpportunities([]);
@@ -154,7 +158,7 @@ const Terminal: React.FC = () => {
       try {
         const calendarData = await getTodayEvents();
         console.log('📅 Calendar API response:', calendarData);
-        const highImpactEvents = calendarData.events.filter(e => e.impact === 'high').slice(0, 4);
+        const highImpactEvents = (calendarData?.events ?? []).filter(e => e.impact === 'high').slice(0, 4);
         console.log('📅 High-impact events for today:', highImpactEvents);
         setTodayEvents(highImpactEvents);
       } catch (calErr) {

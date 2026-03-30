@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 logger = logging.getLogger(__name__)
@@ -139,3 +139,35 @@ def require_authenticated_user(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
     return current_user
+
+
+def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
+    """
+    Authenticate a WebSocket connection using bearer token from either:
+    1) Authorization header: Bearer <token>
+    2) Query param: ?token=<token>
+    """
+    if not _is_auth_enabled():
+        return {"username": "anonymous", "auth_enabled": False}
+
+    token = None
+
+    auth_header = websocket.headers.get("authorization", "")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+
+    if not token:
+        token = websocket.query_params.get("token")
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+    payload = decode_access_token(token)
+    return {
+        "username": payload["sub"],
+        "auth_enabled": True,
+        "exp": payload.get("exp"),
+    }
