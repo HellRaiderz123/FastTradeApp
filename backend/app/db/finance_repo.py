@@ -153,8 +153,10 @@ def get_budgets(db: Session, month: str = None):
     if month:
         query = query.filter(Budget.month == month)
     else:
-        current_month = datetime.now().strftime("%Y-%m")
-        query = query.filter(Budget.month == current_month)
+        # Use the latest month that has budgets, falling back to current month
+        latest = db.query(func.max(Budget.month)).scalar()
+        target_month = latest or datetime.now().strftime("%Y-%m")
+        query = query.filter(Budget.month == target_month)
     
     return query.all()
 
@@ -162,7 +164,13 @@ def get_budgets(db: Session, month: str = None):
 def get_budget_status(db: Session, category: str, month: str = None):
     """Get budget status with spent amount"""
     if not month:
-        month = datetime.now().strftime("%Y-%m")
+        # Use the latest month that has a budget for this category
+        latest = (
+            db.query(func.max(Budget.month))
+            .filter(Budget.category == category)
+            .scalar()
+        )
+        month = latest or datetime.now().strftime("%Y-%m")
     
     budget = db.query(Budget).filter(
         Budget.category == category,

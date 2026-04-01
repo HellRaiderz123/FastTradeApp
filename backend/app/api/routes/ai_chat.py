@@ -271,16 +271,30 @@ def _build_context(db: Session) -> str:
 
 SYSTEM_PROMPT = """You are an expert AI assistant for FastTrade — an algorithmic trading platform for Indian stock markets (NSE/BSE).
 
-You have COMPLETE access to the user's real data across ALL modules:
+You have COMPLETE access to the user's real data AND the ability to take real actions via built-in tools.
+
+DATA ACCESS:
 - Trading positions (open & closed), P&L, strategies
 - Condition Scanner strategies and backtest results
 - Scanner signals generated in last 7 days
 - Trade costs and brokerage charges
 - Personal finance (transactions, budgets, savings goals, bills)
 
-Use this data to give specific, data-driven answers. Never say you don't have access to data.
+ACTIONS YOU CAN PERFORM (use your tools — do not say you cannot do these):
+✅ create_budget — "Add a Food budget of ₹3000"
+✅ update_budget — "Change my Travel budget to ₹8000"
+✅ delete_budget — "Remove the Shopping budget"
+✅ create_savings_goal — "Create a savings goal: New Bike, ₹50000, by Dec 2026"
+✅ update_savings_goal_progress — "Update my Emergency Fund to ₹25000"
+✅ create_bill_reminder — "Add a reminder for Electricity bill ₹1200 due on 10th April"
+✅ mark_bill_paid — "Mark my Internet bill as paid"
+✅ add_transaction — "Record ₹450 spent on lunch under Food"
+✅ run_scanner — "Run the RSI Oversold scanner"
+✅ close_position — "Close my NIFTY position" / "Exit the BANKNIFTY trade"
+✅ place_trade — "Buy 10 shares of SBI at market price CNC" / "Sell 5 RELIANCE shares MIS"
+✅ place_trade dry run — "Dry run: buy 10 shares of SBI at market CNC"
 
-You can help with:
+ANALYSIS YOU CAN DO:
 ✅ Trade analysis — P&L, win rate, profit factor, best/worst trades
 ✅ Position advice — hold/exit decisions based on actual unrealized P&L
 ✅ Strategy analysis — which scanner strategies are working, backtest results
@@ -291,12 +305,13 @@ You can help with:
 ✅ Risk management — position sizing, drawdown, diversification advice
 ✅ Indian market specifics — NIFTY, BANKNIFTY, F&O, NSE/BSE rules
 
-Rules:
+CRITICAL RULES:
+- NEVER say you cannot perform actions — you have tools for all the above
+- When the user asks to DO something, call the appropriate tool immediately
 - Be concise and direct — no fluff
 - Use ₹ for Indian rupees
-- Give actionable advice, not generic tips
 - Reference specific numbers from the data when answering
-- For follow-up questions, remember the conversation context
+- After performing an action, confirm what was done with the key details
 
 === LIVE DATA FROM FASTTRADE ===
 {context}
@@ -315,7 +330,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "category": {"type": "string", "description": "Budget category name (e.g. Food, Travel, Entertainment, Shopping)"},
-                    "monthly_limit": {"type": "number", "description": "Monthly spending limit in INR (₹)"},
+                    "monthly_limit": {"type": "number", "description": "Monthly spending limit in INR"},
                     "alert_threshold": {"type": "number", "description": "Alert when spending reaches this percentage of the limit. Default is 80."},
                 },
                 "required": ["category", "monthly_limit"],
@@ -462,6 +477,27 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "place_trade",
+            "description": "Place a real stock buy or sell order on Zerodha. Use when the user asks to buy or sell shares/stocks. Supports CNC (delivery), MIS (intraday), NRML (F&O overnight).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "NSE/BSE tradingsymbol (e.g. SBIN, RELIANCE, INFY, TCS, HDFCBANK). No spaces."},
+                    "action": {"type": "string", "enum": ["BUY", "SELL"], "description": "Whether to buy or sell"},
+                    "quantity": {"type": "integer", "description": "Number of shares to buy or sell"},
+                    "product": {"type": "string", "enum": ["CNC", "MIS", "NRML"], "description": "CNC = delivery, MIS = intraday, NRML = F&O overnight. Default CNC for stocks."},
+                    "order_type": {"type": "string", "enum": ["MARKET", "LIMIT"], "description": "MARKET = execute at best price, LIMIT = execute at specified price. Default MARKET."},
+                    "price": {"type": "number", "description": "Limit price in INR. Required only when order_type is LIMIT."},
+                    "exchange": {"type": "string", "enum": ["NSE", "BSE"], "description": "Exchange to place order on. Default NSE."},
+                    "dry_run": {"type": "boolean", "description": "If true, simulate order placement and return what would be sent without placing any real order."},
+                },
+                "required": ["symbol", "action", "quantity"],
+            },
+        },
+    },
 ]
 
 
@@ -593,7 +629,6 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
             )
             if not strategy:
                 return {"success": False, "error": f"No scanner strategy matching '{args['strategy_name']}'. Check available strategies."}
-            # Trigger via internal HTTP call to the scan endpoint
             try:
                 resp = httpx.post(
                     f"http://localhost:8000/condition-scanner/scan/{strategy.id}",
@@ -634,13 +669,92 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
             except Exception as e:
                 return {"success": False, "error": f"Exit call failed: {str(e)}"}
 
+        elif name == "place_trade":
+            symbol = args["symbol"].upper().strip()
+            action = args["action"].upper()
+            quantity = int(args["quantity"])
+            product = args.get("product", "CNC").upper()
+            order_type = args.get("order_type", "MARKET").upper()
+            exchange = args.get("exchange", "NSE").upper()
+            price = args.get("price")
+            dry_run = bool(args.get("dry_run", False))
+
+            if order_type == "LIMIT" and price is None:
+                return {"success": False, "error": "price is required for LIMIT orders"}
+            if quantity <= 0:
+                return {"success": False, "error": "quantity must be greater than 0"}
+
+            if dry_run:
+                return {
+                    "success": True,
+                    "action": "simulated_trade",
+                    "dry_run": True,
+                    "would_place": {
+                        "symbol": symbol,
+                        "trade_action": action,
+                        "quantity": quantity,
+                        "product": product,
+                        "order_type": order_type,
+                        "exchange": exchange,
+                        "price": price,
+                    },
+                    "message": "Dry run only. No order was placed.",
+                }
+
+            try:
+                from app.core.broker.zerodha.client import get_kite_client
+                kite = get_kite_client()
+            except Exception as e:
+                return {"success": False, "error": f"Zerodha not connected: {str(e)}"}
+
+            try:
+                order_id = kite.place_order(
+                    variety=kite.VARIETY_REGULAR,
+                    exchange=exchange,
+                    tradingsymbol=symbol,
+                    transaction_type=(
+                        kite.TRANSACTION_TYPE_BUY if action == "BUY"
+                        else kite.TRANSACTION_TYPE_SELL
+                    ),
+                    quantity=quantity,
+                    order_type=(
+                        kite.ORDER_TYPE_MARKET if order_type == "MARKET"
+                        else kite.ORDER_TYPE_LIMIT
+                    ),
+                    product={
+                        "CNC": kite.PRODUCT_CNC,
+                        "MIS": kite.PRODUCT_MIS,
+                        "NRML": kite.PRODUCT_NRML,
+                    }.get(product, kite.PRODUCT_CNC),
+                    validity=kite.VALIDITY_DAY,
+                    price=price if order_type == "LIMIT" else None,
+                )
+                logger.info(
+                    "AI placed trade: %s %s x%s %s %s order_id=%s",
+                    action, symbol, quantity, product, order_type, order_id,
+                )
+                return {
+                    "success": True,
+                    "action": "placed_trade",
+                    "order_id": str(order_id),
+                    "symbol": symbol,
+                    "trade_action": action,
+                    "quantity": quantity,
+                    "product": product,
+                    "order_type": order_type,
+                    "exchange": exchange,
+                    "price": price,
+                }
+            except Exception as e:
+                logger.error("AI place_trade error: %s", e)
+                return {"success": False, "error": str(e)}
+
         else:
             return {"success": False, "error": f"Unknown tool: {name}"}
 
     except Exception as e:
         logger.exception("Tool execution error for %s: %s", name, e)
         return {"success": False, "error": str(e)}
-
 
 # ── Agentic LLM call with function-calling loop ────────────────────────────
 
