@@ -588,7 +588,7 @@ export const financeAPI = {
 
   // ========== EXPENSE FORECASTING ==========
   generateForecast: (category: string, monthsBack?: number) =>
-    api.post(`/finance/forecast/${category}`, { months_back: monthsBack || 3 }),
+    api.post(`/finance/forecast/${category}`, null, { params: { months_back: monthsBack || 3 } }),
 
   getExpenseForecasts: (month?: string) =>
     api.get('/finance/forecast', { params: { month } }),

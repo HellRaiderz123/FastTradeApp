@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, RefreshCw } from 'lucide-react';
 import { financeAPI } from '../lib/api';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 
 interface Forecast {
   id: number;
@@ -14,9 +14,21 @@ interface Forecast {
 
 export default function ExpenseForecastWidget() {
   const [forecasts, setForecasts] = useState<Forecast[]>([]);
-  const [selectedCategories, setSelectedCategories] = useState<string[] | unknown[]>([]);
+  const [transactionCategories, setTransactionCategories] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
+
+  const bootstrapForecasts = async (categories: string[]) => {
+    if (categories.length === 0) return;
+
+    const prioritized = categories
+      .filter(c => c !== 'Uncategorized')
+      .concat(categories.includes('Uncategorized') ? ['Uncategorized'] : [])
+      .slice(0, 5);
+
+    await Promise.allSettled(prioritized.map((category) => financeAPI.generateForecast(category)));
+  };
 
   useEffect(() => {
     loadForecasts();
@@ -27,14 +39,50 @@ export default function ExpenseForecastWidget() {
   }, [forecasts, selectedCategories]);
 
   const loadForecasts = async () => {
+    setLoading(true);
     try {
-      const res = await financeAPI.getExpenseForecasts();
-      setForecasts(res.data);
-      // Pre-select first 3 categories
-      const categories = [...new Set(res.data.map((f: Forecast) => f.category))].slice(0, 3);
+      const transactionsRes = await financeAPI.getTransactions();
+      const txCategories: string[] = [
+        ...new Set(
+          transactionsRes.data
+            .filter((t: any) => Number(t.debit) > 0)
+            .map((t: any) => String(t.category || '').trim())
+            .filter((c: string) => c.length > 0)
+        ),
+      ];
+      setTransactionCategories(txCategories);
+
+      let forecastData: Forecast[] = [];
+      try {
+        const forecastRes = await financeAPI.getExpenseForecasts();
+        forecastData = forecastRes.data;
+      } catch (forecastError) {
+        console.error('Failed to load forecasts:', forecastError);
+      }
+
+      if (forecastData.length === 0 && txCategories.length > 0) {
+        await bootstrapForecasts(txCategories);
+        try {
+          const refreshed = await financeAPI.getExpenseForecasts();
+          forecastData = refreshed.data;
+        } catch (refreshError) {
+          console.error('Failed to reload forecasts after bootstrap:', refreshError);
+        }
+      }
+
+      setForecasts(forecastData);
+
+      const categories: string[] = [
+        ...new Set([
+          ...forecastData.map((f: Forecast) => f.category),
+          ...txCategories,
+        ]),
+      ].slice(0, 3);
       setSelectedCategories(categories);
     } catch (error) {
-      console.error('Failed to load forecasts:', error);
+      console.error('Failed to load finance data:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -77,7 +125,12 @@ export default function ExpenseForecastWidget() {
     return chartData.reduce((sum, item) => sum + item.confidence, 0) / chartData.length;
   };
 
-  const categories = [...new Set(forecasts.map(f => f.category))];
+  const categories: string[] = [
+    ...new Set([
+      ...forecasts.map(f => f.category),
+      ...transactionCategories,
+    ]),
+  ];
 
   return (
     <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
