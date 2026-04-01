@@ -188,6 +188,16 @@ const TYPE_COLORS: Record<string, string> = {
 const LAST_SELECTED_SCANNER_STRATEGY_KEY = 'scanner:lastSelectedStrategyId';
 const BACKTEST_POSITION_SIZE_PCT = 10;
 
+const formatNumber = (value: unknown, fallback = '0') => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toLocaleString() : fallback;
+};
+
+const formatCurrency = (value: unknown, fallback = '₹0') => {
+  const n = Number(value);
+  return Number.isFinite(n) ? `₹${n.toLocaleString()}` : fallback;
+};
+
 const DEFAULT_ZERODHA_CONFIG: BrokerageConfig = {
   equity_delivery_brokerage_pct: 0,
   equity_delivery_brokerage_flat: 0,
@@ -1377,7 +1387,7 @@ const CreateScanner: React.FC = () => {
                         </div>
                       </div>
                       <div className="flex-1 text-xs text-slate-500">
-                        <p>Qty = ⌊ amount ÷ stock price ⌋. E.g. ₹{editorAutoQty.toLocaleString()} on a ₹2,500 stock = {Math.floor(editorAutoQty / 2500)} shares.</p>
+                        <p>Qty = ⌊ amount ÷ stock price ⌋. E.g. ₹{formatNumber(editorAutoQty)} on a ₹2,500 stock = {Math.floor(editorAutoQty / 2500)} shares.</p>
                       </div>
                     </div>
                   )}
@@ -1452,7 +1462,7 @@ const CreateScanner: React.FC = () => {
                       <>
                         <span className="text-green-500">●</span>
                         <span>
-                          {candleRange.total_rows.toLocaleString()} {editorTimeframe} candles available
+                          {formatNumber(candleRange.total_rows)} {editorTimeframe} candles available
                           ({candleRange.symbols_with_data}/{candleRange.symbols_in_universe} symbols)
                         </span>
                         <span className="text-slate-600">|</span>
@@ -1601,7 +1611,7 @@ const CreateScanner: React.FC = () => {
                       </span>
                       {(backtestResult.summary as any).total_candles_used > 0 && (
                         <span className="text-slate-500">
-                          {(backtestResult.summary as any).total_candles_used.toLocaleString()} candles
+                          {formatNumber((backtestResult.summary as any).total_candles_used)} candles
                         </span>
                       )}
                     </div>
@@ -1623,7 +1633,7 @@ const CreateScanner: React.FC = () => {
                     </div>
                     {applyZerodhaCharges && (displayedBacktestResult as any)?.charges_summary && (
                       <div className="mb-3 text-[10px] text-orange-300 bg-orange-500/10 border border-orange-500/20 rounded-lg px-2.5 py-2">
-                        Total estimated charges: ₹{((displayedBacktestResult as any).charges_summary.total_charges || 0).toLocaleString()}
+                        Total estimated charges: {formatCurrency((displayedBacktestResult as any).charges_summary.total_charges || 0)}
                         {loadingBrokerageConfig ? ' (loading config...)' : ''}
                       </div>
                     )}
@@ -1654,7 +1664,7 @@ const CreateScanner: React.FC = () => {
                     <div className="bg-slate-800/50 rounded-lg p-2.5 mb-3 flex items-center justify-between">
                       <span className="text-xs text-slate-400">Capital</span>
                       <span className="text-xs text-white">
-                        ₹{displayedBacktestResult!.initial_capital.toLocaleString()} → ₹{displayedBacktestResult!.final_capital.toLocaleString()}
+                        {formatCurrency(displayedBacktestResult!.initial_capital)} → {formatCurrency(displayedBacktestResult!.final_capital)}
                       </span>
                     </div>
 

@@ -182,12 +182,14 @@ export const systemAPI = {
 export const scannerAPI = {
   listStrategies: () => api.get('/condition-scanner/strategies'),
   getStrategy: (id: number) => api.get(`/condition-scanner/strategies/${id}`),
+  explainStrategy: (id: number) => api.get(`/condition-scanner/strategies/${id}/explain`),
   deleteStrategy: (id: number) => api.delete(`/condition-scanner/strategies/${id}`),
   scanStrategy: (id: number) => api.post(`/condition-scanner/scan/${id}`),
   runBacktest: (id: number, payload?: any) => api.post(`/condition-scanner/backtest/${id}`, payload || {}),
   getCandleRange: (timeframe: string, universe = 'NIFTY50') =>
     api.get(`/condition-scanner/candle-range/${encodeURIComponent(timeframe)}`, { params: { universe } }),
-  getHistory: (params?: any) => api.get('/condition-scanner/history', { params }),
+  getHistory: (params?: any, timeout = 30000) =>
+    api.get('/condition-scanner/history', { params, timeout }),
   executeSignal: (body: any) => api.post('/condition-scanner/execute-signal', body),
   startAutoScan: (id: number) => api.post(`/condition-scanner/scheduler/start/${id}`),
   stopAutoScan: (id: number) => api.post(`/condition-scanner/scheduler/stop/${id}`),

@@ -943,7 +943,7 @@ async def explain_strategy(strategy_id: int, db: Session = Depends(get_db)):
     }
 
 
-
+@router.put("/strategies/{strategy_id}")
 async def update_strategy(strategy_id: int, data: StrategyUpdate, db: Session = Depends(get_db)):
     row = _get_strategy_or_404(db, strategy_id)
 
@@ -1357,6 +1357,10 @@ class BacktestRequest(BaseModel):
     initial_capital: float = 100000.0
     position_size_pct: float = 10.0    # % of capital per trade
     max_open_trades: int = 5
+    # Optional exit overrides; if omitted, strategy exit_config is used.
+    sl_pct: Optional[float] = None
+    tp_pct: Optional[float] = None
+    tsl_pct: Optional[float] = None
 
 
 class StrategyDiscoveryRequest(BaseModel):
@@ -1548,9 +1552,17 @@ def _run_backtest_for_strategy_payload(
     strategy_id = strategy.get("id")
     conditions = strategy.get("entry_conditions", [])
     direction = strategy.get("direction", "BUY")
-    exit_config = strategy.get("exit_config", {})
+    exit_config = dict(strategy.get("exit_config", {}) or {})
     universe = strategy.get("universe", "NIFTY50")
     timeframe = strategy.get("timeframe", "Day")
+
+    # Allow request-level exit overrides from UI backtest form.
+    if req.sl_pct is not None:
+        exit_config["sl_pct"] = req.sl_pct
+    if req.tp_pct is not None:
+        exit_config["tp_pct"] = req.tp_pct
+    if req.tsl_pct is not None:
+        exit_config["tsl_pct"] = req.tsl_pct
 
     candle_info = TIMEFRAME_CANDLE_MAP.get(timeframe)
     if not candle_info:

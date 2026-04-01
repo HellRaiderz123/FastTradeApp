@@ -80,9 +80,9 @@ const BacktestScreen = () => {
   const handleRunBacktest = async () => {
     if (isRunningRef.current) return; // guard against rapid double-tap
     if (dateRangeLoading) return;     // wait for date range to resolve
-    const strategyIdNum = Number(strategyId);
+    const strategyIdNum = Number(strategyId || prefilledStrategyId || 0);
     if (!strategyIdNum || Number.isNaN(strategyIdNum)) {
-      setResult({ error: 'Please enter a valid Strategy ID.' });
+      setResult({ error: 'Please enter a valid Strategy ID (numeric). If opened from Scanner, go back and re-open Backtest from a selected strategy.' });
       return;
     }
     if (!startDate || !endDate) {
@@ -101,6 +101,9 @@ const BacktestScreen = () => {
           max_open_trades: Number(maxOpenTrades) || 5,
           start_date: startDate,
           end_date: endDate,
+          ...(slPct.trim() ? { sl_pct: Number(slPct) } : {}),
+          ...(tpPct.trim() ? { tp_pct: Number(tpPct) } : {}),
+          ...(tslPct.trim() ? { tsl_pct: Number(tslPct) } : {}),
         };
 
         const response = await scannerAPI.runBacktest(strategyIdNum, payload);
@@ -134,6 +137,7 @@ const BacktestScreen = () => {
           mode: 'auto',
           ...(slPct.trim() ? { sl_pct: Number(slPct) } : {}),
           ...(tpPct.trim() ? { tp_pct: Number(tpPct) } : {}),
+          ...(tslPct.trim() ? { tsl_pct: Number(tslPct) } : {}),
         };
         const response = await backtestAPI.runBacktest(payload);
         setResult(response.data || {});
@@ -212,7 +216,15 @@ const BacktestScreen = () => {
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Strategy ID</Text>
-              <TextInput style={styles.input} value={strategyId} onChangeText={setStrategyId} keyboardType="number-pad" placeholder="e.g. 1" placeholderTextColor={Colors.textFaint} />
+              <TextInput
+                style={styles.input}
+                value={strategyId}
+                onChangeText={setStrategyId}
+                keyboardType="number-pad"
+                placeholder="e.g. 1"
+                placeholderTextColor={Colors.textFaint}
+                editable={!prefilledStrategyId}
+              />
             </View>
 
             <View style={styles.inputGroup}>
@@ -302,6 +314,17 @@ const BacktestScreen = () => {
                   placeholderTextColor={Colors.textFaint}
                 />
               </View>
+            </View>
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>TSL % (optional, 0 = disabled)</Text>
+              <TextInput
+                style={styles.input}
+                value={tslPct}
+                onChangeText={setTslPct}
+                keyboardType="decimal-pad"
+                placeholder="e.g. 1.5"
+                placeholderTextColor={Colors.textFaint}
+              />
             </View>
 
             {backtestType === 'scanner' ? (

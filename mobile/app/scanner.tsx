@@ -33,6 +33,24 @@ export default function ScannerScreen() {
   const [backtestStats, setBacktestStats] = useState<Record<number, any>>({});
   const [tradeSignal, setTradeSignal] = useState<any | null>(null);
   const [tradingSignalId, setTradingSignalId] = useState<number | null>(null);
+  const [explaining, setExplaining] = useState(false);
+  const [explanation, setExplanation] = useState<string | null>(null);
+
+  const handleExplain = useCallback(async () => {
+    if (!selected?.id || usingFallbackData) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setExplaining(true);
+    setExplanation(null);
+    try {
+      const res = await scannerAPI.explainStrategy(selected.id);
+      setExplanation(res.data.explanation || null);
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || 'LLM not configured';
+      setExplanation(`⚠️ ${msg}`);
+    } finally {
+      setExplaining(false);
+    }
+  }, [selected?.id, usingFallbackData]);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -81,13 +99,15 @@ export default function ScannerScreen() {
     
     // Fetch signal history
     scannerAPI
-      .getHistory({ strategy_id: selected.id, limit: 20 })
+      .getHistory({ strategy_id: selected.id, limit: 10, days: 7 }, 30000)
       .then((res) => {
-        const data = Array.isArray(res.data?.signals)
-          ? res.data.signals
-          : Array.isArray(res.data)
-            ? res.data
-            : [];
+        const data = Array.isArray(res.data?.history)
+          ? res.data.history
+          : Array.isArray(res.data?.signals)
+            ? res.data.signals
+            : Array.isArray(res.data)
+              ? res.data
+              : [];
         setSignalHistory(data);
       })
       .catch((error) => {
@@ -147,6 +167,14 @@ export default function ScannerScreen() {
       // Show completion with count
       setScanStatus(`✅ Scan complete: ${count} signal${count === 1 ? '' : 's'} found`);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Render fresh scan hits immediately; don't wait for history round-trip.
+      const latestHistory = Array.isArray(res.data?.signal_history)
+        ? res.data.signal_history
+        : [];
+      if (latestHistory.length > 0) {
+        setSignalHistory(latestHistory);
+      }
       
       // Show alert for significant findings
       if (count > 0) {
@@ -162,13 +190,15 @@ export default function ScannerScreen() {
       
       // Reload signal history
       await scannerAPI
-        .getHistory({ strategy_id: selected.id, limit: 20 })
+        .getHistory({ strategy_id: selected.id, limit: 10, days: 7 }, 30000)
         .then((histRes) => {
-          const data = Array.isArray(histRes.data?.signals)
-            ? histRes.data.signals
-            : Array.isArray(histRes.data)
-              ? histRes.data
-              : [];
+          const data = Array.isArray(histRes.data?.history)
+            ? histRes.data.history
+            : Array.isArray(histRes.data?.signals)
+              ? histRes.data.signals
+              : Array.isArray(histRes.data)
+                ? histRes.data
+                : [];
           setSignalHistory(data);
         })
         .catch((histErr) => {
@@ -356,6 +386,7 @@ export default function ScannerScreen() {
                   activeOpacity={0.9}
                   onPress={() => {
                     setSelectedId(strategy.id);
+                    setExplanation(null);
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   }}
                 >
@@ -396,8 +427,38 @@ export default function ScannerScreen() {
 
           {selected && (
             <GlassCard style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Selected Strategy</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                <Text style={styles.detailTitle}>Selected Strategy</Text>
+                {!usingFallbackData && (
+                  <TouchableOpacity
+                    onPress={handleExplain}
+                    disabled={explaining}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center', gap: 4,
+                      paddingHorizontal: 10, paddingVertical: 5,
+                      borderRadius: 8,
+                      backgroundColor: 'rgba(139,92,246,0.15)',
+                      borderWidth: 1, borderColor: 'rgba(139,92,246,0.35)',
+                    }}
+                  >
+                    <Text style={{ fontSize: 12 }}>{explaining ? '⏳' : '✨'}</Text>
+                    <Text style={{ color: '#a78bfa', fontSize: 12, fontWeight: '600' }}>
+                      {explaining ? 'Thinking…' : 'Explain'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
               <Text style={styles.detailName}>{selected.name}</Text>
+              {explanation ? (
+                <View style={{
+                  marginBottom: 10, padding: 10,
+                  borderRadius: 8,
+                  backgroundColor: 'rgba(139,92,246,0.1)',
+                  borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)',
+                }}>
+                  <Text style={{ color: '#c4b5fd', fontSize: 12, lineHeight: 18 }}>{explanation}</Text>
+                </View>
+              ) : null}
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>Timeframe</Text>
                 <Text style={styles.detailValue}>{selected.timeframe}</Text>
