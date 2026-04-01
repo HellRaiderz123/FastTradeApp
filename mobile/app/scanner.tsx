@@ -262,7 +262,7 @@ export default function ScannerScreen() {
         ? await scannerAPI.startAutoScan(selected.id)
         : await scannerAPI.stopAutoScan(selected.id);
       updateStrategy(selected.id, { auto_scan_enabled: nextEnabled });
-      setScanStatus(res.data?.message || (nextEnabled ? 'Auto-execute enabled' : 'Auto-execute disabled'));
+      setScanStatus(res.data?.message || (nextEnabled ? 'Auto scan and execution enabled' : 'Auto scan and execution disabled'));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error: any) {
       const detail = error?.response?.data?.detail || 'Failed to update auto-execute setting.';
@@ -480,7 +480,7 @@ export default function ScannerScreen() {
                 <Text style={styles.detailValue}>SL {selected.exit_config?.sl_pct ?? 5}% · TP {selected.exit_config?.tp_pct ?? 10}% · TSL {selected.exit_config?.tsl_pct ?? 0}%</Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Auto Execute</Text>
+                <Text style={styles.detailLabel}>Auto Scan & Execute</Text>
                 <Tag
                   label={selected.auto_scan_enabled ? 'ENABLED' : 'DISABLED'}
                   color={selected.auto_scan_enabled ? Colors.green : Colors.textSecondary}
@@ -511,12 +511,16 @@ export default function ScannerScreen() {
                 </View>
               </View>
 
+              <Text style={styles.helperText}>
+                When enabled, the backend scheduler scans during market hours and places trades automatically. Run Scan only finds signals for review.
+              </Text>
+
                 {usingFallbackData ? (
                   <Text style={styles.warningText}>Demo strategies loaded. Connect backend to run real scan/backtest.</Text>
                 ) : null}
 
               <PrimaryButton
-                title={selected.auto_scan_enabled ? 'Disable Auto Execute' : 'Enable Auto Execute'}
+                title={selected.auto_scan_enabled ? 'Disable Auto Scan & Execute' : 'Enable Auto Scan & Execute'}
                 onPress={handleToggleAutoExecute}
                 loading={togglingAutoExecute}
                 disabled={usingFallbackData}
@@ -761,6 +765,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 13,
   },
+  helperText: { marginTop: 2, marginBottom: 8, fontSize: 11, color: Colors.textSecondary, lineHeight: 16 },
   warningText: { marginTop: 2, marginBottom: 6, fontSize: 11, color: Colors.amber },
   scanStatus: { marginTop: 10, fontSize: 12, color: Colors.textSecondary },
   signalRow: {

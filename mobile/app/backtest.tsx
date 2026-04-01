@@ -11,47 +11,86 @@ import { GlassCard, PrimaryButton, Tag } from '../components/ui';
 
 const SCREEN_W = Dimensions.get('window').width;
 
+const firstParam = (value?: string | string[]) => Array.isArray(value) ? value[0] : value;
+
 const BacktestScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams<{
-    strategyId?: string;
-    strategyName?: string;
-    universe?: string;
-    timeframe?: string;
-    backtestType?: string;
-    slPct?: string;
-    tpPct?: string;
-    tslPct?: string;
-    exitMode?: string;
-    positionSizePct?: string;
-    maxOpenTrades?: string;
-    initialCapital?: string;
+    strategyId?: string | string[];
+    strategyName?: string | string[];
+    universe?: string | string[];
+    timeframe?: string | string[];
+    backtestType?: string | string[];
+    slPct?: string | string[];
+    tpPct?: string | string[];
+    tslPct?: string | string[];
+    exitMode?: string | string[];
+    positionSizePct?: string | string[];
+    maxOpenTrades?: string | string[];
+    initialCapital?: string | string[];
   }>();
-  const prefilledStrategyId = params.strategyId ? Number(params.strategyId) : null;
-  const initialUnderlying = params.universe ? String(params.universe) : 'NIFTY';
-  const initialType: 'generic' | 'scanner' = params.backtestType === 'scanner' ? 'scanner' : 'generic';
+  const routeStrategyId = firstParam(params.strategyId);
+  const routeStrategyName = firstParam(params.strategyName);
+  const routeUniverse = firstParam(params.universe);
+  const routeTimeframe = firstParam(params.timeframe);
+  const routeBacktestType = firstParam(params.backtestType);
+  const routeSlPct = firstParam(params.slPct);
+  const routeTpPct = firstParam(params.tpPct);
+  const routeTslPct = firstParam(params.tslPct);
+  const routePositionSizePct = firstParam(params.positionSizePct);
+  const routeMaxOpenTrades = firstParam(params.maxOpenTrades);
+  const routeInitialCapital = firstParam(params.initialCapital);
+  const prefilledStrategyId = routeStrategyId ? Number(routeStrategyId) : null;
+  const initialUnderlying = routeUniverse || 'NIFTY';
+  const initialType: 'generic' | 'scanner' = routeBacktestType === 'scanner' ? 'scanner' : 'generic';
 
   const [underlying, setUnderlying] = useState(initialUnderlying);
-  const [timeframe, setTimeframe] = useState(params.timeframe ? String(params.timeframe) : 'Day');
+  const [timeframe, setTimeframe] = useState(routeTimeframe || 'Day');
   const [backtestType, setBacktestType] = useState<'generic' | 'scanner'>(initialType);
   const [strategyId, setStrategyId] = useState(prefilledStrategyId ? String(prefilledStrategyId) : '');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [capital, setCapital] = useState(params.initialCapital ? String(params.initialCapital) : '100000');
-  const [slPct, setSlPct] = useState(params.slPct ? String(params.slPct) : '');
-  const [tpPct, setTpPct] = useState(params.tpPct ? String(params.tpPct) : '');
-  const [tslPct, setTslPct] = useState(params.tslPct ? String(params.tslPct) : '0');
-  const [positionSizePct, setPositionSizePct] = useState(params.positionSizePct ? String(params.positionSizePct) : '10');
-  const [maxOpenTrades, setMaxOpenTrades] = useState(params.maxOpenTrades ? String(params.maxOpenTrades) : '5');
+  const [capital, setCapital] = useState(routeInitialCapital || '100000');
+  const [slPct, setSlPct] = useState(routeSlPct || '');
+  const [tpPct, setTpPct] = useState(routeTpPct || '');
+  const [tslPct, setTslPct] = useState(routeTslPct || '0');
+  const [positionSizePct, setPositionSizePct] = useState(routePositionSizePct || '10');
+  const [maxOpenTrades, setMaxOpenTrades] = useState(routeMaxOpenTrades || '5');
   const [loading, setLoading] = useState(false);
   const [dateRangeLoading, setDateRangeLoading] = useState(initialType === 'scanner');
   const [dateRangeInfo, setDateRangeInfo] = useState<string | null>(null);
   const [result, setResult] = useState(null);
   const isRunningRef = useRef(false);
+  const effectiveBacktestType: 'generic' | 'scanner' = prefilledStrategyId ? 'scanner' : backtestType;
+
+  useEffect(() => {
+    if (!prefilledStrategyId) return;
+
+    setBacktestType('scanner');
+    setStrategyId(String(prefilledStrategyId));
+    if (routeUniverse) setUnderlying(routeUniverse);
+    if (routeTimeframe) setTimeframe(routeTimeframe);
+    if (routeInitialCapital) setCapital(routeInitialCapital);
+    if (routeSlPct !== undefined) setSlPct(routeSlPct);
+    if (routeTpPct !== undefined) setTpPct(routeTpPct);
+    if (routeTslPct !== undefined) setTslPct(routeTslPct);
+    if (routePositionSizePct) setPositionSizePct(routePositionSizePct);
+    if (routeMaxOpenTrades) setMaxOpenTrades(routeMaxOpenTrades);
+  }, [
+    prefilledStrategyId,
+    routeUniverse,
+    routeTimeframe,
+    routeInitialCapital,
+    routeSlPct,
+    routeTpPct,
+    routeTslPct,
+    routePositionSizePct,
+    routeMaxOpenTrades,
+  ]);
 
   // Auto-populate date range from actual candle data when in scanner mode
   useEffect(() => {
-    if (backtestType !== 'scanner') {
+    if (effectiveBacktestType !== 'scanner') {
       setDateRangeLoading(false);
       return;
     }
@@ -75,7 +114,7 @@ const BacktestScreen = () => {
         setDateRangeInfo('Could not fetch date range. Enter dates manually.');
       })
       .finally(() => setDateRangeLoading(false));
-  }, [backtestType, timeframe, underlying]);
+  }, [effectiveBacktestType, timeframe, underlying]);
 
   const handleRunBacktest = async () => {
     if (isRunningRef.current) return; // guard against rapid double-tap
@@ -94,7 +133,7 @@ const BacktestScreen = () => {
     setLoading(true);
     setResult(null);
     try {
-      if (backtestType === 'scanner') {
+      if (effectiveBacktestType === 'scanner') {
         let payload: any = {
           initial_capital: Number(capital) || 100000,
           position_size_pct: Number(positionSizePct) || 10,
@@ -228,21 +267,21 @@ const BacktestScreen = () => {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>{backtestType === 'scanner' ? 'Universe' : 'Underlying'}</Text>
-              <TextInput style={styles.input} value={underlying} onChangeText={setUnderlying} autoCapitalize="characters" placeholder={backtestType === 'scanner' ? 'NIFTY50' : 'NIFTY'} placeholderTextColor={Colors.textFaint} />
+              <Text style={styles.label}>{effectiveBacktestType === 'scanner' ? 'Universe' : 'Underlying'}</Text>
+              <TextInput style={styles.input} value={underlying} onChangeText={setUnderlying} autoCapitalize="characters" placeholder={effectiveBacktestType === 'scanner' ? 'NIFTY50' : 'NIFTY'} placeholderTextColor={Colors.textFaint} />
             </View>
 
-            {backtestType === 'scanner' ? (
+            {effectiveBacktestType === 'scanner' ? (
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Timeframe</Text>
                 <TextInput style={styles.input} value={timeframe} onChangeText={setTimeframe} placeholder="Day / 15 Min / 1 Hour" placeholderTextColor={Colors.textFaint} />
               </View>
             ) : null}
 
-            {backtestType === 'scanner' && dateRangeLoading && (
+            {effectiveBacktestType === 'scanner' && dateRangeLoading && (
               <Text style={styles.helperText}>⏳ Fetching available date range…</Text>
             )}
-            {backtestType === 'scanner' && !dateRangeLoading && dateRangeInfo && (
+            {effectiveBacktestType === 'scanner' && !dateRangeLoading && dateRangeInfo && (
               <Text style={[styles.helperText, { color: dateRangeInfo.startsWith('No') || dateRangeInfo.startsWith('Could') ? Colors.red : Colors.green }]}>
                 📊 {dateRangeInfo}
               </Text>
