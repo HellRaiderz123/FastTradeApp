@@ -7,10 +7,47 @@ import { aiAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { GlassCard, ScreenHeader, Tag } from '../components/ui';
 
+interface ActionResult {
+  tool: string;
+  args: Record<string, unknown>;
+  result: { success: boolean; action?: string; error?: string; [key: string]: unknown };
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  create_budget: '💰 Budget Created',
+  update_budget: '💰 Budget Updated',
+  delete_budget: '🗑️ Budget Deleted',
+  create_savings_goal: '🎯 Savings Goal Created',
+  update_savings_goal_progress: '🎯 Savings Goal Updated',
+  create_bill_reminder: '🔔 Bill Reminder Added',
+  mark_bill_paid: '✅ Bill Marked Paid',
+  add_transaction: '📝 Transaction Added',
+  run_scanner: '🔍 Scanner Ran',
+  close_position: '📉 Position Closed',
+};
+
+function ActionBadge({ action }: { action: ActionResult }) {
+  const ok = action.result.success;
+  const label = ACTION_LABELS[action.tool] ?? action.tool.replace(/_/g, ' ');
+  const detail = ok
+    ? Object.entries(action.result)
+        .filter(([k]) => !['success', 'action', 'id'].includes(k))
+        .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+        .join(' · ')
+    : action.result.error;
+
+  return (
+    <View style={[styles.actionCard, ok ? styles.actionCardOk : styles.actionCardErr]}>
+      <Text style={[styles.actionLabel, ok ? styles.actionLabelOk : styles.actionLabelErr]}>{label}</Text>
+      {!!detail && <Text style={[styles.actionDetail, ok ? styles.actionDetailOk : styles.actionDetailErr]}>{detail}</Text>}
+    </View>
+  );
+}
+
 const STARTERS = [
   'Show my open positions',
+  'Add Food budget ₹3000',
   'What scanner signals fired this week?',
-  'How much brokerage did I pay?',
   'Summarize my trading performance',
 ];
 
@@ -18,10 +55,10 @@ export default function AIScreen() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([
+  const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string; actions?: ActionResult[] }>>([
     {
       role: 'assistant',
-      content: 'FastTrade AI is ready. This screen is UI-first today and can already connect to the same backend chat endpoint when available.',
+      content: 'FastTrade AI is ready.\nI can answer questions AND take actions — add budgets, record expenses, run scanners, close positions, and more.\nTry: "Add a Food budget of ₹3000" or "Run my RSI scanner".',
     },
   ]);
 
@@ -42,8 +79,9 @@ export default function AIScreen() {
 
     try {
       const res = await aiAPI.query(outgoing, nextHistory);
-      const reply = res.data?.answer || res.data?.response || res.data?.message || 'Connected, but no response body was returned from the backend.';
-      setHistory((prev) => [...prev, { role: 'assistant', content: reply }]);
+      const reply = res.data?.answer || res.data?.response || res.data?.message || 'No response from backend.';
+      const actions: ActionResult[] = res.data?.actions?.length ? res.data.actions : [];
+      setHistory((prev) => [...prev, { role: 'assistant', content: reply, actions }]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error: any) {
       const detail = error?.response?.data?.detail || error?.response?.data?.error || error?.message;
@@ -53,7 +91,7 @@ export default function AIScreen() {
           role: 'assistant',
           content: detail
             ? `AI assistant error: ${String(detail)}`
-            : 'The backend assistant is not reachable right now. Check AI URL and main backend URL in Settings.',
+            : 'The backend assistant is not reachable right now.',
         },
       ]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -68,7 +106,7 @@ export default function AIScreen() {
     setHistory([
       {
         role: 'assistant',
-        content: 'Fresh chat started. Ask anything about positions, scanner signals, P&L, or settings.',
+        content: 'Fresh chat started. Ask anything or give a command.',
       },
     ]);
     setMessage('');
@@ -81,8 +119,8 @@ export default function AIScreen() {
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <ScreenHeader
           title="AI Desk"
-          subtitle="Natural-language trading, scanner, and finance queries"
-          badge={<Tag label="SMART ASSIST" color={Colors.accent} bg={Colors.accentSoft} />}
+          subtitle="Natural-language queries and actions"
+          badge={<Tag label="AGENTIC" color={Colors.accent} bg={Colors.accentSoft} />}
         />
 
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -104,12 +142,19 @@ export default function AIScreen() {
               const assistant = item.role === 'assistant';
               return (
                 <View key={`${item.role}-${index}`} style={[styles.messageRow, assistant ? styles.messageRowLeft : styles.messageRowRight]}>
-                  <GlassCard style={[styles.bubble, assistant ? styles.assistantBubble : styles.userBubble]}>
-                    <View style={styles.bubbleTop}>
-                      <Tag label={assistant ? 'AI' : 'YOU'} color={assistant ? Colors.accent : Colors.green} bg={assistant ? Colors.accentGlow : Colors.greenBg} />
-                    </View>
-                    <Text style={styles.bubbleText}>{item.content}</Text>
-                  </GlassCard>
+                  <View style={styles.bubbleWrap}>
+                    <GlassCard style={[styles.bubble, assistant ? styles.assistantBubble : styles.userBubble]}>
+                      <View style={styles.bubbleTop}>
+                        <Tag label={assistant ? 'AI' : 'YOU'} color={assistant ? Colors.accent : Colors.green} bg={assistant ? Colors.accentGlow : Colors.greenBg} />
+                      </View>
+                      <Text style={styles.bubbleText}>{item.content}</Text>
+                    </GlassCard>
+                    {item.actions && item.actions.length > 0 && (
+                      <View style={styles.actionsWrap}>
+                        {item.actions.map((a, ai) => <ActionBadge key={ai} action={a} />)}
+                      </View>
+                    )}
+                  </View>
                 </View>
               );
             })}
@@ -129,7 +174,7 @@ export default function AIScreen() {
               <TextInput
                 value={message}
                 onChangeText={setMessage}
-                placeholder="Ask about positions, scanner signals, P&L, or budgets"
+                placeholder="Ask a question or give a command..."
                 placeholderTextColor={Colors.textMuted}
                 style={styles.input}
                 multiline
@@ -171,12 +216,29 @@ const styles = StyleSheet.create({
   messageRow: { marginBottom: 12, flexDirection: 'row' },
   messageRowLeft: { justifyContent: 'flex-start' },
   messageRowRight: { justifyContent: 'flex-end' },
-  bubble: { maxWidth: '86%' },
+  bubbleWrap: { maxWidth: '86%' },
+  bubble: {},
   assistantBubble: { backgroundColor: Colors.bgGlassStrong },
   userBubble: { backgroundColor: Colors.accentGlow, borderColor: Colors.borderAccent },
   bubbleTop: { marginBottom: 8 },
   bubbleText: { color: Colors.textPrimary, fontSize: 14, lineHeight: 20 },
   loadingText: { color: Colors.textSecondary, fontSize: 14, fontStyle: 'italic' },
+  actionsWrap: { marginTop: 6 },
+  actionCard: {
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginTop: 4,
+  },
+  actionCardOk: { backgroundColor: '#052e16', borderColor: '#166534' },
+  actionCardErr: { backgroundColor: '#450a0a', borderColor: '#991b1b' },
+  actionLabel: { fontSize: 12, fontWeight: '700' },
+  actionLabelOk: { color: '#86efac' },
+  actionLabelErr: { color: '#fca5a5' },
+  actionDetail: { fontSize: 11, marginTop: 2 },
+  actionDetailOk: { color: '#4ade80' },
+  actionDetailErr: { color: '#f87171' },
   composerWrap: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.lg, paddingTop: 8 },
   composer: {
     backgroundColor: Colors.bgGlass,

@@ -325,12 +325,18 @@ def calculate_expense_forecast(db: Session, category: str, months_back: int = 3)
 
 
 def get_expense_forecasts(db: Session, month: str = None):
-    """Get all forecasts for a month or current month"""
-    if not month:
-        month = datetime.now().strftime("%Y-%m")
-    
+    """Get all forecasts for a month, or latest available month when not provided."""
+    if month:
+        return db.query(ExpenseForecast).filter(
+            ExpenseForecast.forecast_month == month
+        ).all()
+
+    latest_month = db.query(func.max(ExpenseForecast.forecast_month)).scalar()
+    if not latest_month:
+        return []
+
     return db.query(ExpenseForecast).filter(
-        ExpenseForecast.forecast_month == month
+        ExpenseForecast.forecast_month == latest_month
     ).all()
 
 

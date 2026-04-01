@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from collections import defaultdict
+import json
+import logging
 import os
 import httpx
 
@@ -14,6 +16,12 @@ from app.db.models_finance import (
     FinanceTransaction, Budget, SavingsGoal, BillReminder, RecurringTransaction
 )
 from app.db.models_trade_costs import TradeCost
+from app.db import finance_repo
+from app.api.schemas.finance import (
+    BudgetCreate, SavingsGoalCreate, BillReminderCreate, FinanceTransactionCreate
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai-chat", tags=["AI Chat"])
 
@@ -295,13 +303,360 @@ Rules:
 ================================"""
 
 
-def _call_llm(message: str, history: list, db: Session) -> str:
+# ── Agentic tool definitions ───────────────────────────────────────────────
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_budget",
+            "description": "Create a monthly spending budget for a category. Use when the user asks to set or add a budget.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "Budget category name (e.g. Food, Travel, Entertainment, Shopping)"},
+                    "monthly_limit": {"type": "number", "description": "Monthly spending limit in INR (₹)"},
+                    "alert_threshold": {"type": "number", "description": "Alert when spending reaches this percentage of the limit. Default is 80."},
+                },
+                "required": ["category", "monthly_limit"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_budget",
+            "description": "Update the monthly limit of an existing budget for a category.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "The budget category to update"},
+                    "monthly_limit": {"type": "number", "description": "New monthly limit in INR"},
+                },
+                "required": ["category", "monthly_limit"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_budget",
+            "description": "Delete an existing budget by category name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "description": "The budget category to delete"},
+                },
+                "required": ["category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_savings_goal",
+            "description": "Create a new savings goal. Use when the user wants to save for something specific.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the savings goal (e.g. New Laptop, Emergency Fund, Vacation)"},
+                    "target_amount": {"type": "number", "description": "Target savings amount in INR"},
+                    "deadline": {"type": "string", "description": "Deadline date in YYYY-MM-DD format"},
+                    "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "Priority level, default medium"},
+                    "category": {"type": "string", "description": "Optional category for the goal"},
+                },
+                "required": ["name", "target_amount", "deadline"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_savings_goal_progress",
+            "description": "Update the current saved amount for a savings goal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Exact name of the savings goal"},
+                    "current_amount": {"type": "number", "description": "New current saved amount in INR"},
+                },
+                "required": ["name", "current_amount"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_bill_reminder",
+            "description": "Add a bill reminder so the user gets notified before the due date.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Bill name (e.g. Electricity, Internet, Rent)"},
+                    "amount": {"type": "number", "description": "Bill amount in INR"},
+                    "due_date": {"type": "string", "description": "Due date in YYYY-MM-DD format"},
+                    "category": {"type": "string", "description": "Bill category (e.g. Utilities, Rent, Subscriptions)"},
+                    "reminder_days": {"type": "number", "description": "How many days before due date to remind. Default 3."},
+                },
+                "required": ["name", "amount", "due_date", "category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_bill_paid",
+            "description": "Mark a bill as paid by its name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the bill to mark as paid"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_transaction",
+            "description": "Record a financial transaction (an expense or income). Use when the user says they spent or received money.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string", "description": "Description of the transaction"},
+                    "amount": {"type": "number", "description": "Amount in INR (positive number)"},
+                    "transaction_type": {"type": "string", "enum": ["expense", "income"], "description": "Whether this is an expense (debit) or income (credit)"},
+                    "category": {"type": "string", "description": "Category (e.g. Food, Travel, Salary, Freelance)"},
+                    "tran_date": {"type": "string", "description": "Date in YYYY-MM-DD format. Defaults to today if not specified."},
+                },
+                "required": ["description", "amount", "transaction_type", "category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_scanner",
+            "description": "Trigger a condition scanner strategy to scan for signals now. Use when user asks to run a scanner or find signals for a strategy.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "strategy_name": {"type": "string", "description": "Name or partial name of the scanner strategy to run"},
+                },
+                "required": ["strategy_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_position",
+            "description": "Manually exit/close an open trading position. Use when user asks to close or exit a specific position.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "underlying": {"type": "string", "description": "Symbol name of the position to close (e.g. NIFTY, BANKNIFTY, RELIANCE)"},
+                },
+                "required": ["underlying"],
+            },
+        },
+    },
+]
+
+
+# ── Tool executor ──────────────────────────────────────────────────────────
+
+def _execute_tool(name: str, args: dict, db: Session) -> dict:
+    """Execute a single tool call and return a result dict."""
+    try:
+        if name == "create_budget":
+            existing = (
+                db.query(Budget)
+                .filter(
+                    Budget.category.ilike(args["category"]),
+                    Budget.month == datetime.now().strftime("%Y-%m"),
+                )
+                .first()
+            )
+            if existing:
+                existing.monthly_limit = args["monthly_limit"]
+                if "alert_threshold" in args:
+                    existing.alert_threshold = args["alert_threshold"]
+                db.commit()
+                return {"success": True, "action": "updated_budget", "category": args["category"], "monthly_limit": args["monthly_limit"]}
+            payload = BudgetCreate(
+                category=args["category"],
+                monthly_limit=args["monthly_limit"],
+                alert_threshold=args.get("alert_threshold", 80),
+            )
+            budget = finance_repo.create_budget(db, payload)
+            return {"success": True, "action": "created_budget", "id": budget.id, "category": budget.category, "monthly_limit": budget.monthly_limit}
+
+        elif name == "update_budget":
+            budget = (
+                db.query(Budget)
+                .filter(
+                    Budget.category.ilike(args["category"]),
+                    Budget.month == datetime.now().strftime("%Y-%m"),
+                )
+                .first()
+            )
+            if not budget:
+                return {"success": False, "error": f"No budget found for category '{args['category']}'"}
+            budget.monthly_limit = args["monthly_limit"]
+            db.commit()
+            return {"success": True, "action": "updated_budget", "category": args["category"], "monthly_limit": args["monthly_limit"]}
+
+        elif name == "delete_budget":
+            budget = (
+                db.query(Budget)
+                .filter(Budget.category.ilike(args["category"]))
+                .first()
+            )
+            if not budget:
+                return {"success": False, "error": f"No budget found for '{args['category']}'"}
+            db.delete(budget)
+            db.commit()
+            return {"success": True, "action": "deleted_budget", "category": args["category"]}
+
+        elif name == "create_savings_goal":
+            deadline = args["deadline"]
+            if isinstance(deadline, str):
+                deadline = date.fromisoformat(deadline)
+            payload = SavingsGoalCreate(
+                name=args["name"],
+                target_amount=args["target_amount"],
+                deadline=deadline,
+                priority=args.get("priority", "medium"),
+                category=args.get("category"),
+            )
+            goal = finance_repo.create_savings_goal(db, payload)
+            return {"success": True, "action": "created_savings_goal", "id": goal.id, "name": goal.name, "target_amount": goal.target_amount, "deadline": str(goal.deadline)}
+
+        elif name == "update_savings_goal_progress":
+            goal = db.query(SavingsGoal).filter(SavingsGoal.name.ilike(f"%{args['name']}%")).first()
+            if not goal:
+                return {"success": False, "error": f"No savings goal matching '{args['name']}'"}
+            goal.current_amount = args["current_amount"]
+            db.commit()
+            pct = round(goal.current_amount / goal.target_amount * 100, 1) if goal.target_amount else 0
+            return {"success": True, "action": "updated_savings_goal", "name": goal.name, "current_amount": goal.current_amount, "progress_pct": pct}
+
+        elif name == "create_bill_reminder":
+            due_date = args["due_date"]
+            if isinstance(due_date, str):
+                due_date = date.fromisoformat(due_date)
+            payload = BillReminderCreate(
+                name=args["name"],
+                amount=args["amount"],
+                due_date=due_date,
+                category=args["category"],
+                reminder_days=int(args.get("reminder_days", 3)),
+            )
+            bill = finance_repo.create_bill_reminder(db, payload)
+            return {"success": True, "action": "created_bill_reminder", "id": bill.id, "name": bill.name, "amount": bill.amount, "due_date": str(bill.due_date)}
+
+        elif name == "mark_bill_paid":
+            bill = db.query(BillReminder).filter(BillReminder.name.ilike(f"%{args['name']}%"), BillReminder.is_paid == False).first()
+            if not bill:
+                return {"success": False, "error": f"No unpaid bill matching '{args['name']}'"}
+            bill.is_paid = True
+            db.commit()
+            return {"success": True, "action": "marked_bill_paid", "name": bill.name, "amount": bill.amount}
+
+        elif name == "add_transaction":
+            tran_date = args.get("tran_date")
+            if tran_date:
+                tran_date = date.fromisoformat(tran_date)
+            else:
+                tran_date = date.today()
+            is_expense = args["transaction_type"] == "expense"
+            payload = FinanceTransactionCreate(
+                tran_date=tran_date,
+                description=args["description"],
+                debit=args["amount"] if is_expense else 0.0,
+                credit=0.0 if is_expense else args["amount"],
+                balance=0.0,
+                category=args["category"],
+                source="AI",
+            )
+            txns = finance_repo.create_transactions(db, [payload])
+            txn = txns[0]
+            return {"success": True, "action": "added_transaction", "id": txn.id, "description": txn.description, "amount": args["amount"], "type": args["transaction_type"], "category": txn.category, "date": str(txn.tran_date)}
+
+        elif name == "run_scanner":
+            strategy = (
+                db.query(ConditionStrategy)
+                .filter(ConditionStrategy.name.ilike(f"%{args['strategy_name']}%"))
+                .first()
+            )
+            if not strategy:
+                return {"success": False, "error": f"No scanner strategy matching '{args['strategy_name']}'. Check available strategies."}
+            # Trigger via internal HTTP call to the scan endpoint
+            try:
+                resp = httpx.post(
+                    f"http://localhost:8000/condition-scanner/scan/{strategy.id}",
+                    timeout=60.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    signals = data.get("signals", [])
+                    return {"success": True, "action": "ran_scanner", "strategy": strategy.name, "signals_found": len(signals), "signals": [s.get("symbol") for s in signals[:10]]}
+                else:
+                    return {"success": False, "error": f"Scanner returned HTTP {resp.status_code}"}
+            except Exception as e:
+                return {"success": False, "error": f"Scanner call failed: {str(e)}"}
+
+        elif name == "close_position":
+            intent = (
+                db.query(ExecutionIntent)
+                .filter(
+                    ExecutionIntent.underlying.ilike(f"%{args['underlying']}%"),
+                    ExecutionIntent.status == "EXECUTED",
+                    ExecutionIntent.closed_at.is_(None),
+                )
+                .order_by(ExecutionIntent.created_at.desc())
+                .first()
+            )
+            if not intent:
+                return {"success": False, "error": f"No open position found for '{args['underlying']}'"}
+            try:
+                resp = httpx.post(
+                    f"http://localhost:8000/exit/manual/{intent.intent_id}",
+                    timeout=30.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {"success": True, "action": "closed_position", "underlying": intent.underlying, "strategy": intent.strategy, "pnl": data.get("final_pnl")}
+                else:
+                    return {"success": False, "error": f"Exit returned HTTP {resp.status_code}: {resp.text[:200]}"}
+            except Exception as e:
+                return {"success": False, "error": f"Exit call failed: {str(e)}"}
+
+        else:
+            return {"success": False, "error": f"Unknown tool: {name}"}
+
+    except Exception as e:
+        logger.exception("Tool execution error for %s: %s", name, e)
+        return {"success": False, "error": str(e)}
+
+
+# ── Agentic LLM call with function-calling loop ────────────────────────────
+
+def _call_llm(message: str, history: list, db: Session) -> tuple[str, list]:
+    """
+    Run the LLM with agentic tool support.
+    Returns (answer_text, actions_list).
+    actions_list contains dicts describing each action taken.
+    """
     if not LLM_API_KEY:
         return (
             "⚙️ AI not configured.\n\n"
             "Set **GROQ_API_KEY** in your .env file (free at console.groq.com) "
             "and restart the backend.\n\n"
-            "Model used: " + LLM_MODEL
+            "Model used: " + LLM_MODEL,
+            [],
         )
 
     context = _build_context(db)
@@ -312,28 +667,64 @@ def _call_llm(message: str, history: list, db: Session) -> str:
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": message})
 
-    try:
-        resp = httpx.post(
-            f"{LLM_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-            json={"model": LLM_MODEL, "messages": messages},
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except httpx.TimeoutException:
-        return "⚠️ LLM request timed out. Check your connection."
-    except httpx.HTTPStatusError as e:
-        body = e.response.text[:300]
-        return f"⚠️ LLM API error {e.response.status_code}: {body}"
-    except Exception as e:
-        return f"⚠️ LLM error: {e}"
+    actions_taken: list[dict] = []
+    max_tool_rounds = 5  # prevent infinite loops
+
+    for _round in range(max_tool_rounds):
+        try:
+            resp = httpx.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
+                json={"model": LLM_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": "auto"},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+        except httpx.TimeoutException:
+            return "⚠️ LLM request timed out. Check your connection.", actions_taken
+        except httpx.HTTPStatusError as e:
+            return f"⚠️ LLM API error {e.response.status_code}: {e.response.text[:300]}", actions_taken
+        except Exception as e:
+            return f"⚠️ LLM error: {e}", actions_taken
+
+        response_data = resp.json()
+        choice = response_data["choices"][0]
+        assistant_message = choice["message"]
+        finish_reason = choice.get("finish_reason", "stop")
+
+        # Add assistant's response (with or without tool calls) to message history
+        messages.append(assistant_message)
+
+        if finish_reason != "tool_calls" or not assistant_message.get("tool_calls"):
+            # No tool call — return the final text answer
+            return assistant_message.get("content") or "", actions_taken
+
+        # Execute each tool call
+        for tc in assistant_message["tool_calls"]:
+            tool_name = tc["function"]["name"]
+            try:
+                tool_args = json.loads(tc["function"]["arguments"])
+            except json.JSONDecodeError:
+                tool_args = {}
+
+            logger.info("AI tool call: %s(%s)", tool_name, tool_args)
+            result = _execute_tool(tool_name, tool_args, db)
+            actions_taken.append({"tool": tool_name, "args": tool_args, "result": result})
+
+            # Feed tool result back to LLM
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": json.dumps(result),
+            })
+
+    # Exhausted rounds — ask LLM to summarize with what we have
+    return "I completed the requested actions. Please review the action details above.", actions_taken
 
 
 @router.post("/query")
 def chat_query(req: ChatRequest, db: Session = Depends(get_db)):
     try:
-        answer = _call_llm(req.message, req.history, db)
-        return {"ok": True, "answer": answer}
+        answer, actions = _call_llm(req.message, req.history, db)
+        return {"ok": True, "answer": answer, "actions": actions}
     except Exception as e:
-        return {"ok": False, "answer": f"Error: {str(e)}"}
+        return {"ok": False, "answer": f"Error: {str(e)}", "actions": []}

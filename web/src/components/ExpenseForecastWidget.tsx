@@ -42,14 +42,12 @@ export default function ExpenseForecastWidget() {
     setLoading(true);
     try {
       const transactionsRes = await financeAPI.getTransactions();
-      const txCategories: string[] = [
-        ...new Set(
-          transactionsRes.data
-            .filter((t: any) => Number(t.debit) > 0)
-            .map((t: any) => String(t.category || '').trim())
-            .filter((c: string) => c.length > 0)
-        ),
-      ];
+      const txCategories: string[] = Array.from(new Set<string>(
+        transactionsRes.data
+          .filter((t: any) => Number(t.debit) > 0)
+          .map((t: any) => String(t.category || '').trim())
+          .filter((c: string) => c.length > 0)
+      ));
       setTransactionCategories(txCategories);
 
       let forecastData: Forecast[] = [];
@@ -72,12 +70,10 @@ export default function ExpenseForecastWidget() {
 
       setForecasts(forecastData);
 
-      const categories: string[] = [
-        ...new Set([
-          ...forecastData.map((f: Forecast) => f.category),
-          ...txCategories,
-        ]),
-      ].slice(0, 3);
+      const categories: string[] = Array.from(new Set<string>([
+        ...forecastData.map((f: Forecast) => f.category),
+        ...txCategories,
+      ])).slice(0, 3);
       setSelectedCategories(categories);
     } catch (error) {
       console.error('Failed to load finance data:', error);
@@ -99,9 +95,9 @@ export default function ExpenseForecastWidget() {
   };
 
   const generateChartData = () => {
-    const categories = selectedCategories.length > 0 
+    const categories: string[] = selectedCategories.length > 0 
       ? selectedCategories 
-      : [...new Set(forecasts.map(f => f.category))];
+      : Array.from(new Set<string>(forecasts.map(f => f.category)));
 
     const data = categories.map((cat) => {
       const forecast = forecasts.find(f => f.category === cat);
@@ -125,12 +121,10 @@ export default function ExpenseForecastWidget() {
     return chartData.reduce((sum, item) => sum + item.confidence, 0) / chartData.length;
   };
 
-  const categories: string[] = [
-    ...new Set([
-      ...forecasts.map(f => f.category),
-      ...transactionCategories,
-    ]),
-  ];
+  const categories: string[] = Array.from(new Set<string>([
+    ...forecasts.map(f => f.category),
+    ...transactionCategories,
+  ]));
 
   return (
     <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
