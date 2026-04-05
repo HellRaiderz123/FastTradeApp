@@ -64,6 +64,8 @@ from app.api.routes import reconcile
 from app.api.routes import analytics
 from app.api.routes import marketplace
 from app.api.routes import ai_chat
+from app.api.routes import alexa
+from app.api.routes import simple_ai
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -334,5 +336,7 @@ app.include_router(reconcile.router, dependencies=[Depends(require_authenticated
 app.include_router(analytics.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(marketplace.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(ai_chat.router)
+app.include_router(alexa.router)
+app.include_router(simple_ai.router)
 
 logger.info(" All routers registered (including Phase 5 features)")

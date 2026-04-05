@@ -1,0 +1,105 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "fast trade assistant",
+      "intents": [
+        {
+          "name": "AskFastTradeIntent",
+          "slots": [
+            {
+              "name": "question",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "ask {question}",
+            "question {question}",
+            "tell me {question}",
+            "about {question}",
+            "can you explain {question}"
+          ]
+        },
+        {
+          "name": "AskNvidiaIntent",
+          "slots": [
+            {
+              "name": "question",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "ask nvidia {question}",
+            "use ai for {question}",
+            "ask the ai {question}"
+          ]
+        },
+        {
+          "name": "GenericQuestionIntent",
+          "slots": [
+            {
+              "name": "question",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "what is {question}",
+            "who is {question}",
+            "explain {question}",
+            "tell me about {question}",
+            "help me with {question}"
+          ]
+        },
+        {
+          "name": "MarketBriefIntent",
+          "samples": [
+            "market brief",
+            "market update",
+            "give me a market summary",
+            "how is the market today",
+            "summarize today's market"
+          ]
+        },
+        {
+          "name": "PortfolioSummaryIntent",
+          "samples": [
+            "portfolio summary",
+            "give me my portfolio summary",
+            "how is my portfolio",
+            "what are my open positions",
+            "summarize my trades"
+          ]
+        },
+        {
+          "name": "RiskStatusIntent",
+          "samples": [
+            "risk status",
+            "what is my risk today",
+            "do I have any trading risk",
+            "tell me my current risk"
+          ]
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        }
+      ],
+      "types": []
+    }
+  }
+}
