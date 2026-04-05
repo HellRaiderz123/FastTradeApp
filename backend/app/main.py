@@ -111,11 +111,12 @@ async def lifespan(app: FastAPI):
         from app.db.models import Base
         from app.db.models_notification import Notification
         from app.db.models_risk import RiskLimitConfig  # noqa: F401 ensures table registration
-        from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog  # noqa: F401
+        from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog, ensure_auto_trader_schema  # noqa: F401
         from app.db.models_signal_outcome import SignalOutcome  # noqa: F401
         from app.db.models_scanner_signal import ScannerSignalHistory  # noqa: F401
         from app.db.models_zerodha import ZerodhaSession  # noqa: F401
         Base.metadata.create_all(bind=engine)
+        ensure_auto_trader_schema(engine)
         logger.info("✅ Database tables initialized")
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")

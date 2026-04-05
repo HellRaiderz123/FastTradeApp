@@ -28,6 +28,8 @@ interface AutoTraderConfig {
   reversal_confidence_threshold: number;
   scan_interval_sec: number;
   market_hours_only: boolean;
+  entry_start_time: string;
+  entry_end_time: string;
   status: string;
   last_scan_at: string | null;
   error_message: string | null;
@@ -50,6 +52,8 @@ interface AutoTraderStatus {
   underlyings: string[];
   capital: number;
   scan_interval_sec: number;
+  entry_start_time: string;
+  entry_end_time: string;
 }
 
 interface LogEntry {
@@ -393,8 +397,13 @@ const DashboardView: React.FC<{
             </span>
           ))}
         </div>
-        <div className="mt-3 text-xs text-slate-500">
-          Scanning every {status.scan_interval_sec}s &middot; {config?.market_hours_only ? 'Market hours only' : 'All hours'}
+        <div className="mt-3 text-xs text-slate-500 space-y-1">
+          <div>
+            Scanning every {status.scan_interval_sec}s &middot; {config?.market_hours_only ? 'Market hours only' : 'All hours'}
+          </div>
+          <div>
+            Fresh entry window: {config?.entry_start_time || '10:00'} - {config?.entry_end_time || '15:15'} IST
+          </div>
         </div>
       </div>
 
@@ -599,7 +608,16 @@ const ConfigPanel: React.FC<{
       <Section title="Schedule" icon={Clock}>
         <ToggleField label="Market Hours Only" checked={form.market_hours_only}
           onChange={(v) => update('market_hours_only', v)}
-          description="Only scan and trade during 9:15 AM - 3:15 PM IST" />
+          description="Only scan and manage positions during 9:15 AM - 3:15 PM IST" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          <InputField label="Fresh Entry Start (IST)" type="time" value={form.entry_start_time || '10:00'}
+            onChange={(v) => update('entry_start_time', v)} />
+          <InputField label="Fresh Entry End (IST)" type="time" value={form.entry_end_time || '15:15'}
+            onChange={(v) => update('entry_end_time', v)} />
+        </div>
+        <p className="text-xs text-slate-500">
+          New positions will only be opened inside this window. Default start is <strong className="text-slate-300">10:00 AM</strong> for fresh entries.
+        </p>
       </Section>
 
       {/* Save button */}

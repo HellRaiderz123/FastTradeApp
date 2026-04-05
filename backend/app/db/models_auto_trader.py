@@ -4,9 +4,13 @@ Auto-Trader Database Models
 Stores auto-trader configuration and action log.
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Float, Text
+import logging
+
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Float, Text, inspect, text
 from app.db.session import Base
 from app.core.utils.time import now_ist
+
+logger = logging.getLogger(__name__)
 
 
 class AutoTraderConfig(Base):
@@ -45,6 +49,8 @@ class AutoTraderConfig(Base):
     # Schedule
     scan_interval_sec = Column(Integer, default=30)       # how often to scan (seconds)
     market_hours_only = Column(Boolean, default=True)     # only trade 9:15-15:15
+    entry_start_time = Column(String, default="10:00")   # fresh entries allowed from this IST time
+    entry_end_time = Column(String, default="15:15")     # fresh entries allowed until this IST time
 
     # State
     status = Column(String, default="STOPPED")           # RUNNING / STOPPED / PAUSED / ERROR
@@ -81,3 +87,39 @@ class AutoTraderLog(Base):
     severity = Column(String, default="INFO")   # INFO, WARNING, ERROR, SUCCESS
 
     created_at = Column(DateTime(timezone=True), default=now_ist)
+
+
+def ensure_auto_trader_schema(bind) -> None:
+    """Lightweight migration guard for newly added config columns."""
+    try:
+        inspector = inspect(bind)
+        if "auto_trader_config" not in inspector.get_table_names():
+            return
+
+        columns = {col["name"] for col in inspector.get_columns("auto_trader_config")}
+        statements = []
+        if "entry_start_time" not in columns:
+            statements.append(
+                "ALTER TABLE auto_trader_config ADD COLUMN entry_start_time VARCHAR(5) DEFAULT '10:00'"
+            )
+        if "entry_end_time" not in columns:
+            statements.append(
+                "ALTER TABLE auto_trader_config ADD COLUMN entry_end_time VARCHAR(5) DEFAULT '15:15'"
+            )
+
+        if not statements and {"entry_start_time", "entry_end_time"}.issubset(columns):
+            return
+
+        with bind.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+            conn.execute(text(
+                """
+                UPDATE auto_trader_config
+                SET entry_start_time = COALESCE(NULLIF(entry_start_time, ''), '10:00'),
+                    entry_end_time = COALESCE(NULLIF(entry_end_time, ''), '15:15')
+                """
+            ))
+        logger.info("✅ Auto-trader schema ensured for entry window fields")
+    except Exception as exc:
+        logger.warning("⚠️ Auto-trader schema ensure failed: %s", exc)

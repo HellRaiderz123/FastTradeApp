@@ -21,7 +21,9 @@ export default function StrategyPnLScreen() {
     try {
       const res = await analyticsAPI.getStrategyPnL();
       const data = res.data;
-      const list = Array.isArray(data) ? data : data?.strategies || data?.rows || [];
+      const list = Array.isArray(data)
+        ? data
+        : data?.strategy_stats || data?.strategies || data?.rows || [];
       setRows(list);
     } catch {
       setRows([]);

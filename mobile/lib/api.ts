@@ -329,7 +329,7 @@ export const financeAPI = {
 // ── Analytics ────────────────────────────────────────────────────────
 export const analyticsAPI = {
   getStrategyPnL: (params?: any) =>
-    api.get('/analytics/strategy-pnl', { params }),
+    api.get('/analytics/pnl', { params }).catch(() => api.get('/analytics/strategy-pnl', { params })),
 };
 
 // ── Legacy Compatibility APIs ───────────────────────────────────────

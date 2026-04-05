@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.utils.time import now_ist
 from app.db.session import SessionLocal
-from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog
+from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog, ensure_auto_trader_schema
 from app.db.models_intent import ExecutionIntent
 from app.db.intent_repo import create_execution_intent
 from app.core.signals.signals import generate_signal
@@ -61,6 +61,8 @@ def _notify(db, method: str, *args, **kwargs):
 
 MARKET_OPEN = dtime(9, 16)
 MARKET_CLOSE = dtime(15, 15)
+DEFAULT_ENTRY_START = "10:00"
+DEFAULT_ENTRY_END = "15:15"
 
 # Prevent concurrent scans from creating duplicate positions
 _scan_lock = threading.Lock()
@@ -73,6 +75,34 @@ def _is_market_open() -> bool:
         return False
     t = now.time()
     return MARKET_OPEN <= t <= MARKET_CLOSE
+
+
+def _parse_time_value(raw: Optional[str], fallback: dtime) -> dtime:
+    if not raw:
+        return fallback
+    try:
+        parsed = dtime.fromisoformat(str(raw))
+        return dtime(parsed.hour, parsed.minute)
+    except Exception:
+        return fallback
+
+
+def _entry_window_label(cfg: AutoTraderConfig) -> str:
+    return f"{getattr(cfg, 'entry_start_time', None) or DEFAULT_ENTRY_START}-{getattr(cfg, 'entry_end_time', None) or DEFAULT_ENTRY_END}"
+
+
+def _is_within_entry_window(cfg: AutoTraderConfig) -> bool:
+    now = now_ist()
+    if now.weekday() >= 5:
+        return False
+
+    start = _parse_time_value(getattr(cfg, "entry_start_time", None), dtime(10, 0))
+    end = _parse_time_value(getattr(cfg, "entry_end_time", None), MARKET_CLOSE)
+    current = now.time().replace(second=0, microsecond=0)
+
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────
@@ -293,6 +323,13 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
              action="SKIP", underlying=underlying,
              strategy=auto_intents[0].strategy,
              reason=f"Already have open {auto_intents[0].strategy} position for {underlying}",
+             severity="INFO")
+        return
+
+    if not _is_within_entry_window(cfg):
+        _log(db, cfg.id,
+             action="SKIP", underlying=underlying,
+             reason=f"Outside fresh-entry window ({_entry_window_label(cfg)} IST)",
              severity="INFO")
         return
 
@@ -572,6 +609,7 @@ def _auto_hedge_position(
 
 def get_or_create_config(db: Session) -> AutoTraderConfig:
     """Get existing config or create a default one."""
+    ensure_auto_trader_schema(db.get_bind())
     cfg = db.query(AutoTraderConfig).first()
     if cfg is None:
         cfg = AutoTraderConfig(
@@ -590,6 +628,8 @@ def get_or_create_config(db: Session) -> AutoTraderConfig:
             reversal_confidence_threshold=65,
             scan_interval_sec=30,
             market_hours_only=True,
+            entry_start_time=DEFAULT_ENTRY_START,
+            entry_end_time=DEFAULT_ENTRY_END,
         )
         db.add(cfg)
         db.commit()
@@ -602,6 +642,17 @@ def get_or_create_config(db: Session) -> AutoTraderConfig:
             cfg.underlyings = _json.loads(cfg.underlyings)
         except Exception:
             cfg.underlyings = ["NIFTY"]
+
+    needs_save = False
+    if not getattr(cfg, "entry_start_time", None):
+        cfg.entry_start_time = DEFAULT_ENTRY_START
+        needs_save = True
+    if not getattr(cfg, "entry_end_time", None):
+        cfg.entry_end_time = DEFAULT_ENTRY_END
+        needs_save = True
+    if needs_save:
+        db.commit()
+        db.refresh(cfg)
 
     return cfg
 

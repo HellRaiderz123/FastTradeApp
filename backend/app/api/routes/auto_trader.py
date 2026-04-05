@@ -4,6 +4,8 @@ Auto-Trader API Routes
 Endpoints to configure, start/stop, and monitor the auto-trading engine.
 """
 
+from datetime import time as dtime
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -22,6 +24,14 @@ from app.core.auto_trader import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auto-trader", tags=["Auto Trader"])
+
+
+def _validate_hhmm(value: str, field_name: str) -> str:
+    try:
+        parsed = dtime.fromisoformat(str(value))
+        return f"{parsed.hour:02d}:{parsed.minute:02d}"
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}. Use HH:MM in 24-hour format.")
 
 
 def get_db():
@@ -64,6 +74,8 @@ def get_config(db: Session = Depends(get_db)):
         "reversal_confidence_threshold": cfg.reversal_confidence_threshold,
         "scan_interval_sec": cfg.scan_interval_sec,
         "market_hours_only": cfg.market_hours_only,
+        "entry_start_time": cfg.entry_start_time,
+        "entry_end_time": cfg.entry_end_time,
         "status": cfg.status,
         "last_scan_at": cfg.last_scan_at,
         "error_message": cfg.error_message,
@@ -92,6 +104,8 @@ def update_config(
     reversal_confidence_threshold: Optional[float] = Body(None),
     scan_interval_sec: Optional[int] = Body(None),
     market_hours_only: Optional[bool] = Body(None),
+    entry_start_time: Optional[str] = Body(None),
+    entry_end_time: Optional[str] = Body(None),
     db: Session = Depends(get_db),
 ):
     """Update auto-trader configuration. Only provided fields are changed."""
@@ -135,6 +149,15 @@ def update_config(
         cfg.scan_interval_sec = max(10, scan_interval_sec)  # minimum 10s
     if market_hours_only is not None:
         cfg.market_hours_only = market_hours_only
+    if entry_start_time is not None:
+        cfg.entry_start_time = _validate_hhmm(entry_start_time, "entry_start_time")
+    if entry_end_time is not None:
+        cfg.entry_end_time = _validate_hhmm(entry_end_time, "entry_end_time")
+
+    effective_start = cfg.entry_start_time or "10:00"
+    effective_end = cfg.entry_end_time or "15:15"
+    if dtime.fromisoformat(effective_start) >= dtime.fromisoformat(effective_end):
+        raise HTTPException(status_code=400, detail="entry_start_time must be earlier than entry_end_time")
 
     db.commit()
     db.refresh(cfg)
@@ -145,6 +168,8 @@ def update_config(
         "mode": cfg.mode,
         "status": cfg.status,
         "enabled": cfg.enabled,
+        "entry_start_time": cfg.entry_start_time,
+        "entry_end_time": cfg.entry_end_time,
     }}
 
 
@@ -243,6 +268,8 @@ def get_status(db: Session = Depends(get_db)):
         "underlyings": underlyings or ["NIFTY"],
         "capital": cfg.capital,
         "scan_interval_sec": cfg.scan_interval_sec,
+        "entry_start_time": cfg.entry_start_time,
+        "entry_end_time": cfg.entry_end_time,
     }
 
 

@@ -12,6 +12,7 @@ from app.db.session import SessionLocal
 from app.db.models_intent import ExecutionIntent
 from app.db.models_condition_strategy import ConditionStrategy, ConditionStrategyBacktest
 from app.db.models_scanner_signal import ScannerSignalHistory
+from app.db.models_watchlist import Watchlist
 from app.db.models_finance import (
     FinanceTransaction, Budget, SavingsGoal, BillReminder, RecurringTransaction
 )
@@ -39,6 +40,50 @@ _LLM_BASE: dict[str, str] = {
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or _LLM_BASE.get(LLM_PROVIDER, _LLM_BASE["groq"])
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
+def _as_bool(val, default: bool = False) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        return val.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return default
+
+
+# AI trade safety controls (override via backend .env)
+AI_REQUIRE_TRADE_CONFIRMATION = _env_bool("AI_REQUIRE_TRADE_CONFIRMATION", True)
+AI_MAX_ORDER_QTY = _env_int("AI_MAX_ORDER_QTY", 500)
+AI_MAX_OPEN_POSITIONS = _env_int("AI_MAX_OPEN_POSITIONS", 10)
+AI_MAX_DAILY_LOSS_INR = _env_float("AI_MAX_DAILY_LOSS_INR", 0.0)  # 0 disables daily loss guard
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -56,6 +101,44 @@ def _fmt(val):
     if val is None:
         return "N/A"
     return f"₹{val:,.2f}"
+
+
+def _calc_profit_factor(win_total: float, loss_total: float):
+    if abs(loss_total or 0) < 1e-9:
+        return None
+    return round(abs(float(win_total) / float(loss_total)), 2)
+
+
+def _trade_time_bucket(dt: datetime | None) -> str:
+    if not dt:
+        return "Unknown"
+    minutes = (dt.hour * 60) + dt.minute
+    if minutes < 10 * 60:
+        return "09:15-10:00"
+    if minutes < 11 * 60:
+        return "10:00-11:00"
+    if minutes < (12 * 60 + 30):
+        return "11:00-12:30"
+    if minutes < 14 * 60:
+        return "12:30-14:00"
+    if minutes < (15 * 60 + 30):
+        return "14:00-15:30"
+    return "After-hours"
+
+
+def _summarize_trade_group(trades: list[ExecutionIntent]) -> dict:
+    total = sum((t.pnl or 0) for t in trades)
+    wins = [t for t in trades if (t.pnl or 0) > 0]
+    losses = [t for t in trades if (t.pnl or 0) < 0]
+    avg_pnl = round(total / len(trades), 2) if trades else 0.0
+    return {
+        "trades": len(trades),
+        "pnl": round(total, 2),
+        "win_rate": round(len(wins) / len(trades) * 100, 1) if trades else 0.0,
+        "avg_pnl": avg_pnl,
+        "avg_win": round(sum((t.pnl or 0) for t in wins) / len(wins), 2) if wins else 0.0,
+        "avg_loss": round(sum((t.pnl or 0) for t in losses) / len(losses), 2) if losses else 0.0,
+    }
 
 
 def _build_context(db: Session) -> str:
@@ -293,25 +376,45 @@ ACTIONS YOU CAN PERFORM (use your tools — do not say you cannot do these):
 ✅ close_position — "Close my NIFTY position" / "Exit the BANKNIFTY trade"
 ✅ place_trade — "Buy 10 shares of SBI at market price CNC" / "Sell 5 RELIANCE shares MIS"
 ✅ place_trade dry run — "Dry run: buy 10 shares of SBI at market CNC"
+✅ get_market_sentiment — "What is NIFTY prediction today?" / "Is market bullish or bearish now?"
+✅ get_strategy_metrics — "How many trades did strategy X take and over what period?"
+✅ get_watchlist_gameplan — "Build my pre-market game plan" / "Rank my watchlist for today"
+✅ review_trade_journal — "Review my last 30 days of trades" / "What patterns are hurting my performance?"
+✅ trade_autopsy — "Autopsy my last NIFTY trade" / "Coach me on my most recent loss"
 
 ANALYSIS YOU CAN DO:
 ✅ Trade analysis — P&L, win rate, profit factor, best/worst trades
 ✅ Position advice — hold/exit decisions based on actual unrealized P&L
 ✅ Strategy analysis — which scanner strategies are working, backtest results
 ✅ Scanner signals — what signals fired recently, which stocks to watch
+✅ Pre-market planning — rank your watchlist using signals, sentiment, and open exposure
+✅ Journal coaching — highlight best/worst setups, time-of-day issues, and repeated mistakes
+✅ Trade autopsy — review the latest closed trade with discipline and exit-quality notes
 ✅ Cost analysis — how much brokerage/STT is eating into profits
 ✅ Finance — spending patterns, budget status, savings progress, bill reminders
 ✅ Market education — options greeks, indicators, strategies explained
 ✅ Risk management — position sizing, drawdown, diversification advice
 ✅ Indian market specifics — NIFTY, BANKNIFTY, F&O, NSE/BSE rules
+✅ NIFTY outlook — sentiment score, fear-greed, momentum, and directional bias
 
 CRITICAL RULES:
 - NEVER say you cannot perform actions — you have tools for all the above
 - When the user asks to DO something, call the appropriate tool immediately
+- Do NOT block trade placement because another position is open or in loss; multiple positions are allowed
+- Do NOT ask user to close an existing position unless user explicitly asks for risk checks or asks to close it
+- If user asks to place a trade, execute place_trade (or place_trade with dry_run=true when they ask for dry run)
+- For live trade placement: first call place_trade with confirmed=false to get explicit confirmation step
+- If user confirms ("yes", "confirm", "place now", "execute"), call place_trade again with confirmed=true using the same order details
+- Enforce hard risk limits from backend settings; if a limit is breached, clearly explain which guardrail blocked the order
 - Be concise and direct — no fluff
 - Use ₹ for Indian rupees
 - Reference specific numbers from the data when answering
 - After performing an action, confirm what was done with the key details
+- NEVER invent numbers, dates, or charges
+- For strategy performance/trade-count questions, call get_strategy_metrics first and use only returned fields
+- If a field is missing, explicitly say "data not available" instead of estimating
+- If numbers conflict, say they conflict and show both values with source labels
+- Do not infer strategy style (intraday/swing/positional) unless explicitly present in returned fields; for timeframe, quote the exact timeframe value from tool output
 
 === LIVE DATA FROM FASTTRADE ===
 {context}
@@ -452,6 +555,78 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_market_sentiment",
+            "description": "Fetch current market sentiment and NIFTY directional bias using VIX, PCR, market breadth, and index momentum.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_strategy_metrics",
+            "description": "Fetch exact strategy metrics from database: timeframe, backtest period, total trades, return, sharpe, win rate, and recent signal count.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "strategy_name": {"type": "string", "description": "Name or partial name of the strategy"},
+                },
+                "required": ["strategy_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_watchlist_gameplan",
+            "description": "Build a pre-market or watchlist game plan using the user's saved watchlists, recent scanner signals, and market sentiment. Use for prompts like 'build my pre-market plan' or 'rank my watchlist'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "watchlist_name": {"type": "string", "description": "Optional watchlist name. If omitted, use the default or most recent active watchlist."},
+                    "top_n": {"type": "integer", "description": "How many symbols to prioritize. Default 8, max 25."}
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "review_trade_journal",
+            "description": "Review recent closed trades and summarize journal patterns like win rate, expectancy, best/worst strategy, time-of-day weakness, and coaching flags.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Lookback period in days. Default 30."},
+                    "focus": {"type": "string", "description": "Optional focus area such as strategy, discipline, exits, or time-of-day."}
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "trade_autopsy",
+            "description": "Analyze a recent closed trade using actual FastTrade data. Use when the user asks for a trade autopsy, coaching review, or post-trade breakdown.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "underlying": {"type": "string", "description": "Optional symbol to focus on, such as NIFTY, BANKNIFTY, or RELIANCE."},
+                    "intent_id": {"type": "string", "description": "Optional exact FastTrade intent ID if the user mentions a specific trade."},
+                    "lookback_days": {"type": "integer", "description": "Lookback period for finding the trade. Default 90."}
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_scanner",
             "description": "Trigger a condition scanner strategy to scan for signals now. Use when user asks to run a scanner or find signals for a strategy.",
             "parameters": {
@@ -481,7 +656,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "place_trade",
-            "description": "Place a real stock buy or sell order on Zerodha. Use when the user asks to buy or sell shares/stocks. Supports CNC (delivery), MIS (intraday), NRML (F&O overnight).",
+            "description": "Place a real stock buy or sell order on Zerodha. Use when the user asks to buy or sell shares/stocks. Supports CNC (delivery), MIS (intraday), NRML (F&O overnight). Do not require closing other open positions first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -493,6 +668,7 @@ TOOLS = [
                     "price": {"type": "number", "description": "Limit price in INR. Required only when order_type is LIMIT."},
                     "exchange": {"type": "string", "enum": ["NSE", "BSE"], "description": "Exchange to place order on. Default NSE."},
                     "dry_run": {"type": "boolean", "description": "If true, simulate order placement and return what would be sent without placing any real order."},
+                    "confirmed": {"type": "boolean", "description": "Set true only after user explicitly confirms the exact order details for live placement."},
                 },
                 "required": ["symbol", "action", "quantity"],
             },
@@ -621,6 +797,440 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
             txn = txns[0]
             return {"success": True, "action": "added_transaction", "id": txn.id, "description": txn.description, "amount": args["amount"], "type": args["transaction_type"], "category": txn.category, "date": str(txn.tran_date)}
 
+        elif name == "get_market_sentiment":
+            try:
+                resp = httpx.get(
+                    "http://localhost:8000/sentiment/overall",
+                    timeout=20.0,
+                )
+                if resp.status_code != 200:
+                    return {"success": False, "error": f"Sentiment API returned HTTP {resp.status_code}"}
+
+                data = resp.json() if isinstance(resp.json(), dict) else {}
+                components = data.get("components", {}) if isinstance(data.get("components"), dict) else {}
+                momentum = components.get("momentum", {}) if isinstance(components.get("momentum"), dict) else {}
+                return {
+                    "success": True,
+                    "action": "market_sentiment",
+                    "sentiment": data.get("sentiment"),
+                    "sentiment_score": data.get("sentiment_score"),
+                    "fear_greed_index": data.get("fear_greed_index"),
+                    "fear_greed_interpretation": data.get("fear_greed_interpretation"),
+                    "nifty_change_percent": momentum.get("nifty_change_percent"),
+                    "momentum_state": momentum.get("state"),
+                    "timestamp": data.get("timestamp"),
+                    "raw": data,
+                }
+            except Exception as e:
+                return {"success": False, "error": f"Failed to fetch market sentiment: {str(e)}"}
+
+        elif name == "get_strategy_metrics":
+            strategy = (
+                db.query(ConditionStrategy)
+                .filter(ConditionStrategy.name.ilike(f"%{args['strategy_name']}%"))
+                .first()
+            )
+            if not strategy:
+                return {"success": False, "error": f"No strategy matching '{args['strategy_name']}'"}
+
+            bt = None
+            if strategy.last_backtest_id:
+                bt = db.query(ConditionStrategyBacktest).filter(
+                    ConditionStrategyBacktest.id == strategy.last_backtest_id
+                ).first()
+
+            summary = (bt.result_dict or {}).get("summary", {}) if bt else {}
+            cutoff7 = datetime.utcnow() - timedelta(days=7)
+            recent_signals_count = (
+                db.query(ScannerSignalHistory)
+                .filter(
+                    ScannerSignalHistory.strategy_id == strategy.id,
+                    ScannerSignalHistory.first_seen_at >= cutoff7,
+                )
+                .count()
+            )
+
+            total_trades = (
+                summary.get("total_trades")
+                if summary.get("total_trades") is not None
+                else summary.get("trades")
+            )
+            win_rate = (
+                summary.get("win_rate")
+                if summary.get("win_rate") is not None
+                else summary.get("win_rate_pct")
+            )
+
+            period_days = None
+            if bt and bt.start_date and bt.end_date:
+                try:
+                    period_days = (date.fromisoformat(bt.end_date) - date.fromisoformat(bt.start_date)).days
+                except Exception:
+                    period_days = None
+
+            trades_per_day = None
+            try:
+                if period_days and period_days > 0 and total_trades is not None:
+                    trades_per_day = round(float(total_trades) / float(period_days), 4)
+            except Exception:
+                trades_per_day = None
+
+            return {
+                "success": True,
+                "action": "strategy_metrics",
+                "strategy": {
+                    "id": strategy.id,
+                    "name": strategy.name,
+                    "direction": strategy.direction,
+                    "timeframe": strategy.timeframe,
+                    "universe": strategy.universe,
+                    "is_active": bool(strategy.is_active),
+                },
+                "backtest": {
+                    "available": bt is not None,
+                    "backtest_id": bt.id if bt else None,
+                    "start_date": bt.start_date if bt else None,
+                    "end_date": bt.end_date if bt else None,
+                    "period_days": period_days,
+                    "total_trades": total_trades,
+                    "trades_per_day": trades_per_day,
+                    "total_return_pct": summary.get("total_return_pct"),
+                    "annual_return_pct": summary.get("annual_return_pct"),
+                    "sharpe_ratio": summary.get("sharpe_ratio"),
+                    "win_rate": win_rate,
+                    "profit_factor": summary.get("profit_factor"),
+                    "max_drawdown_pct": summary.get("max_drawdown_pct"),
+                },
+                "signals": {
+                    "last_7d_count": recent_signals_count,
+                    "last_scan": strategy.last_scan.isoformat() if strategy.last_scan else None,
+                    "last_signal_count": strategy.last_signal_count,
+                },
+                "source": {
+                    "strategy_table": "condition_strategies",
+                    "backtest_table": "condition_strategy_backtests",
+                    "signals_table": "scanner_signal_history",
+                },
+            }
+
+        elif name == "get_watchlist_gameplan":
+            watchlist = None
+            if args.get("watchlist_name"):
+                watchlist = (
+                    db.query(Watchlist)
+                    .filter(
+                        Watchlist.name.ilike(f"%{args['watchlist_name']}%"),
+                        Watchlist.is_active == True,
+                    )
+                    .order_by(Watchlist.is_default.desc(), Watchlist.updated_at.desc())
+                    .first()
+                )
+            if not watchlist:
+                watchlist = (
+                    db.query(Watchlist)
+                    .filter(Watchlist.is_active == True)
+                    .order_by(Watchlist.is_default.desc(), Watchlist.updated_at.desc())
+                    .first()
+                )
+            if not watchlist:
+                return {"success": False, "error": "No active watchlists found. Create a watchlist first."}
+
+            raw_symbols = watchlist.symbols or []
+            if isinstance(raw_symbols, str):
+                try:
+                    raw_symbols = json.loads(raw_symbols)
+                except Exception:
+                    raw_symbols = [s.strip() for s in raw_symbols.split(",") if s.strip()]
+
+            top_n = max(1, min(int(args.get("top_n", 8)), 25))
+            symbols = [str(s).upper().strip() for s in raw_symbols if str(s).strip()][:top_n]
+            if not symbols:
+                return {"success": False, "error": f"Watchlist '{watchlist.name}' has no symbols yet."}
+
+            cutoff7 = datetime.utcnow() - timedelta(days=7)
+            recent_signals = (
+                db.query(ScannerSignalHistory)
+                .filter(ScannerSignalHistory.first_seen_at >= cutoff7)
+                .order_by(ScannerSignalHistory.first_seen_at.desc())
+                .limit(300)
+                .all()
+            )
+
+            by_symbol = defaultdict(lambda: {
+                "signal_count": 0,
+                "strategies": [],
+                "direction": None,
+                "ltp": None,
+                "change_percent": None,
+                "status": None,
+                "latest_signal_at": None,
+            })
+            for sig in recent_signals:
+                sym = (sig.symbol or "").upper().strip()
+                if sym not in symbols:
+                    continue
+                row = by_symbol[sym]
+                row["signal_count"] += 1
+                if sig.strategy_name and sig.strategy_name not in row["strategies"]:
+                    row["strategies"].append(sig.strategy_name)
+                if row["latest_signal_at"] is None or (sig.first_seen_at and sig.first_seen_at > row["latest_signal_at"]):
+                    row["latest_signal_at"] = sig.first_seen_at
+                    row["direction"] = sig.direction
+                    row["ltp"] = sig.ltp
+                    row["change_percent"] = sig.change_percent
+                    row["status"] = sig.status
+
+            open_positions = (
+                db.query(ExecutionIntent)
+                .filter(ExecutionIntent.status == "EXECUTED", ExecutionIntent.closed_at.is_(None))
+                .all()
+            )
+            open_symbols = {(p.underlying or "").upper().strip(): p for p in open_positions}
+
+            ranked = []
+            for sym in symbols:
+                signal_info = by_symbol[sym]
+                direction = (signal_info.get("direction") or "").upper()
+                priority_score = signal_info["signal_count"] * 3
+                if direction in {"LONG", "BUY", "BULLISH"}:
+                    priority_score += 1
+                if open_symbols.get(sym):
+                    priority_score += 2
+                if signal_info.get("change_percent") is not None and abs(signal_info["change_percent"] or 0) >= 1:
+                    priority_score += 1
+
+                ranked.append({
+                    "symbol": sym,
+                    "priority_score": priority_score,
+                    "recent_signal_count": signal_info["signal_count"],
+                    "latest_direction": signal_info.get("direction"),
+                    "latest_strategy": ", ".join(signal_info.get("strategies", [])[:3]) or None,
+                    "latest_ltp": signal_info.get("ltp"),
+                    "change_percent": signal_info.get("change_percent"),
+                    "latest_status": signal_info.get("status"),
+                    "latest_signal_at": signal_info["latest_signal_at"].isoformat() if signal_info.get("latest_signal_at") else None,
+                    "has_open_position": sym in open_symbols,
+                })
+
+            ranked.sort(
+                key=lambda row: (row["priority_score"], row["recent_signal_count"], row["has_open_position"]),
+                reverse=True,
+            )
+
+            market_sentiment = {}
+            try:
+                resp = httpx.get("http://localhost:8000/sentiment/overall", timeout=15.0)
+                if resp.status_code == 200 and isinstance(resp.json(), dict):
+                    raw = resp.json()
+                    market_sentiment = {
+                        "sentiment": raw.get("sentiment"),
+                        "sentiment_score": raw.get("sentiment_score"),
+                        "fear_greed_index": raw.get("fear_greed_index"),
+                        "fear_greed_interpretation": raw.get("fear_greed_interpretation"),
+                    }
+            except Exception:
+                market_sentiment = {}
+
+            notes = []
+            if market_sentiment.get("sentiment"):
+                notes.append(
+                    f"Overall market tone is {market_sentiment['sentiment']} ({market_sentiment.get('sentiment_score', 'N/A')})."
+                )
+            if not any(row["recent_signal_count"] for row in ranked):
+                notes.append("No recent scanner signals found for this watchlist in the last 7 days.")
+            if ranked and ranked[0]["recent_signal_count"]:
+                notes.append(f"Highest-priority symbol right now is {ranked[0]['symbol']} based on recent signal activity.")
+
+            return {
+                "success": True,
+                "action": "watchlist_gameplan",
+                "watchlist": {
+                    "id": watchlist.id,
+                    "name": watchlist.name,
+                    "symbol_count": len(symbols),
+                    "symbols": symbols,
+                },
+                "market_sentiment": market_sentiment,
+                "priorities": ranked,
+                "notes": notes,
+            }
+
+        elif name == "review_trade_journal":
+            days = max(7, min(int(args.get("days", 30)), 365))
+            focus = (args.get("focus") or "general").strip().lower()
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            trades = (
+                db.query(ExecutionIntent)
+                .filter(ExecutionIntent.closed_at.isnot(None), ExecutionIntent.closed_at >= cutoff)
+                .order_by(ExecutionIntent.closed_at.desc())
+                .limit(500)
+                .all()
+            )
+            if not trades:
+                return {"success": False, "error": f"No closed trades found in the last {days} days."}
+
+            total_pnl = sum((t.pnl or 0) for t in trades)
+            wins = [t for t in trades if (t.pnl or 0) > 0]
+            losses = [t for t in trades if (t.pnl or 0) < 0]
+            win_total = sum((t.pnl or 0) for t in wins)
+            loss_total = sum((t.pnl or 0) for t in losses)
+            avg_win = round(win_total / len(wins), 2) if wins else 0.0
+            avg_loss = round(loss_total / len(losses), 2) if losses else 0.0
+            expectancy = round(total_pnl / len(trades), 2) if trades else 0.0
+
+            by_strategy = defaultdict(list)
+            by_day = defaultdict(list)
+            by_time = defaultdict(list)
+            exit_reasons = defaultdict(int)
+            for trade in trades:
+                by_strategy[trade.strategy or "Unknown"].append(trade)
+                dt = trade.closed_at or trade.created_at
+                if dt:
+                    by_day[dt.strftime("%A")].append(trade)
+                by_time[_trade_time_bucket(trade.created_at or trade.closed_at)].append(trade)
+                exit_reasons[(trade.exit_reason or "Unspecified")] += 1
+
+            strategy_rows = []
+            for strategy_name, items in by_strategy.items():
+                stats = _summarize_trade_group(items)
+                strategy_rows.append({"strategy": strategy_name, **stats})
+            strategy_rows.sort(key=lambda row: (row["pnl"], row["win_rate"]), reverse=True)
+
+            day_rows = []
+            for day_name, items in by_day.items():
+                stats = _summarize_trade_group(items)
+                day_rows.append({"day": day_name, **stats})
+            day_rows.sort(key=lambda row: row["pnl"], reverse=True)
+
+            time_rows = []
+            for bucket, items in by_time.items():
+                stats = _summarize_trade_group(items)
+                time_rows.append({"time_block": bucket, **stats})
+            time_rows.sort(key=lambda row: row["pnl"], reverse=True)
+
+            best_trade = max(trades, key=lambda t: t.pnl or float("-inf"))
+            worst_trade = min(trades, key=lambda t: t.pnl or float("inf"))
+
+            coaching_flags = []
+            if wins and losses and abs(avg_loss) > avg_win:
+                coaching_flags.append("Average losses are larger than average winners.")
+            weak_block = next((row for row in sorted(time_rows, key=lambda r: r["pnl"]) if row["trades"] >= 2 and row["pnl"] < 0), None)
+            if weak_block:
+                coaching_flags.append(
+                    f"Weakest time block is {weak_block['time_block']} with {weak_block['trades']} trades and P&L of {_fmt(weak_block['pnl'])}."
+                )
+            manual_loss_count = sum(1 for t in losses if "manual" in (t.exit_reason or "").lower())
+            if manual_loss_count >= 2:
+                coaching_flags.append("Multiple losing trades were closed manually; review exit discipline.")
+            if not coaching_flags:
+                coaching_flags.append("No major red flags detected from journal stats in this lookback.")
+
+            return {
+                "success": True,
+                "action": "journal_review",
+                "focus": focus,
+                "period_days": days,
+                "summary": {
+                    "total_trades": len(trades),
+                    "winners": len(wins),
+                    "losers": len(losses),
+                    "win_rate": round(len(wins) / len(trades) * 100, 1),
+                    "total_pnl": round(total_pnl, 2),
+                    "avg_win": avg_win,
+                    "avg_loss": avg_loss,
+                    "expectancy": expectancy,
+                    "profit_factor": _calc_profit_factor(win_total, loss_total),
+                },
+                "best_trade": {
+                    "symbol": best_trade.underlying,
+                    "strategy": best_trade.strategy,
+                    "pnl": best_trade.pnl,
+                    "closed_at": best_trade.closed_at.isoformat() if best_trade.closed_at else None,
+                },
+                "worst_trade": {
+                    "symbol": worst_trade.underlying,
+                    "strategy": worst_trade.strategy,
+                    "pnl": worst_trade.pnl,
+                    "closed_at": worst_trade.closed_at.isoformat() if worst_trade.closed_at else None,
+                },
+                "by_strategy": strategy_rows[:8],
+                "by_day_of_week": day_rows,
+                "by_time_block": time_rows,
+                "top_exit_reasons": sorted(exit_reasons.items(), key=lambda item: item[1], reverse=True)[:6],
+                "coaching_flags": coaching_flags,
+            }
+
+        elif name == "trade_autopsy":
+            lookback_days = max(7, min(int(args.get("lookback_days", 90)), 365))
+            cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+            query = db.query(ExecutionIntent).filter(
+                ExecutionIntent.closed_at.isnot(None),
+                ExecutionIntent.closed_at >= cutoff,
+            )
+            if args.get("intent_id"):
+                query = query.filter(ExecutionIntent.intent_id == args["intent_id"])
+            elif args.get("underlying"):
+                query = query.filter(ExecutionIntent.underlying.ilike(f"%{args['underlying']}%"))
+
+            trade = query.order_by(ExecutionIntent.closed_at.desc()).first()
+            if not trade:
+                return {"success": False, "error": "No matching closed trade found for autopsy."}
+
+            hold_minutes = None
+            if trade.created_at and trade.closed_at:
+                hold_minutes = round((trade.closed_at - trade.created_at).total_seconds() / 60, 1)
+
+            exit_reason = trade.exit_reason or "Unspecified"
+            peak_profit_capture_pct = None
+            if trade.max_unrealized_pnl and trade.max_unrealized_pnl > 0 and trade.pnl is not None:
+                peak_profit_capture_pct = round((trade.pnl / trade.max_unrealized_pnl) * 100, 1)
+
+            strengths = []
+            coaching_flags = []
+            if trade.tp is not None:
+                strengths.append("Take-profit was defined on this trade.")
+            if trade.sl is not None:
+                strengths.append("Stop-loss was defined on this trade.")
+            if trade.trailing_sl_pct:
+                strengths.append(f"Trailing stop was enabled at {trade.trailing_sl_pct}%.")
+
+            if "manual" in exit_reason.lower():
+                coaching_flags.append("Manual exit recorded — verify it matched your written exit plan.")
+            if peak_profit_capture_pct is not None and peak_profit_capture_pct < 30:
+                coaching_flags.append(
+                    f"Trade kept only {peak_profit_capture_pct}% of its peak open profit; review exit timing and trailing rules."
+                )
+            if (trade.pnl or 0) < 0 and trade.sl is None:
+                coaching_flags.append("Losing trade had no saved stop-loss value; add one for cleaner risk control.")
+            if (trade.pnl or 0) < 0 and trade.max_unrealized_pnl and trade.max_unrealized_pnl > 0:
+                coaching_flags.append("The trade was green before closing red; focus on protecting open gains sooner.")
+            if not coaching_flags:
+                coaching_flags.append("System data looks orderly; review chart context and execution timing for nuance.")
+
+            return {
+                "success": True,
+                "action": "trade_autopsy",
+                "trade": {
+                    "intent_id": trade.intent_id,
+                    "symbol": trade.underlying,
+                    "strategy": trade.strategy,
+                    "opened_at": trade.created_at.isoformat() if trade.created_at else None,
+                    "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
+                    "holding_minutes": hold_minutes,
+                    "pnl": trade.pnl,
+                    "entry_credit": trade.entry_credit,
+                    "avg_price": trade.avg_price,
+                    "max_unrealized_pnl": trade.max_unrealized_pnl,
+                    "peak_profit_capture_pct": peak_profit_capture_pct,
+                    "exit_reason": exit_reason,
+                    "tp": trade.tp,
+                    "sl": trade.sl,
+                    "trailing_sl_pct": trade.trailing_sl_pct,
+                },
+                "strengths": strengths,
+                "coaching_flags": coaching_flags,
+            }
+
         elif name == "run_scanner":
             strategy = (
                 db.query(ConditionStrategy)
@@ -677,12 +1287,60 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
             order_type = args.get("order_type", "MARKET").upper()
             exchange = args.get("exchange", "NSE").upper()
             price = args.get("price")
-            dry_run = bool(args.get("dry_run", False))
+            dry_run = _as_bool(args.get("dry_run", False))
+            confirmed = _as_bool(args.get("confirmed", False))
 
             if order_type == "LIMIT" and price is None:
                 return {"success": False, "error": "price is required for LIMIT orders"}
             if quantity <= 0:
                 return {"success": False, "error": "quantity must be greater than 0"}
+            if quantity > AI_MAX_ORDER_QTY:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Order blocked by risk guardrail: quantity {quantity} exceeds "
+                        f"AI_MAX_ORDER_QTY={AI_MAX_ORDER_QTY}"
+                    ),
+                }
+
+            open_positions_count = (
+                db.query(ExecutionIntent)
+                .filter(
+                    ExecutionIntent.status == "EXECUTED",
+                    ExecutionIntent.closed_at.is_(None),
+                )
+                .count()
+            )
+            if open_positions_count >= AI_MAX_OPEN_POSITIONS:
+                return {
+                    "success": False,
+                    "error": (
+                        "Order blocked by risk guardrail: "
+                        f"open positions {open_positions_count} reached limit "
+                        f"AI_MAX_OPEN_POSITIONS={AI_MAX_OPEN_POSITIONS}"
+                    ),
+                }
+
+            if AI_MAX_DAILY_LOSS_INR > 0:
+                day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                closed_today = (
+                    db.query(ExecutionIntent)
+                    .filter(
+                        ExecutionIntent.closed_at.isnot(None),
+                        ExecutionIntent.closed_at >= day_start,
+                    )
+                    .all()
+                )
+                realized_pnl_today = sum(t.pnl or 0 for t in closed_today)
+                if realized_pnl_today <= -abs(AI_MAX_DAILY_LOSS_INR):
+                    return {
+                        "success": False,
+                        "error": (
+                            "Order blocked by risk guardrail: "
+                            f"today realized P&L is ₹{realized_pnl_today:,.2f}, below daily loss limit "
+                            f"₹{-abs(AI_MAX_DAILY_LOSS_INR):,.2f}"
+                        ),
+                    }
 
             if dry_run:
                 return {
@@ -699,6 +1357,23 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                         "price": price,
                     },
                     "message": "Dry run only. No order was placed.",
+                }
+
+            if AI_REQUIRE_TRADE_CONFIRMATION and not confirmed:
+                return {
+                    "success": True,
+                    "action": "trade_confirmation_required",
+                    "requires_confirmation": True,
+                    "message": "Please confirm this live order. Send: confirm place trade.",
+                    "order_preview": {
+                        "symbol": symbol,
+                        "trade_action": action,
+                        "quantity": quantity,
+                        "product": product,
+                        "order_type": order_type,
+                        "exchange": exchange,
+                        "price": price,
+                    },
                 }
 
             try:
