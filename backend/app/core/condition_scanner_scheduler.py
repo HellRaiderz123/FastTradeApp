@@ -140,7 +140,7 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
             ltp = quote.get("last_price")
             volume = quote.get("volume")
 
-        result = _scan_symbol(symbol, conditions, db, ltp=ltp, volume=volume)
+        result = _scan_symbol(symbol, conditions, db, ltp=ltp, volume=volume, timeframe=timeframe or "Day")
         if result:
             signals.append(result)
 

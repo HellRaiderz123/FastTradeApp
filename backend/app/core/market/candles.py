@@ -95,9 +95,24 @@ def fetch_daily_candles(db: Session, symbol: str, days: int = 400):
     candles = kite.historical_data(
         instrument_token=token, from_date=from_dt, to_date=to_dt, interval="day",
     )
+    candles = sorted(candles, key=lambda c: c["date"])
 
     is_index = symbol in INDEX_TOKENS
-    baseline_close = None if is_index else _get_recent_close(db, symbol)
+    baseline_close = None
+    if not is_index and candles:
+        latest_row = (
+            db.query(CandleDaily.date, CandleDaily.close)
+            .filter(CandleDaily.symbol == symbol)
+            .order_by(CandleDaily.date.desc())
+            .first()
+        )
+        if latest_row:
+            latest_date = latest_row[0].date() if hasattr(latest_row[0], "date") else latest_row[0]
+            first_candle_date = candles[0]["date"].date() if hasattr(candles[0]["date"], "date") else candles[0]["date"]
+            # Only compare against the existing latest close for incremental updates near the present.
+            # For long historical backfills, start the sanity chain from the fetched batch itself.
+            if latest_date and abs((latest_date - first_candle_date).days) <= 10:
+                baseline_close = float(latest_row[1] or 0)
 
     rows = []
     skipped_sanity = 0

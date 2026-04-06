@@ -93,7 +93,10 @@
           "samples": [
             "watchlist summary",
             "what is on my watchlist",
+            "what is in my watch list",
             "summarize my watchlist",
+            "show my watchlist",
+            "which stocks am I watching",
             "watchlist update"
           ]
         },
@@ -107,8 +110,14 @@
           ],
           "samples": [
             "add {question} to my watchlist",
+            "add {question} to my watch list",
+            "add stock {question} to my watchlist",
             "put {question} on my watchlist",
+            "put {question} in my watch list",
+            "track {question}",
+            "keep an eye on {question}",
             "watch {question}",
+            "watch {question} stock",
             "save {question} in my watchlist"
           ]
         },

@@ -181,8 +181,8 @@ class TechnicalIndicators:
     ) -> Optional[Dict[str, float]]:
         """
         Average Directional Index (ADX)
-        Measures trend strength (0-100)
-        
+        Measures trend strength (0-100) using Wilder-style smoothing.
+
         Returns:
             {
                 "adx": ADX value (0-100),
@@ -191,106 +191,68 @@ class TechnicalIndicators:
             }
         """
         try:
-            if len(highs) < period + 1 or len(lows) < period + 1 or len(closes) < period + 1:
+            if len(highs) <= period or len(lows) <= period or len(closes) <= period:
                 return None
-            
-            # Calculate True Range
-            tr_list = []
+
+            tr_list: List[float] = []
+            plus_dm_list: List[float] = []
+            minus_dm_list: List[float] = []
+
             for i in range(1, len(closes)):
+                up_move = highs[i] - highs[i - 1]
+                down_move = lows[i - 1] - lows[i]
+
+                plus_dm_list.append(up_move if up_move > down_move and up_move > 0 else 0.0)
+                minus_dm_list.append(down_move if down_move > up_move and down_move > 0 else 0.0)
+
                 high_low = highs[i] - lows[i]
-                high_close = abs(highs[i] - closes[i-1])
-                low_close = abs(lows[i] - closes[i-1])
-                tr = max(high_low, high_close, low_close)
-                tr_list.append(tr)
-            
-            if not tr_list:
+                high_close = abs(highs[i] - closes[i - 1])
+                low_close = abs(lows[i] - closes[i - 1])
+                tr_list.append(max(high_low, high_close, low_close))
+
+            if len(tr_list) < period:
                 return None
-            
-            # Calculate +DM and -DM
-            plus_dm_list = []
-            minus_dm_list = []
-            
-            for i in range(1, len(highs)):
-                up_move = highs[i] - highs[i-1]
-                down_move = lows[i-1] - lows[i]
-                
-                plus_dm = up_move if up_move > down_move and up_move > 0 else 0
-                minus_dm = down_move if down_move > up_move and down_move > 0 else 0
-                
-                plus_dm_list.append(plus_dm)
-                minus_dm_list.append(minus_dm)
-            
-            # Smooth TR, +DM, -DM
-            atr = sum(tr_list[-period:]) / period
-            plus_dm_smooth = sum(plus_dm_list[-period:]) / period
-            minus_dm_smooth = sum(minus_dm_list[-period:]) / period
-            
-            # Calculate +DI and -DI
-            plus_di = (plus_dm_smooth / atr * 100) if atr > 0 else 0
-            minus_di = (minus_dm_smooth / atr * 100) if atr > 0 else 0
-            
-            # Calculate DX
-            di_sum = plus_di + minus_di
-            di_diff = abs(plus_di - minus_di)
-            dx = (di_diff / di_sum * 100) if di_sum > 0 else 0
-            
-            # ADX is properly smoothed EMA of DX values, not just raw DX
-            # For more accurate ADX with limited data, use simple average fallback
-            adx = dx
-            if len(closes) >= period * 3:
-                # Calculate multiple DX values for EMA smoothing
-                dx_list = []
-                for lookback in range(period, len(closes)):
-                    end_idx = lookback
-                    start_idx = max(0, end_idx - period)
-                    
-                    period_highs = highs[start_idx:end_idx]
-                    period_lows = lows[start_idx:end_idx]
-                    period_closes = closes[start_idx:end_idx]
-                    
-                    if len(period_closes) >= 2:
-                        # Calculate TR for this period
-                        tr_sum = 0
-                        for i in range(1, len(period_closes)):
-                            high_low = period_highs[i] - period_lows[i]
-                            high_close = abs(period_highs[i] - period_closes[i-1])
-                            low_close = abs(period_lows[i] - period_closes[i-1])
-                            tr_sum += max(high_low, high_close, low_close)
-                        
-                        atr_val = tr_sum / len(period_closes) if period_closes else 1
-                        
-                        # Calculate +DM and -DM for this period
-                        plus_dm = 0
-                        minus_dm = 0
-                        for i in range(1, len(period_closes)):
-                            up_move = period_highs[i] - period_highs[i-1]
-                            down_move = period_lows[i-1] - period_lows[i]
-                            if up_move > down_move and up_move > 0:
-                                plus_dm += up_move
-                            if down_move > up_move and down_move > 0:
-                                minus_dm += down_move
-                        
-                        di_plus = (plus_dm / atr_val * 100) if atr_val > 0 else 0
-                        di_minus = (minus_dm / atr_val * 100) if atr_val > 0 else 0
-                        
-                        di_sum_val = di_plus + di_minus
-                        di_diff_val = abs(di_plus - di_minus)
-                        dx_val = (di_diff_val / di_sum_val * 100) if di_sum_val > 0 else 0
-                        dx_list.append(dx_val)
-                
-                # EMA of DX
-                if len(dx_list) >= period:
-                    adx = sum(dx_list[:period]) / period
-                    multiplier = 2 / (period + 1)
-                    for dx_val in dx_list[period:]:
-                        adx = (dx_val - adx) * multiplier + adx
-                elif dx_list:
-                    adx = sum(dx_list) / len(dx_list)
-            
+
+            tr_smooth = sum(tr_list[:period])
+            plus_dm_smooth = sum(plus_dm_list[:period])
+            minus_dm_smooth = sum(minus_dm_list[:period])
+
+            dx_values: List[float] = []
+            plus_di = 0.0
+            minus_di = 0.0
+
+            for idx in range(period, len(tr_list)):
+                if idx > period:
+                    tr_smooth = tr_smooth - (tr_smooth / period) + tr_list[idx]
+                    plus_dm_smooth = plus_dm_smooth - (plus_dm_smooth / period) + plus_dm_list[idx]
+                    minus_dm_smooth = minus_dm_smooth - (minus_dm_smooth / period) + minus_dm_list[idx]
+
+                if tr_smooth <= 0:
+                    plus_di = 0.0
+                    minus_di = 0.0
+                    dx = 0.0
+                else:
+                    plus_di = (plus_dm_smooth / tr_smooth) * 100
+                    minus_di = (minus_dm_smooth / tr_smooth) * 100
+                    di_sum = plus_di + minus_di
+                    dx = (abs(plus_di - minus_di) / di_sum * 100) if di_sum > 0 else 0.0
+
+                dx_values.append(dx)
+
+            if not dx_values:
+                return None
+
+            if len(dx_values) >= period:
+                adx = sum(dx_values[:period]) / period
+                for dx in dx_values[period:]:
+                    adx = ((adx * (period - 1)) + dx) / period
+            else:
+                adx = sum(dx_values) / len(dx_values)
+
             return {
-                "adx": round(min(max(adx, 0), 100), 2),  # Ensure 0-100 range
+                "adx": round(min(max(adx, 0), 100), 2),
                 "plus_di": round(min(max(plus_di, 0), 100), 2),
-                "minus_di": round(min(max(minus_di, 0), 100), 2)
+                "minus_di": round(min(max(minus_di, 0), 100), 2),
             }
         except Exception as e:
             logger.warning(f"Error calculating ADX: {e}")
@@ -305,30 +267,48 @@ class TechnicalIndicators:
         d_period: int = 3
     ) -> Optional[Dict[str, float]]:
         """
-        Stochastic Oscillator
-        
-        %K = (Current Close - Lowest Low) / (Highest High - Lowest Low) * 100
-        %D = SMA of %K
+        Stochastic Oscillator (slow/full variant)
+
+        fast %K = (Current Close - Lowest Low) / (Highest High - Lowest Low) * 100
+        %K = SMA(3) of fast %K
+        %D = SMA(d_period) of %K
         """
         try:
             if len(closes) < k_period:
                 return None
-            
-            highest_high = max(highs[-k_period:])
-            lowest_low = min(lows[-k_period:])
-            current_close = closes[-1]
-            
-            if highest_high == lowest_low:
+
+            fast_k_values: List[float] = []
+            for end_idx in range(k_period, len(closes) + 1):
+                highest_high = max(highs[end_idx - k_period:end_idx])
+                lowest_low = min(lows[end_idx - k_period:end_idx])
+                current_close = closes[end_idx - 1]
+
+                if highest_high == lowest_low:
+                    fast_k_values.append(50.0)
+                else:
+                    fast_k_values.append(((current_close - lowest_low) / (highest_high - lowest_low)) * 100)
+
+            if not fast_k_values:
                 return None
-            
-            k = ((current_close - lowest_low) / (highest_high - lowest_low)) * 100
-            
-            # Calculate %D (SMA of %K) - simplified
-            d = k  # In practice, should calculate from multiple %K values
-            
+
+            slow_window = 3
+            slow_k_values: List[float] = []
+            for idx in range(len(fast_k_values)):
+                window = fast_k_values[max(0, idx - slow_window + 1): idx + 1]
+                slow_k_values.append(sum(window) / len(window))
+
+            d_values: List[float] = []
+            for idx in range(len(slow_k_values)):
+                window = slow_k_values[max(0, idx - max(1, d_period) + 1): idx + 1]
+                d_values.append(sum(window) / len(window))
+
+            k = slow_k_values[-1]
+            d = d_values[-1]
+
             return {
                 "k": round(k, 2),
-                "d": round(d, 2)
+                "d": round(d, 2),
+                "fast_k": round(fast_k_values[-1], 2),
             }
         except Exception as e:
             logger.warning(f"Error calculating Stochastic: {e}")

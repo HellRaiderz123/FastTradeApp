@@ -112,6 +112,7 @@ async def lifespan(app: FastAPI):
         from app.db.session import engine
         from app.db.models import Base
         from app.db.models_notification import Notification
+        from app.db.models_alexa import AlexaMemory, AlexaInteractionLog  # noqa: F401 ensures table registration
         from app.db.models_risk import RiskLimitConfig  # noqa: F401 ensures table registration
         from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog, ensure_auto_trader_schema  # noqa: F401
         from app.db.models_signal_outcome import SignalOutcome  # noqa: F401

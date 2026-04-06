@@ -90,6 +90,8 @@
             "मेरी watchlist",
             "watchlist summary",
             "मेरी watchlist में क्या है",
+            "मेरी watch list में क्या है",
+            "मेरे watchlist stocks बताओ",
             "watchlist update"
           ]
         },
@@ -103,8 +105,12 @@
           ],
           "samples": [
             "मेरी watchlist में {question} जोड़ो",
+            "मेरी watch list में {question} जोड़ो",
             "watchlist में {question} add करो",
-            "{question} को मेरी watchlist में डालो"
+            "watch list में {question} add करो",
+            "{question} को मेरी watchlist में डालो",
+            "{question} stock को watchlist में रखो",
+            "{question} track करो"
           ]
         },
         {

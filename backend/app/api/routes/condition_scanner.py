@@ -380,6 +380,32 @@ def _resolve_value_prev(
     return _resolve_value(value_str, closes[:-1], highs[:-1], lows[:-1], volumes[:-1])
 
 
+def _required_history_bars(conditions: List[dict]) -> int:
+    """Estimate the warm-up bars required to evaluate a strategy reliably."""
+    required = 30
+    for cond in conditions or []:
+        indicator = str(cond.get("indicator", "")).upper()
+        params = cond.get("params", {}) or {}
+        period = int(params.get("period", 14) or 14)
+
+        if indicator == "TEMA":
+            required = max(required, period * 3 + 5)
+        elif indicator == "DEMA":
+            required = max(required, period * 2 + 5)
+        elif indicator in ("STOCHASTIC", "STOCH"):
+            k_period = int(params.get("k_period", period) or period)
+            d_period = int(params.get("d_period", 3) or 3)
+            required = max(required, k_period + d_period + 5)
+        elif indicator == "MACD":
+            slow = int(params.get("slow", 26) or 26)
+            signal = int(params.get("signal", 9) or 9)
+            required = max(required, slow + signal + 5)
+        else:
+            required = max(required, period + 5)
+
+    return max(required, 30)
+
+
 def _evaluate_condition(
     cond: dict,
     closes: List[float],
@@ -438,44 +464,58 @@ def _scan_symbol(
     db: Session,
     ltp: Optional[float] = None,
     volume: Optional[int] = None,
+    timeframe: str = "Day",
 ) -> Optional[Dict[str, Any]]:
     """
-    Scan a single symbol against entry conditions.
-    Uses real daily candles from DB if available.
+    Scan a single symbol against entry conditions using the strategy timeframe.
     Returns match info or None.
     """
-    # Fetch real candles
+    candle_info = TIMEFRAME_CANDLE_MAP.get(timeframe, TIMEFRAME_CANDLE_MAP["Day"])
+    CandleModel, date_attr, _table_label = candle_info
+    date_col = getattr(CandleModel, date_attr)
+
+    required_bars = _required_history_bars(conditions)
+    default_limit = {
+        "1 Min": 600,
+        "5 Min": 600,
+        "15 Min": 600,
+        "1 Hour": 400,
+        "Day": 250,
+    }.get(timeframe, 250)
+    limit_bars = max(default_limit, required_bars + 50)
+
     candles = (
-        db.query(CandleDaily)
-        .filter(CandleDaily.symbol == symbol)
-        .order_by(desc(CandleDaily.date))
-        .limit(200)
+        db.query(CandleModel)
+        .filter(CandleModel.symbol == symbol)
+        .order_by(desc(date_col))
+        .limit(limit_bars)
         .all()
     )
 
-    if len(candles) < 50:
+    if len(candles) < required_bars:
         return None
 
     candles = candles[::-1]  # chronological
 
-    closes = [c.close for c in candles]
-    highs = [c.high for c in candles]
-    lows = [c.low for c in candles]
+    closes = [float(c.close) for c in candles]
+    highs = [float(c.high) for c in candles]
+    lows = [float(c.low) for c in candles]
     volumes = [int(c.volume or 0) for c in candles]
 
-    # Append today's live data if available
+    # Append a lightweight live bar approximation if we have fresh quote data.
     if ltp and ltp > 0:
-        closes.append(ltp)
-        highs.append(ltp * 1.005)
-        lows.append(ltp * 0.995)
+        last_close = closes[-1]
+        live_high = max(last_close, float(ltp))
+        live_low = min(last_close, float(ltp))
+        closes.append(float(ltp))
+        highs.append(live_high)
+        lows.append(live_low)
         volumes.append(volume if volume and volume > 0 else volumes[-1])
 
-    # All conditions must pass (AND logic)
     for cond in conditions:
         if not _evaluate_condition(cond, closes, highs, lows, volumes):
             return None
 
-    # Compute indicator values for display
     indicator_values = {}
     for cond in conditions:
         ind = cond["indicator"]
@@ -493,6 +533,7 @@ def _scan_symbol(
         "change_percent": round(change_pct, 2),
         "indicators": indicator_values,
         "conditions_met": len(conditions),
+        "timeframe": timeframe,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -1030,7 +1071,7 @@ async def scan_strategy(
             ltp = quote.get("last_price")
             volume = quote.get("volume")
 
-        result = _scan_symbol(symbol, conditions, db, ltp=ltp, volume=volume)
+        result = _scan_symbol(symbol, conditions, db, ltp=ltp, volume=volume, timeframe=row.timeframe or "Day")
         if result:
             signals.append(result)
 
@@ -1397,13 +1438,14 @@ def _backtest_symbol(
     date_attr: str = "date",
 ) -> Dict[str, Any]:
     """
-    Replay candles for one symbol, evaluate entry conditions bar-by-bar,
-    apply SL/TP/TSL exits.  Returns trade list + metrics for this symbol.
-    Works with any timeframe candle (1m / 5m / 15m / 1h / daily).
+    Replay candles for one symbol using more realistic Streak-like rules:
+    - signal is confirmed on the current bar close
+    - entry happens on the *next* bar open
+    - SL/TP/TSL are checked against candle high/low intrabar
     """
-    sl_pct = exit_config.get("sl_pct", 5.0) / 100
-    tp_pct = exit_config.get("tp_pct", 10.0) / 100
-    tsl_pct = exit_config.get("tsl_pct", 0.0) / 100
+    sl_pct = max(float(exit_config.get("sl_pct", 5.0) or 0.0), 0.0) / 100
+    tp_pct = max(float(exit_config.get("tp_pct", 10.0) or 0.0), 0.0) / 100
+    tsl_pct = max(float(exit_config.get("tsl_pct", 0.0) or 0.0), 0.0) / 100
 
     trades: List[Dict[str, Any]] = []
     in_trade = False
@@ -1411,68 +1453,89 @@ def _backtest_symbol(
     entry_date = None
     entry_bar_idx = None
     peak_price = 0.0
-    trough_price = float('inf')
+    trough_price = float("inf")
 
     for i in range(lookback, len(candles)):
         c = candles[i]
         bar_date = _bar_date_str(c, date_attr)
+        bar_open = float(getattr(c, "open", c.close) or c.close)
+        bar_high = float(getattr(c, "high", c.close) or c.close)
+        bar_low = float(getattr(c, "low", c.close) or c.close)
+        bar_close = float(getattr(c, "close", c.close) or c.close)
 
-        closes = [x.close for x in candles[:i + 1]]
-        highs = [x.high for x in candles[:i + 1]]
-        lows = [x.low for x in candles[:i + 1]]
+        closes = [float(x.close) for x in candles[:i + 1]]
+        highs = [float(x.high) for x in candles[:i + 1]]
+        lows = [float(x.low) for x in candles[:i + 1]]
         volumes = [int(x.volume or 0) for x in candles[:i + 1]]
-        current_close = c.close
 
         if in_trade:
-            # Track peak/trough for TSL
-            if direction == "BUY":
-                if current_close > peak_price:
-                    peak_price = current_close
-            else:
-                if current_close < trough_price:
-                    trough_price = current_close
-
-            # Check SL
-            if direction == "BUY":
-                sl_hit = current_close <= entry_price * (1 - sl_pct)
-            else:
-                sl_hit = current_close >= entry_price * (1 + sl_pct)
-
-            # Check TP
-            if direction == "BUY":
-                tp_hit = current_close >= entry_price * (1 + tp_pct)
-            else:
-                tp_hit = current_close <= entry_price * (1 - tp_pct)
-
-            # Check TSL
-            tsl_hit = False
-            if tsl_pct > 0:
-                if direction == "BUY":
-                    tsl_trigger = peak_price * (1 - tsl_pct)
-                    tsl_hit = current_close <= tsl_trigger and peak_price > entry_price
-                else:
-                    tsl_trigger = trough_price * (1 + tsl_pct)
-                    tsl_hit = current_close >= tsl_trigger and trough_price < entry_price
-
             exit_reason = None
-            if sl_hit:
-                exit_reason = "SL"
-            elif tp_hit:
-                exit_reason = "TP"
-            elif tsl_hit:
-                exit_reason = "TSL"
+            exit_price = None
 
-            if exit_reason:
-                if direction == "BUY":
-                    pnl_pct = ((current_close - entry_price) / entry_price) * 100
+            if direction == "BUY":
+                peak_price = max(peak_price, bar_high)
+                sl_level = entry_price * (1 - sl_pct) if sl_pct > 0 else None
+                tp_level = entry_price * (1 + tp_pct) if tp_pct > 0 else None
+                tsl_level = peak_price * (1 - tsl_pct) if tsl_pct > 0 and peak_price > entry_price else None
+
+                sl_hit = sl_level is not None and bar_low <= sl_level
+                tp_hit = tp_level is not None and bar_high >= tp_level
+                tsl_hit = tsl_level is not None and bar_low <= tsl_level
+
+                if sl_hit and bar_open <= sl_level:
+                    exit_reason, exit_price = "SL", bar_open
+                elif tp_hit and bar_open >= tp_level:
+                    exit_reason, exit_price = "TP", bar_open
+                elif tsl_hit and bar_open <= tsl_level:
+                    exit_reason, exit_price = "TSL", bar_open
                 else:
-                    pnl_pct = ((entry_price - current_close) / entry_price) * 100
+                    candidates = []
+                    if sl_hit:
+                        candidates.append(("SL", sl_level))
+                    if tsl_hit:
+                        candidates.append(("TSL", tsl_level))
+                    if tp_hit:
+                        candidates.append(("TP", tp_level))
+                    if candidates:
+                        exit_reason, exit_price = min(candidates, key=lambda item: item[1])
+            else:
+                trough_price = min(trough_price, bar_low)
+                sl_level = entry_price * (1 + sl_pct) if sl_pct > 0 else None
+                tp_level = entry_price * (1 - tp_pct) if tp_pct > 0 else None
+                tsl_level = trough_price * (1 + tsl_pct) if tsl_pct > 0 and trough_price < entry_price else None
+
+                sl_hit = sl_level is not None and bar_high >= sl_level
+                tp_hit = tp_level is not None and bar_low <= tp_level
+                tsl_hit = tsl_level is not None and bar_high >= tsl_level
+
+                if sl_hit and bar_open >= sl_level:
+                    exit_reason, exit_price = "SL", bar_open
+                elif tp_hit and bar_open <= tp_level:
+                    exit_reason, exit_price = "TP", bar_open
+                elif tsl_hit and bar_open >= tsl_level:
+                    exit_reason, exit_price = "TSL", bar_open
+                else:
+                    candidates = []
+                    if sl_hit:
+                        candidates.append(("SL", sl_level))
+                    if tsl_hit:
+                        candidates.append(("TSL", tsl_level))
+                    if tp_hit:
+                        candidates.append(("TP", tp_level))
+                    if candidates:
+                        exit_reason, exit_price = max(candidates, key=lambda item: item[1])
+
+            if exit_reason and exit_price is not None:
+                if direction == "BUY":
+                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100
 
                 trades.append({
                     "entry_date": entry_date,
                     "exit_date": bar_date,
                     "entry_price": round(entry_price, 2),
-                    "exit_price": round(current_close, 2),
+                    "exit_price": round(exit_price, 2),
                     "pnl_pct": round(pnl_pct, 2),
                     "exit_reason": exit_reason,
                     "holding_bars": i - entry_bar_idx if entry_bar_idx is not None else 0,
@@ -1481,39 +1544,40 @@ def _backtest_symbol(
                 continue
 
         if not in_trade:
-            # Evaluate entry conditions
             all_met = True
             for cond in conditions:
                 if not _evaluate_condition(cond, closes, highs, lows, volumes):
                     all_met = False
                     break
 
-            if all_met:
+            # Enter on the next bar open after the signal bar closes.
+            if all_met and i + 1 < len(candles):
+                next_bar = candles[i + 1]
+                next_open = float(getattr(next_bar, "open", next_bar.close) or next_bar.close)
                 in_trade = True
-                entry_price = current_close
-                entry_date = bar_date
-                entry_bar_idx = i
-                peak_price = current_close
-                trough_price = current_close
+                entry_price = next_open
+                entry_date = _bar_date_str(next_bar, date_attr)
+                entry_bar_idx = i + 1
+                peak_price = next_open
+                trough_price = next_open
 
-    # Close any open trade at last bar
     if in_trade and len(candles) > 0:
         last = candles[-1]
+        last_close = float(getattr(last, "close", 0.0) or 0.0)
         if direction == "BUY":
-            pnl_pct = ((last.close - entry_price) / entry_price) * 100
+            pnl_pct = ((last_close - entry_price) / entry_price) * 100
         else:
-            pnl_pct = ((entry_price - last.close) / entry_price) * 100
+            pnl_pct = ((entry_price - last_close) / entry_price) * 100
         trades.append({
             "entry_date": entry_date,
             "exit_date": _bar_date_str(last, date_attr),
             "entry_price": round(entry_price, 2),
-            "exit_price": round(last.close, 2),
+            "exit_price": round(last_close, 2),
             "pnl_pct": round(pnl_pct, 2),
             "exit_reason": "OPEN",
             "holding_bars": len(candles) - 1 - (entry_bar_idx or 0),
         })
 
-    # Compute per-symbol metrics
     total_trades = len(trades)
     winners = [t for t in trades if t["pnl_pct"] > 0]
     losers = [t for t in trades if t["pnl_pct"] <= 0]
@@ -1555,6 +1619,7 @@ def _run_backtest_for_strategy_payload(
     exit_config = dict(strategy.get("exit_config", {}) or {})
     universe = strategy.get("universe", "NIFTY50")
     timeframe = strategy.get("timeframe", "Day")
+    required_bars = _required_history_bars(conditions)
 
     # Allow request-level exit overrides from UI backtest form.
     if req.sl_pct is not None:
@@ -1586,13 +1651,15 @@ def _run_backtest_for_strategy_payload(
     if date_attr == "timestamp":
         start_dt = datetime.combine(start_date, datetime.min.time())
         end_dt = datetime.combine(end_date, datetime.max.time())
+        warmup_days = max(30, math.ceil(required_bars / 8) * 5)
         lookback_start_dt = datetime.combine(
-            start_date - timedelta(days=30), datetime.min.time()
+            start_date - timedelta(days=warmup_days), datetime.min.time()
         )
     else:
         start_dt = start_date
         end_dt = end_date
-        lookback_start_dt = start_date - timedelta(days=120)
+        warmup_days = max(180, required_bars * 3)
+        lookback_start_dt = start_date - timedelta(days=warmup_days)
 
     instruments = strategy.get("instruments", [])
     symbols = instruments if instruments else get_symbols(universe)
@@ -1613,7 +1680,7 @@ def _run_backtest_for_strategy_payload(
             .all()
         )
 
-        min_bars = 60 if date_attr == "date" else 20
+        min_bars = max(required_bars, 60 if date_attr == "date" else 40)
         if len(candles) < min_bars:
             continue
 
