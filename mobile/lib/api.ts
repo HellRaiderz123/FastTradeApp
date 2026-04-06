@@ -17,12 +17,12 @@ const trimTrailingSlash = (url: string) => url.replace(/\/+$/, '');
 
 const getDefaultApiBaseUrl = () => {
   if (Platform.OS === 'web') {
-    return 'http://192.168.1.103:8000';
+    return 'http://192.168.1.101:8000';
   }
   if (Platform.OS === 'android') {
-    return 'http://192.168.1.103:8000';
+    return 'http://192.168.1.101:8000';
   }
-  return 'http://192.168.1.103:8000';
+  return 'http://192.168.1.101:8000';
 };
 
 const getDefaultAiApiBaseUrl = () => getDefaultApiBaseUrl();
@@ -64,7 +64,13 @@ export const persistAiApiBaseUrl = async (nextUrl: string) => {
 export const syncApiBaseUrlFromStorage = async () => {
   const stored = await AsyncStorage.getItem(API_BASE_STORAGE_KEY);
   if (stored?.trim()) {
-    setApiBaseUrl(stored);
+    if (stored.includes('192.168.1.103:8000')) {
+      const migrated = getDefaultApiBaseUrl();
+      setApiBaseUrl(migrated);
+      await AsyncStorage.setItem(API_BASE_STORAGE_KEY, migrated);
+    } else {
+      setApiBaseUrl(stored);
+    }
   }
   return getApiBaseUrl();
 };
@@ -74,8 +80,8 @@ export const syncAiApiBaseUrlFromStorage = async () => {
   if (stored?.trim()) {
     // Migration: older versions stored direct Ollama URL (:11434), but mobile
     // AI client calls /ai-chat/query which is served by FastTrade backend.
-    // Move stale Ollama base to backend base to avoid connection/timeout issues.
-    if (/:[\/]?11434\b/.test(stored)) {
+    // Move stale Ollama base or legacy LAN IP to backend base to avoid connection issues.
+    if (/:[\/]?11434\b/.test(stored) || stored.includes('192.168.1.103:8000')) {
       setAiApiBaseUrl(getApiBaseUrl());
       await AsyncStorage.setItem(AI_API_BASE_STORAGE_KEY, getAiApiBaseUrl());
     } else {

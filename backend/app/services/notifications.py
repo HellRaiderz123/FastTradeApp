@@ -1,6 +1,6 @@
 """
 Notification Service - Multi-channel alerts system
-Supports: In-App Notifications + Gmail
+Supports: In-App Notifications + Gmail + Telegram + Alexa Proactive Alerts
 """
 
 import logging
@@ -453,6 +453,23 @@ class NotificationService:
                     self._send_telegram(f"{title}\n\n{message}")
                 else:
                     logger.debug(f"Telegram not configured, skipping for: {title}")
+
+            # 4. Send Alexa proactive alerts for high/critical notifications when subscribers exist.
+            if priority in [NotificationPriority.HIGH, NotificationPriority.CRITICAL]:
+                try:
+                    from app.services.alexa_proactive_alerts import get_alexa_proactive_alert_service
+
+                    alexa_result = get_alexa_proactive_alert_service(self.db).send_notification(
+                        title=title,
+                        message=message,
+                        severity=priority.value,
+                    )
+                    if alexa_result.get("ok"):
+                        logger.info("✅ Alexa proactive alert sent: %s", title)
+                    elif alexa_result.get("reason") not in {"not-configured", "no-subscribers"}:
+                        logger.warning("Alexa proactive alert skipped for %s: %s", title, alexa_result)
+                except Exception as exc:
+                    logger.warning("Alexa proactive delivery failed for %s: %s", title, exc)
             
             logger.info(f"✅ Notification sent: {title}")
             

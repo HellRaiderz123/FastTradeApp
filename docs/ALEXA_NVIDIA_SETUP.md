@@ -77,13 +77,24 @@ https://abc123.ngrok-free.app/alexa/skill
 
 ## 5) Import the interaction model
 
+### English (`en-US`)
+
 1. In the Alexa console, open **Build**.
 2. Go to **JSON Editor**.
 3. Paste the contents of `backend/examples/alexa_fasttrade_interaction_model.json`.
 4. Click **Save Model**.
 5. Click **Build Model**.
 
-Invocation name in the sample: `fast trade assistant`
+Invocation name in the sample: `open fast trade`
+
+### Hindi (`hi-IN`)
+
+1. In the Alexa console, add the **Hindi (IN)** locale.
+2. Open that locale's **JSON Editor**.
+3. Paste `backend/examples/alexa_fasttrade_interaction_model_hi_IN.json`.
+4. Save and build the Hindi model.
+
+> With `hi-IN`, the backend now responds in simple Hindi or Hinglish for voice-friendly answers.
 
 ---
 
@@ -108,12 +119,66 @@ Then restart the backend.
 
 Try these in the Alexa simulator or app:
 
-- `Alexa, open fast trade assistant`
-- `Alexa, ask fast trade assistant for my portfolio summary`
-- `Alexa, ask fast trade assistant what is my risk today`
-- `Alexa, ask fast trade assistant for a market update`
-- `Alexa, ask fast trade assistant what is RSI`
-- `Alexa, ask fast trade assistant who is Warren Buffett`
+- `Alexa, open open fast trade`
+- `Alexa, ask open fast trade for my portfolio summary`
+- `Alexa, ask open fast trade what is my risk today`
+- `Alexa, ask open fast trade for a market update`
+- `Alexa, ask open fast trade what is RSI`
+- `Alexa, ask open fast trade who is Warren Buffett`
+- `Alexa, ask open fast trade buy Reliance for tomorrow`
+- `Alexa, confirm trade`
+- `Alexa, cancel trade`
+- `Alexa, ask open fast trade for my morning briefing`
+- `Alexa, ask open fast trade remember that I prefer low risk trades`
+- `Alexa, ask open fast trade remind me to review Nifty at 9 30 AM`
+- `Alexa, ask open fast trade what do you remember`
+- `Alexa, ask open fast trade summarize market news`
+- `Alexa, ask open fast trade what is on my watchlist`
+- `Alexa, ask open fast trade add Reliance and Infosys to my watchlist`
+- `Alexa, ask open fast trade clear my watchlist`
+- `Alexa, ask open fast trade what is the market sentiment`
+- `Alexa, ask open fast trade top movers today`
+- `Alexa, ask open fast trade earnings this week`
+- `Alexa, ask open fast trade give me a trading lesson`
+- `Alexa, ask open fast trade explain the strategy iron condor`
+- `Alexa, ask open fast trade log a trade note I exited early due to fear`
+- `Alexa, open open fast trade and say मार्केट अपडेट`
+- `Alexa, open open fast trade and say मेरी watchlist में Reliance जोड़ो`
+
+## 8) Jarvis-style assistant features
+
+This skill now supports light Jarvis-style features while the backend is running:
+
+- **Morning briefing** for a quick start-of-day summary
+- **Memory notes** like preferred risk profile or focus stock
+- **Session reminders** such as review Nifty at 9 30 AM
+- **Session watchlist memory** so you can add names by voice and ask for a summary later
+- **Market sentiment check** for a quick bullish, bearish, or mixed mood update
+- **General AI Q and A** along with FastTrade market context
+
+> Note: memory notes, reminders, journal entries, and the Alexa watchlist are now stored in the database when the backend DB is available. If the DB is temporarily unreachable, the skill falls back to session memory.
+
+---
+
+## 9) Safer voice trading behavior
+
+Voice trading is implemented in a **safe confirmation-first mode**.
+
+- A trade-style request like `buy Reliance` is treated as a **draft paper-trade instruction**.
+- Alexa asks for confirmation before continuing.
+- By default, **live voice trading stays disabled** for safety.
+
+Optional env flag:
+
+```env
+ALEXA_VOICE_TRADING_ENABLED=false
+```
+
+> Recommendation: keep this `false` unless you later build a full confirmation, authentication, and broker-review flow.
+
+---
+
+## 9) Can this connect to your Fast Trade app AI later?
 
 ---
 
@@ -133,3 +198,43 @@ Try these in the Alexa simulator or app:
    - market sentiment briefings
 
 > Recommendation: keep Alexa **read-only** first. Do not place live trades by voice until you add confirmation, authentication, and audit logging.
+
+---
+
+## 10) Proactive Alexa alerts (real alerts without asking)
+
+Fast Trade now includes a backend foundation for **Alexa proactive alerts** tied to the existing notification system.
+
+### Backend env vars
+
+Add these to `backend/.env`:
+
+```env
+ALEXA_PROACTIVE_ALERTS_ENABLED=true
+ALEXA_PROACTIVE_CLIENT_ID=your_lwa_client_id
+ALEXA_PROACTIVE_CLIENT_SECRET=your_lwa_client_secret
+ALEXA_PROACTIVE_STAGE=development
+```
+
+### Alexa Developer Console / manifest requirements
+
+Your skill manifest must include:
+
+- permission: `alexa::devices:all:notifications:write`
+- publication event: `AMAZON.MessageAlert.Activated`
+- subscription event handling for `AlexaSkillEvent.ProactiveSubscriptionChanged`
+
+### User-side requirement
+
+In the Alexa app, enable **Notifications** for your skill. Alexa sends the subscription event to `/alexa/skill`, and the backend records the subscribed user for future alerts.
+
+### Test endpoint
+
+You can send a test proactive event with:
+
+```text
+POST /alexa/proactive/test
+GET  /alexa/proactive/status
+```
+
+Once configured, existing **high / critical** Fast Trade notifications such as stop-loss hits, trade failures, margin warnings, and important alerts can fan out to Alexa proactively.

@@ -3,12 +3,21 @@ import os
 import re
 from typing import Any
 
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.api.routes.ai_chat import _call_llm
+from app.db.models_alexa import AlexaMemory
+from app.db.models_notification import Notification
+from app.db.models_twitter import TwitterAlert
+from app.db.models_watchlist import Watchlist
 from app.db.session import SessionLocal
+from app.services.alexa_proactive_alerts import get_alexa_proactive_alert_service
 from app.services.llm_service import call_llm
+from app.services.market_data import get_option_chain, get_spot
+from app.services.rss_feed_service import get_rss_service
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +26,31 @@ router = APIRouter(prefix="/alexa", tags=["Alexa"])
 ALEXA_SKILL_NAME = os.getenv("ALEXA_SKILL_NAME", "Fast Trade AI")
 ALEXA_ALLOWED_SKILL_ID = os.getenv("ALEXA_ALLOWED_SKILL_ID", "").strip()
 ALEXA_ENFORCE_SKILL_ID = os.getenv("ALEXA_ENFORCE_SKILL_ID", "false").strip().lower() in {"1", "true", "yes", "on"}
-DEFAULT_REPROMPT = "You can ask about your portfolio, market outlook, or even general questions like explain RSI or summarize the news."
+ALEXA_VOICE_TRADING_ENABLED = os.getenv("ALEXA_VOICE_TRADING_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+ALEXA_PROGRESSIVE_RESPONSE_ENABLED = os.getenv("ALEXA_PROGRESSIVE_RESPONSE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_REPROMPT = "You can ask about your portfolio, market outlook, general questions, or say buy Reliance and then confirm trade for a safe paper-trade draft."
+DEFAULT_REPROMPT_HI = "आप मुझसे अपने पोर्टफोलियो, मार्केट अपडेट, सामान्य सवाल, या सुरक्षित पेपर ट्रेड ड्राफ्ट के बारे में पूछ सकते हैं।"
 TRADING_KEYWORDS = {
     "portfolio", "position", "positions", "trade", "trades", "trading", "market", "stock", "stocks",
     "option", "options", "nifty", "bank nifty", "sensex", "risk", "profit", "loss", "scanner",
     "watchlist", "signal", "candlestick", "rsi", "macd", "zerodha", "fast trade", "fasttrade",
+    "sentiment", "gainer", "loser", "earnings",
 }
+TRADE_ACTION_KEYWORDS = {
+    "buy", "sell", "exit", "close", "square off", "book profit", "paper trade", "order", "enter trade",
+}
+ALERT_SUMMARY_KEYWORDS = {
+    "alert", "alerts", "notification", "notifications", "warning", "warnings", "signal", "signals", "scanner",
+    "breaking news", "important update", "risk alert",
+}
+MEMORY_TYPE_TO_KEY = {"note": "notes", "reminder": "reminders", "journal": "journal"}
+ALEXA_LIVE_MARKET_CONTEXT_ENABLED = os.getenv("ALEXA_LIVE_MARKET_CONTEXT_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+try:
+    ALEXA_MAX_CONVERSATION_TURNS = max(2, min(10, int(os.getenv("ALEXA_MAX_CONVERSATION_TURNS", "5"))))
+except ValueError:
+    ALEXA_MAX_CONVERSATION_TURNS = 5
+_USER_MEMORY: dict[str, dict[str, list[str]]] = {}
+_USER_CONVERSATIONS: dict[str, list[dict[str, str]]] = {}
 
 
 def get_db():
@@ -51,11 +79,16 @@ def _normalize_for_voice(text: str) -> str:
     return cleaned or "Sorry, I could not generate a response right now."
 
 
-def _response(text: str, reprompt: str | None = None, end_session: bool = False) -> dict[str, Any]:
+def _response(
+    text: str,
+    reprompt: str | None = None,
+    end_session: bool = False,
+    session_attributes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     spoken_text = _normalize_for_voice(text)
     payload: dict[str, Any] = {
         "version": "1.0",
-        "sessionAttributes": {},
+        "sessionAttributes": session_attributes or {},
         "response": {
             "outputSpeech": {
                 "type": "PlainText",
@@ -81,9 +114,53 @@ def _response(text: str, reprompt: str | None = None, end_session: bool = False)
     return payload
 
 
+def _progressive_message(is_hindi: bool) -> str:
+    return "एक क्षण, मैं यह देखती हूँ।" if is_hindi else "Let me check that for you."
+
+
+async def _send_progressive_response(payload: dict[str, Any], text: str) -> None:
+    if not ALEXA_PROGRESSIVE_RESPONSE_ENABLED:
+        return
+
+    request_id = str(payload.get("request", {}).get("requestId") or "").strip()
+    system_context = payload.get("context", {}).get("System", {}) or {}
+    api_access_token = str(system_context.get("apiAccessToken") or "").strip()
+    api_endpoint = str(system_context.get("apiEndpoint") or "https://api.amazonalexa.com").rstrip("/")
+
+    if not request_id or not api_access_token:
+        return
+
+    directive_payload = {
+        "header": {"requestId": request_id},
+        "directive": {
+            "type": "VoicePlayer.Speak",
+            "speech": _normalize_for_voice(text),
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.post(
+                f"{api_endpoint}/v1/directives",
+                headers={
+                    "Authorization": f"Bearer {api_access_token}",
+                    "Content-Type": "application/json",
+                },
+                json=directive_payload,
+            )
+            if response.status_code >= 400:
+                logger.warning(
+                    "Alexa progressive response failed: status=%s body=%s",
+                    response.status_code,
+                    response.text[:200],
+                )
+    except Exception as exc:
+        logger.debug("Alexa progressive response unavailable: %s", exc)
+
+
 def _extract_question(intent: dict[str, Any]) -> str:
     slots = intent.get("slots") or {}
-    for slot_name in ("question", "query", "topic", "subject", "anything"):
+    for slot_name in ("question", "query", "topic", "subject", "anything", "note", "reminder", "preference"):
         slot = slots.get(slot_name) or {}
         value = (slot.get("value") or "").strip()
         if value:
@@ -91,11 +168,349 @@ def _extract_question(intent: dict[str, Any]) -> str:
     return ""
 
 
+def _get_user_id(payload: dict[str, Any]) -> str:
+    return (
+        payload.get("session", {}).get("user", {}).get("userId")
+        or payload.get("context", {}).get("System", {}).get("user", {}).get("userId")
+        or "anonymous"
+    )
+
+
+def _get_user_memory(user_id: str) -> dict[str, list[str]]:
+    if user_id not in _USER_MEMORY:
+        _USER_MEMORY[user_id] = {"notes": [], "reminders": [], "journal": [], "watchlist": []}
+    return _USER_MEMORY[user_id]
+
+
+def _get_recent_conversation(user_id: str) -> list[dict[str, str]]:
+    if user_id not in _USER_CONVERSATIONS:
+        _USER_CONVERSATIONS[user_id] = []
+    return _USER_CONVERSATIONS[user_id]
+
+
+def _remember_conversation_turn(user_id: str, role: str, content: str) -> None:
+    if role not in {"user", "assistant"}:
+        return
+    cleaned = _normalize_for_voice(content)
+    if not cleaned or cleaned.startswith("Sorry, I could not generate"):
+        return
+
+    history = _get_recent_conversation(user_id)
+    if history and history[-1].get("role") == role and history[-1].get("content") == cleaned:
+        return
+
+    history.append({"role": role, "content": cleaned})
+    _USER_CONVERSATIONS[user_id] = history[-(ALEXA_MAX_CONVERSATION_TURNS * 2):]
+
+
+def _conversation_as_text(user_id: str) -> str:
+    history = _get_recent_conversation(user_id)[-(ALEXA_MAX_CONVERSATION_TURNS * 2):]
+    if not history:
+        return ""
+
+    lines: list[str] = []
+    for item in history:
+        speaker = "User" if item.get("role") == "user" else "Assistant"
+        content = str(item.get("content") or "").strip()
+        if content:
+            lines.append(f"{speaker}: {content}")
+    return "\n".join(lines)
+
+
+def _get_locale(payload: dict[str, Any]) -> str:
+    return (payload.get("request", {}).get("locale") or "en-US").strip()
+
+
+def _is_hindi_locale(payload: dict[str, Any]) -> bool:
+    return _get_locale(payload).lower().startswith("hi")
+
+
+def _extract_list_items(text: str) -> list[str]:
+    items = [
+        part.strip(" .")
+        for part in re.split(r",|\band\b|\baur\b|और", text, flags=re.IGNORECASE)
+        if part.strip()
+    ]
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique[:8]
+
+
+def _dedupe_items(items: list[str], limit: int) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = str(item).strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(normalized)
+    return unique[-limit:]
+
+
+def _primary_market_symbol(question: str) -> str:
+    normalized = question.strip().lower()
+    if "banknifty" in normalized or "bank nifty" in normalized:
+        return "BANKNIFTY"
+    if "finnifty" in normalized or "fin nifty" in normalized:
+        return "FINNIFTY"
+    return "NIFTY"
+
+
+def _build_live_market_context(question: str, user_memory: dict[str, list[str]]) -> str:
+    if not ALEXA_LIVE_MARKET_CONTEXT_ENABLED:
+        return ""
+
+    parts: list[str] = []
+
+    try:
+        nifty = get_spot("NIFTY")
+        banknifty = get_spot("BANKNIFTY")
+        india_vix = get_spot("NIFTYVIX")
+        vix_tone = "low volatility" if india_vix < 13 else "elevated volatility" if india_vix > 18 else "moderate volatility"
+        parts.append(f"NIFTY spot is {nifty:.2f}.")
+        parts.append(f"BANKNIFTY spot is {banknifty:.2f}.")
+        parts.append(f"India VIX is {india_vix:.2f}, which suggests {vix_tone}.")
+    except Exception as exc:
+        logger.debug("Alexa live index snapshot unavailable: %s", exc)
+
+    try:
+        underlying = _primary_market_symbol(question)
+        reference_spot = None
+        try:
+            reference_spot = get_spot(underlying)
+        except Exception:
+            reference_spot = None
+
+        chain = get_option_chain(underlying)
+        if not chain.empty:
+            strikes = sorted({int(float(strike)) for strike in chain["strike"].dropna().tolist()})
+            if strikes:
+                atm = min(strikes, key=lambda strike: abs(strike - reference_spot)) if reference_spot else strikes[len(strikes) // 2]
+                window = 150 if underlying == "NIFTY" else 300
+                nearby = [str(strike) for strike in strikes if abs(strike - atm) <= window][:7]
+                if nearby:
+                    parts.append(f"{underlying} option chain near ATM {atm} is available around strikes {', '.join(nearby)}.")
+    except Exception as exc:
+        logger.debug("Alexa live option snapshot unavailable: %s", exc)
+
+    if user_memory.get("watchlist"):
+        parts.append("Saved watchlist: " + ", ".join(user_memory["watchlist"][-5:]) + ".")
+
+    return " ".join(parts)
+
+
+def _rollback_quietly(db: Session) -> None:
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
+
+def _alexa_watchlist_name(user_id: str) -> str:
+    safe_id = re.sub(r"[^a-zA-Z0-9]+", "-", user_id).strip("-") or "anonymous"
+    return f"Alexa Voice Watchlist {safe_id[:18]}"
+
+
+def _load_persistent_user_memory(db: Session, user_id: str) -> dict[str, list[str]]:
+    user_memory = _get_user_memory(user_id)
+    try:
+        records = (
+            db.query(AlexaMemory)
+            .filter(AlexaMemory.user_id == user_id, AlexaMemory.is_active == True)
+            .order_by(AlexaMemory.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        grouped = {"notes": [], "reminders": [], "journal": []}
+        for record in reversed(records):
+            key = MEMORY_TYPE_TO_KEY.get((record.memory_type or "").strip().lower())
+            if key and record.content:
+                grouped[key].append(record.content.strip())
+        for key, values in grouped.items():
+            if values:
+                user_memory[key] = _dedupe_items(values, 10)
+
+        watchlist = (
+            db.query(Watchlist)
+            .filter(Watchlist.created_by == f"alexa:{user_id}", Watchlist.is_active == True)
+            .order_by(Watchlist.updated_at.desc())
+            .first()
+        )
+        if watchlist and isinstance(watchlist.symbols, list):
+            user_memory["watchlist"] = _dedupe_items([str(symbol) for symbol in watchlist.symbols], 15)
+    except Exception as exc:
+        _rollback_quietly(db)
+        logger.warning("Alexa persistent memory load failed for %s: %s", user_id, exc)
+    return user_memory
+
+
+def _save_memory_record(db: Session, user_id: str, memory_type: str, content: str, locale: str) -> bool:
+    cleaned = content.strip()
+    if not cleaned:
+        return False
+    try:
+        latest = (
+            db.query(AlexaMemory)
+            .filter(
+                AlexaMemory.user_id == user_id,
+                AlexaMemory.memory_type == memory_type,
+                AlexaMemory.is_active == True,
+            )
+            .order_by(AlexaMemory.created_at.desc())
+            .first()
+        )
+        if latest and (latest.content or "").strip().lower() == cleaned.lower():
+            return True
+
+        db.add(AlexaMemory(user_id=user_id, memory_type=memory_type, content=cleaned, locale=locale))
+        db.commit()
+        return True
+    except Exception as exc:
+        _rollback_quietly(db)
+        logger.warning("Alexa persistent save failed for %s/%s: %s", user_id, memory_type, exc)
+        return False
+
+
+def _save_watchlist(db: Session, user_id: str, items: list[str] | None = None, clear: bool = False) -> list[str] | None:
+    try:
+        watchlist = (
+            db.query(Watchlist)
+            .filter(Watchlist.created_by == f"alexa:{user_id}")
+            .order_by(Watchlist.updated_at.desc())
+            .first()
+        )
+        if not watchlist and clear:
+            return []
+
+        if not watchlist:
+            watchlist = Watchlist(
+                name=_alexa_watchlist_name(user_id),
+                description="Persistent watchlist created from Alexa voice commands",
+                symbols=[],
+                color="#8b5cf6",
+                icon="mic",
+                is_default=False,
+                is_active=True,
+                created_by=f"alexa:{user_id}",
+            )
+            db.add(watchlist)
+            db.flush()
+
+        current_symbols = watchlist.symbols if isinstance(watchlist.symbols, list) else []
+        current_symbols = _dedupe_items([str(symbol).upper() for symbol in current_symbols], 15)
+
+        if clear:
+            watchlist.symbols = []
+        else:
+            normalized_items = _dedupe_items([str(item).strip().upper() for item in (items or [])], 15)
+            watchlist.symbols = _dedupe_items(current_symbols + normalized_items, 15)
+
+        db.commit()
+        db.refresh(watchlist)
+        return [str(symbol) for symbol in (watchlist.symbols or [])]
+    except Exception as exc:
+        _rollback_quietly(db)
+        logger.warning("Alexa watchlist persistence failed for %s: %s", user_id, exc)
+        return None
+
+
 def _should_use_fasttrade_context(intent_name: str, question: str) -> bool:
-    if intent_name in {"PortfolioSummaryIntent", "RiskStatusIntent", "MarketBriefIntent"}:
+    if intent_name in {
+        "PortfolioSummaryIntent",
+        "RiskStatusIntent",
+        "MarketBriefIntent",
+        "MorningBriefingIntent",
+        "TradeActionIntent",
+        "NewsSummaryIntent",
+        "WatchlistSummaryIntent",
+        "TopMoversIntent",
+        "EarningsCalendarIntent",
+        "AlertSummaryIntent",
+        "MarketSentimentIntent",
+    }:
         return True
     normalized = question.strip().lower()
     return any(keyword in normalized for keyword in TRADING_KEYWORDS)
+
+
+def _is_alert_summary_request(intent_name: str, question: str) -> bool:
+    if intent_name == "AlertSummaryIntent":
+        return True
+    normalized = question.strip().lower()
+    return any(keyword in normalized for keyword in ALERT_SUMMARY_KEYWORDS)
+
+
+def _build_alert_context(question: str, db: Session) -> str:
+    normalized = question.strip().lower()
+    critical_only = any(term in normalized for term in {"critical", "urgent", "important", "high priority"})
+    trade_focus = any(term in normalized for term in {"trade", "position", "pnl", "stop loss", "take profit", "sl", "tp"})
+    twitter_focus = any(term in normalized for term in {"twitter", "x alert", "sentiment", "social"})
+    news_focus = any(term in normalized for term in {"news", "headline", "breaking"})
+
+    summaries: list[str] = []
+
+    try:
+        notification_query = db.query(Notification).filter(Notification.read == False)
+        if critical_only:
+            notification_query = notification_query.filter(Notification.priority.in_(["high", "critical"]))
+        notifications = notification_query.order_by(Notification.created_at.desc()).limit(6).all()
+        if trade_focus:
+            trade_types = {"trade_executed", "trade_failed", "tp_hit", "sl_hit", "trailing_sl_hit", "pnl_threshold"}
+            filtered = [item for item in notifications if (item.type or "") in trade_types]
+            if filtered:
+                notifications = filtered
+        for item in notifications[:3]:
+            title = str(item.title or item.message or "notification").strip()
+            priority = str(item.priority or "medium").lower()
+            summaries.append(f"{priority} app notification: {title}")
+    except Exception as exc:
+        logger.debug("Alexa notification fetch unavailable: %s", exc)
+
+    try:
+        twitter_query = db.query(TwitterAlert).filter(TwitterAlert.dismissed == False)
+        if critical_only:
+            twitter_query = twitter_query.filter(TwitterAlert.severity.in_(["critical", "high"]))
+        twitter_alerts = twitter_query.order_by(TwitterAlert.created_at.desc()).limit(6).all()
+        if twitter_focus or not trade_focus:
+            for item in twitter_alerts[:2]:
+                severity = str(item.severity or "medium").lower()
+                symbol = str(item.symbol or "market")
+                title = str(item.title or item.message or "Twitter alert").strip()
+                summaries.append(f"{severity} social alert on {symbol}: {title}")
+    except Exception as exc:
+        logger.debug("Alexa Twitter alert fetch unavailable: %s", exc)
+
+    try:
+        if news_focus or not summaries:
+            rss_items = get_rss_service().fetch_all_feeds(categories=["moneycontrol_market", "economic_times"])
+            for item in rss_items[:12]:
+                title = str(item.get("title") or "").strip()
+                text = f"{title} {item.get('description') or ''}".lower()
+                if any(term in text for term in {"breaking", "alert", "rbi", "volatility", "surge", "plunge", "earnings"}):
+                    source = str(item.get("source") or "RSS")
+                    summaries.append(f"market news alert from {source}: {title}")
+                    if len(summaries) >= 5:
+                        break
+    except Exception as exc:
+        logger.debug("Alexa live news alert fetch unavailable: %s", exc)
+
+    deduped = _dedupe_items(summaries, 5)
+    return " ".join(deduped) if deduped else "No unread in-app notifications or high-priority market alerts are available right now."
+
+
+def _is_trade_action_request(intent_name: str, question: str) -> bool:
+    if intent_name == "TradeActionIntent":
+        return True
+    normalized = question.strip().lower()
+    return any(keyword in normalized for keyword in TRADE_ACTION_KEYWORDS)
 
 
 def _default_question(intent_name: str) -> str:
@@ -103,6 +518,15 @@ def _default_question(intent_name: str) -> str:
         "PortfolioSummaryIntent": "Give me a short spoken summary of my portfolio, open positions, and important alerts.",
         "RiskStatusIntent": "Give me a short spoken summary of my current trading risk and any open-position concerns.",
         "MarketBriefIntent": "Give me a short spoken market brief for today.",
+        "MarketSentimentIntent": "Give me a short spoken market sentiment summary and say whether the tone looks bullish, bearish, or mixed.",
+        "MorningBriefingIntent": "Give me a short morning briefing with market outlook, portfolio context, and one practical focus item for today.",
+        "NewsSummaryIntent": "Give me a short spoken summary of the most important market and stock news right now.",
+        "WatchlistSummaryIntent": "Give me a short spoken summary of my watchlist and the most actionable names.",
+        "TopMoversIntent": "Give me a short spoken summary of top gainers and losers or the key movers to watch today.",
+        "EarningsCalendarIntent": "Give me a short spoken summary of important earnings or economic events coming up soon.",
+        "TradingLessonIntent": "Teach me one short practical trading lesson for today.",
+        "StrategyExplainerIntent": "Explain the requested trading strategy in simple words with one caution.",
+        "AlertSummaryIntent": "Give me a short spoken summary of my most important alerts or watchlist signals.",
         "AMAZON.FallbackIntent": "Give me a short helpful answer to the user's request.",
     }
     return defaults.get(intent_name, "")
@@ -128,6 +552,37 @@ def alexa_skill_info() -> dict[str, Any]:
     }
 
 
+@router.get("/proactive/status")
+def alexa_proactive_status(db: Session = Depends(get_db)) -> dict[str, Any]:
+    service = get_alexa_proactive_alert_service(db)
+    return {
+        "ok": True,
+        **service.get_status(),
+    }
+
+
+@router.post("/proactive/test")
+def alexa_proactive_test(
+    message: str = "Fast Trade test alert. Review your latest critical notifications.",
+    severity: str = "high",
+    user_id: str | None = None,
+    locale: str = "en-US",
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    service = get_alexa_proactive_alert_service(db)
+    result = service.send_notification(
+        title=f"{ALEXA_SKILL_NAME} test alert",
+        message=message,
+        severity=(severity or "high").strip().lower(),
+        user_id=user_id,
+        locale=locale,
+    )
+    return {
+        "ok": bool(result.get("ok")),
+        "result": result,
+    }
+
+
 @router.post("/skill")
 async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
@@ -148,82 +603,330 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
 
     req = payload.get("request") or {}
     req_type = req.get("type")
+    is_hindi = _is_hindi_locale(payload)
+    default_reprompt = DEFAULT_REPROMPT_HI if is_hindi else DEFAULT_REPROMPT
 
     if req_type == "LaunchRequest":
-        return _response(
-            f"Welcome to {ALEXA_SKILL_NAME}. You can ask about your portfolio, the market, or general questions.",
-            reprompt=DEFAULT_REPROMPT,
+        welcome_text = (
+            f"{ALEXA_SKILL_NAME} में आपका स्वागत है। आप पोर्टफोलियो, मार्केट अपडेट, सामान्य सवाल, वॉचलिस्ट, या सुरक्षित पेपर ट्रेड ड्राफ्ट के बारे में पूछ सकते हैं।"
+            if is_hindi
+            else f"Welcome to {ALEXA_SKILL_NAME}. You can ask about your portfolio, the market, general questions, your watchlist, or draft a safe paper trade by voice."
         )
+        return _response(welcome_text, reprompt=default_reprompt)
 
     if req_type == "SessionEndedRequest":
         return {"version": "1.0", "response": {"shouldEndSession": True}}
 
+    if req_type == "AlexaSkillEvent.ProactiveSubscriptionChanged":
+        service = get_alexa_proactive_alert_service(db)
+        body = req.get("body") or {}
+        subscriptions = [
+            str(item.get("eventName") or "").strip()
+            for item in (body.get("subscriptions") or [])
+            if str(item.get("eventName") or "").strip()
+        ]
+        result = service.record_subscription_change(
+            user_id=_get_user_id(payload),
+            locale=_get_locale(payload),
+            subscriptions=subscriptions,
+            request_timestamp=str(req.get("timestamp") or "").strip() or None,
+        )
+        logger.info("Alexa proactive subscription updated: %s", result)
+        return {"version": "1.0", "response": {"shouldEndSession": True}, "ok": True}
+
     if req_type != "IntentRequest":
-        return _response("Sorry, I could not understand that Alexa request.", reprompt=DEFAULT_REPROMPT)
+        return _response(
+            "माफ़ कीजिए, मैं इस Alexa request को समझ नहीं पाई।" if is_hindi else "Sorry, I could not understand that Alexa request.",
+            reprompt=default_reprompt,
+        )
 
     intent = req.get("intent") or {}
     intent_name = intent.get("name", "")
     logger.info("Alexa intent received: %s", intent_name)
 
     if intent_name == "AMAZON.HelpIntent":
-        return _response(
-            "You can ask for your portfolio summary, current risk, a market update, or even a general question like what is RSI.",
-            reprompt=DEFAULT_REPROMPT,
+        help_text = (
+            "आप पोर्टफोलियो समरी, रिस्क स्टेटस, मार्केट न्यूज़, मार्केट सेंटिमेंट, वॉचलिस्ट समरी, ट्रेडिंग लेसन, या सामान्य सवाल पूछ सकते हैं। आप रिमाइंडर, जर्नल नोट और वॉचलिस्ट भी सेव कर सकते हैं।"
+            if is_hindi
+            else "You can ask for your portfolio summary, current risk, market news, market sentiment, watchlist summary, a trading lesson, or a general question like what is RSI. You can also save reminders, journal notes, and watchlist names."
         )
+        return _response(help_text, reprompt=default_reprompt)
 
     if intent_name in {"AMAZON.CancelIntent", "AMAZON.StopIntent", "AMAZON.NavigateHomeIntent"}:
-        return _response("Goodbye.", end_session=True)
+        return _response("ठीक है, फिर मिलते हैं।" if is_hindi else "Goodbye.", end_session=True)
+
+    session_attrs = payload.get("session", {}).get("attributes") or {}
+    pending_trade_request = str(session_attrs.get("pending_trade_request") or "").strip()
+    user_id = _get_user_id(payload)
+    locale = _get_locale(payload)
+    user_memory = _load_persistent_user_memory(db, user_id)
+
+    if intent_name in {"ConfirmTradeIntent", "AMAZON.YesIntent"}:
+        if not pending_trade_request:
+            return _response(
+                "अभी कन्फर्म करने के लिए कोई pending trade request नहीं है।" if is_hindi else "There is no pending trade request to confirm right now.",
+                reprompt=default_reprompt,
+            )
+
+        if ALEXA_VOICE_TRADING_ENABLED:
+            return _response(
+                (
+                    f"मैंने यह trade idea confirm कर लिया है: {pending_trade_request}. सुरक्षा के लिए live execution से पहले इसे Fast Trade में review कर लें।"
+                    if is_hindi
+                    else f"I confirmed the trade idea: {pending_trade_request}. For safety, please review it in Fast Trade before any live execution."
+                ),
+                reprompt="आप कोई और मार्केट अपडेट भी पूछ सकते हैं।" if is_hindi else "You can ask for another market or portfolio update.",
+                session_attributes={},
+            )
+
+        return _response(
+            (
+                f"मैंने यह trade idea capture कर लिया है: {pending_trade_request}. सुरक्षा के लिए live voice trading बंद है, इसलिए order place करने से पहले इसे Fast Trade app में review करें।"
+                if is_hindi
+                else f"I captured the trade idea: {pending_trade_request}. Live voice trading is disabled for safety, so please review it in the Fast Trade app before placing any order."
+            ),
+            reprompt="आप कोई और मार्केट अपडेट भी पूछ सकते हैं।" if is_hindi else "You can ask for another market or portfolio update.",
+            session_attributes={},
+        )
+
+    if intent_name in {"CancelTradeIntent", "AMAZON.NoIntent"}:
+        if pending_trade_request:
+            return _response(
+                "ठीक है, pending trade request cancel कर दी गई है।" if is_hindi else "Okay, I cancelled the pending trade request.",
+                reprompt=default_reprompt,
+                session_attributes={},
+            )
+        return _response("ठीक है, कुछ भी बदला नहीं गया।" if is_hindi else "Okay, nothing was changed.", reprompt=default_reprompt)
+
+    if intent_name == "RememberPreferenceIntent":
+        memory_text = _extract_question(intent)
+        if not memory_text:
+            return _response(
+                "कृपया बताइए कि आपको क्या याद रखना है।" if is_hindi else "Please tell me what you want me to remember.",
+                reprompt="उदाहरण के लिए कहें, मेरी low risk trades की preference याद रखो।" if is_hindi else "For example, say remember that I prefer low risk trades.",
+            )
+        user_memory["notes"] = _dedupe_items(user_memory.get("notes", []) + [memory_text], 10)
+        _save_memory_record(db, user_id, "note", memory_text, locale)
+        return _response(
+            f"ठीक है, मैंने यह preference save कर ली है: {memory_text}." if is_hindi else f"Okay, I saved this preference: {memory_text}.",
+            reprompt="आप पूछ सकते हैं कि तुम्हें क्या याद है या मेरा morning briefing दो।" if is_hindi else "You can also ask what do you remember or ask for your morning briefing.",
+        )
+
+    if intent_name == "SetReminderIntent":
+        reminder_text = _extract_question(intent)
+        if not reminder_text:
+            return _response(
+                "कृपया reminder text बताइए।" if is_hindi else "Please tell me the reminder text.",
+                reprompt="उदाहरण के लिए कहें, मुझे 9 30 AM पर Nifty review करने की याद दिलाओ।" if is_hindi else "For example, say remind me to review Nifty at 9 30 AM.",
+            )
+        user_memory["reminders"] = _dedupe_items(user_memory.get("reminders", []) + [reminder_text], 10)
+        _save_memory_record(db, user_id, "reminder", reminder_text, locale)
+        return _response(
+            f"ठीक है, मैंने यह reminder save कर लिया है: {reminder_text}." if is_hindi else f"Okay, I saved this reminder: {reminder_text}.",
+            reprompt="आप पूछ सकते हैं कि तुम्हें क्या याद है या मार्केट अपडेट दो।" if is_hindi else "You can ask what do you remember or ask for a market update.",
+        )
+
+    if intent_name == "JournalNoteIntent":
+        note_text = _extract_question(intent)
+        if not note_text:
+            return _response(
+                "कृपया वह journal note बताइए जिसे आप save करना चाहते हैं।" if is_hindi else "Please tell me the journal note you want to save.",
+                reprompt="उदाहरण के लिए कहें, note that I exited early due to fear."
+                if not is_hindi
+                else "उदाहरण के लिए कहें, journal में लिखो कि मैं डर की वजह से जल्दी निकल गया।",
+            )
+        user_memory["journal"] = _dedupe_items(user_memory.get("journal", []) + [note_text], 10)
+        _save_memory_record(db, user_id, "journal", note_text, locale)
+        return _response(
+            f"ठीक है, मैंने यह trading note save कर लिया है: {note_text}." if is_hindi else f"Okay, I saved this trading note: {note_text}.",
+            reprompt="आप कभी भी मुझसे अपने journal notes review करने को कह सकते हैं।" if is_hindi else "You can ask me to review your journal notes anytime.",
+        )
+
+    if intent_name == "AddToWatchlistIntent":
+        watchlist_text = _extract_question(intent)
+        if not watchlist_text:
+            return _response(
+                "कृपया stock name बताइए जिसे watchlist में जोड़ना है।" if is_hindi else "Please tell me which stock name you want to add to the watchlist.",
+                reprompt="उदाहरण के लिए कहें, add Reliance and Infosys to my watchlist."
+                if not is_hindi
+                else "उदाहरण के लिए कहें, मेरी watchlist में Reliance और Infosys जोड़ो।",
+            )
+        items = _extract_list_items(watchlist_text) or [watchlist_text.strip()]
+        normalized_items = _dedupe_items([item.upper() for item in items], 15)
+        user_memory["watchlist"] = _dedupe_items(user_memory.get("watchlist", []) + normalized_items, 15)
+        persisted_watchlist = _save_watchlist(db, user_id, normalized_items)
+        if persisted_watchlist is not None:
+            user_memory["watchlist"] = persisted_watchlist
+        spoken_items = ", ".join(items)
+        return _response(
+            f"ठीक है, मैंने {spoken_items} को आपकी watchlist में जोड़ दिया है।" if is_hindi else f"Okay, I added {spoken_items} to your watchlist.",
+            reprompt="अब आप कह सकते हैं, मेरी watchlist summary दो।" if is_hindi else "Now you can ask for your watchlist summary.",
+        )
+
+    if intent_name == "ClearWatchlistIntent":
+        user_memory["watchlist"] = []
+        _save_watchlist(db, user_id, clear=True)
+        return _response(
+            "ठीक है, आपकी watchlist साफ कर दी गई है।" if is_hindi else "Okay, I cleared your watchlist.",
+            reprompt=default_reprompt,
+        )
+
+    if intent_name in {"RecallMemoryIntent", "ListRemindersIntent", "ReviewJournalIntent"}:
+        notes = user_memory.get("notes", [])
+        reminders = user_memory.get("reminders", [])
+        journal_notes = user_memory.get("journal", [])
+        watchlist_items = user_memory.get("watchlist", [])
+        parts: list[str] = []
+        if notes:
+            parts.append(("मुझे यह याद है: " if is_hindi else "I remember: ") + "; ".join(notes[-3:]))
+        if reminders:
+            parts.append(("आपके recent reminders हैं: " if is_hindi else "Your recent reminders are: ") + "; ".join(reminders[-3:]))
+        if journal_notes:
+            parts.append(("आपके latest trading notes हैं: " if is_hindi else "Your latest trading notes are: ") + "; ".join(journal_notes[-3:]))
+        if watchlist_items:
+            parts.append(("आपकी saved watchlist है: " if is_hindi else "Your saved watchlist is: ") + "; ".join(watchlist_items[-6:]))
+        if not parts:
+            return _response(
+                "अभी कोई saved note, reminder, journal entry, या watchlist item नहीं है।" if is_hindi else "I do not have any saved notes, reminders, journal entries, or watchlist items yet.",
+                reprompt="कहें, मेरी low risk trades की preference याद रखो।" if is_hindi else "Try saying remember that I prefer low risk trades.",
+            )
+        return _response(
+            " ".join(parts),
+            reprompt="आप एक और reminder, journal note, या morning briefing पूछ सकते हैं।" if is_hindi else "You can add another reminder, journal note, or ask for your morning briefing.",
+        )
 
     if intent_name in {
         "AskFastTradeIntent",
         "AskNvidiaIntent",
         "GenericQuestionIntent",
+        "MorningBriefingIntent",
         "MarketBriefIntent",
+        "MarketSentimentIntent",
+        "NewsSummaryIntent",
+        "WatchlistSummaryIntent",
+        "TopMoversIntent",
+        "EarningsCalendarIntent",
+        "TradingLessonIntent",
+        "StrategyExplainerIntent",
+        "AlertSummaryIntent",
         "PortfolioSummaryIntent",
         "RiskStatusIntent",
+        "TradeActionIntent",
         "AMAZON.FallbackIntent",
     } or _extract_question(intent):
         question = _extract_question(intent) or _default_question(intent_name)
-        if not question:
-            return _response("Please ask a question, for example: what are my open positions or what is RSI?", reprompt=DEFAULT_REPROMPT)
 
-        use_fasttrade_context = _should_use_fasttrade_context(intent_name, question)
+        if intent_name == "WatchlistSummaryIntent" and user_memory.get("watchlist"):
+            watchlist_text = ", ".join(user_memory["watchlist"][-8:])
+            question = (
+                f"Give me a short spoken summary of this user watchlist: {watchlist_text}. Mention which names deserve attention and one simple caution."
+            )
+
+        if not question:
+            return _response(
+                "कृपया एक सवाल पूछिए, जैसे मेरे open positions क्या हैं, RSI क्या है, या Reliance buy करो।"
+                if is_hindi
+                else "Please ask a question, for example: what are my open positions, what is RSI, or buy Reliance for a paper trade draft.",
+                reprompt=default_reprompt,
+            )
+
+        if _is_trade_action_request(intent_name, question):
+            trade_summary = _normalize_for_voice(question)
+            return _response(
+                (
+                    f"मैंने यह trade request सुनी: {trade_summary}. सुरक्षा के लिए voice trading confirmation मांगती है और default रूप से paper-only रहती है। Continue करने के लिए confirm trade कहें या cancel trade कहें।"
+                    if is_hindi
+                    else f"I heard a trade request: {trade_summary}. For safety, voice trading requires confirmation and stays paper-only by default. Say confirm trade to continue or cancel trade to stop."
+                ),
+                reprompt="कहें confirm trade या cancel trade।" if is_hindi else "Say confirm trade or cancel trade.",
+                session_attributes={"pending_trade_request": trade_summary},
+            )
+
+        await _send_progressive_response(payload, _progressive_message(is_hindi))
+
+        conversation_history = _get_recent_conversation(user_id)[-(ALEXA_MAX_CONVERSATION_TURNS * 2):]
+        conversation_context = _conversation_as_text(user_id)
+        is_alert_request = _is_alert_summary_request(intent_name, question)
+        use_fasttrade_context = _should_use_fasttrade_context(intent_name, question) or bool(conversation_history)
+        live_market_context = _build_live_market_context(question, user_memory) if use_fasttrade_context else ""
+        alert_context = _build_alert_context(question, db) if is_alert_request else ""
+        if intent_name == "AlertSummaryIntent" and alert_context.startswith("No unread"):
+            no_alerts_text = (
+                "अभी कोई unread app notification या high priority market alert नहीं है।"
+                if is_hindi
+                else "There are no unread app notifications or high priority market alerts right now."
+            )
+            return _response(no_alerts_text, reprompt=default_reprompt)
+        if intent_name == "AlertSummaryIntent" and alert_context:
+            question = f"Summarize these actual current Fast Trade alerts for voice: {alert_context}"
         answer = None
+        language_instruction = (
+            "Reply in simple Hindi or natural Hinglish. Use at most two short voice-friendly sentences and keep it under 60 words."
+            if is_hindi
+            else "Answer in at most two short sentences, optimized for voice, and keep it under 60 words."
+        )
+        continuity_instruction = (
+            "Recent conversation context ko use karke follow-up sawalon ka natural jawab do."
+            if is_hindi
+            else "Use the recent conversation to resolve follow-up questions naturally."
+        )
 
         if use_fasttrade_context:
-            voice_prompt = (
-                "You are replying through Alexa for Fast Trade AI. "
-                "Answer in under three short sentences, optimized for voice. "
-                "Do not use markdown, bullet points, or JSON. "
-                "If the question is about FastTrade portfolio, risk, positions, or market context, use the available trading context. "
-                f"User request: {question}"
-            )
+            prompt_parts = [
+                "You are Fast Trade AI, a calm financial voice assistant for traders and investors.",
+                language_instruction,
+                continuity_instruction,
+                "Use plain language, highlight one relevant risk or caution when useful, and avoid jargon overload.",
+                "Do not use markdown, bullet points, or JSON.",
+                "If the question is about FastTrade portfolio, risk, positions, or market context, use the available trading context.",
+            ]
+            if live_market_context:
+                prompt_parts.append(f"Live market snapshot: {live_market_context}")
+            if alert_context:
+                prompt_parts.append(f"Current alert context: {alert_context}")
+            prompt_parts.append(f"User request: {question}")
+            voice_prompt = " ".join(prompt_parts)
             try:
-                answer, _actions = _call_llm(voice_prompt, [], db)
+                answer, _actions = _call_llm(voice_prompt, conversation_history, db)
             except Exception as exc:
                 logger.warning("Alexa Fast Trade context failed, falling back to base LLM: %s", exc)
                 answer = None
 
         if not answer:
+            fallback_prompt_parts: list[str] = []
+            if conversation_context:
+                fallback_prompt_parts.append(f"Recent conversation:\n{conversation_context}")
+            if live_market_context:
+                fallback_prompt_parts.append(f"Live market snapshot:\n{live_market_context}")
+            if alert_context:
+                fallback_prompt_parts.append(f"Current alert context:\n{alert_context}")
+            fallback_prompt_parts.append(f"Current user request:\n{question}")
+            fallback_prompt = "\n\n".join(fallback_prompt_parts)
+
             answer = call_llm(
-                prompt=question,
+                prompt=fallback_prompt,
                 system_prompt=(
-                    "You are replying through Alexa for Fast Trade AI, a helpful voice assistant similar to ChatGPT. "
+                    "You are Fast Trade AI, a helpful voice assistant similar to ChatGPT. "
                     "You can answer both general questions and trading education questions. "
-                    "Keep the answer under three short sentences. "
+                    f"{language_instruction} "
+                    f"{continuity_instruction} "
+                    "Use clear spoken language and keep the response easy to understand. "
+                    "If live market data or recent conversation is provided, use it directly instead of guessing. "
                     "Do not use markdown, bullet points, or JSON."
                 ),
-                max_tokens=180,
+                max_tokens=120,
                 temperature=0.2,
                 timeout=20.0,
             )
 
         if not answer:
-            answer = "The AI service is not responding right now. Please try again in a moment."
+            answer = "AI service अभी respond नहीं कर रही है, कृपया थोड़ी देर में फिर कोशिश करें।" if is_hindi else "The AI service is not responding right now. Please try again in a moment."
 
-        return _response(answer, reprompt=DEFAULT_REPROMPT)
+        _remember_conversation_turn(user_id, "user", question)
+        _remember_conversation_turn(user_id, "assistant", answer)
+        return _response(answer, reprompt=default_reprompt)
 
     return _response(
-        "That intent is not configured yet. For safety, this Alexa skill is read-only for now.",
-        reprompt=DEFAULT_REPROMPT,
+        "यह intent अभी configure नहीं है। सुरक्षा के लिए यह Alexa skill अभी read-only mode में है।" if is_hindi else "That intent is not configured yet. For safety, this Alexa skill is read-only for now.",
+        reprompt=default_reprompt,
     )

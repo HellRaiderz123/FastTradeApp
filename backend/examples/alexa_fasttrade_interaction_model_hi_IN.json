@@ -12,11 +12,10 @@
             }
           ],
           "samples": [
-            "ask {question}",
-            "question {question}",
-            "tell me {question}",
-            "about {question}",
-            "can you explain {question}"
+            "पूछो {question}",
+            "बताओ {question}",
+            "मुझे समझाओ {question}",
+            "about {question}"
           ]
         },
         {
@@ -28,9 +27,9 @@
             }
           ],
           "samples": [
-            "ask nvidia {question}",
-            "use ai for {question}",
-            "ask the ai {question}"
+            "ai से पूछो {question}",
+            "nvidia ai से पूछो {question}",
+            "ai से मदद करो {question}"
           ]
         },
         {
@@ -42,58 +41,55 @@
             }
           ],
           "samples": [
-            "what is {question}",
-            "who is {question}",
-            "explain {question}",
-            "tell me about {question}",
+            "क्या है {question}",
+            "कौन है {question}",
+            "समझाओ {question}",
+            "मुझे बताओ {question}",
             "help me with {question}"
           ]
         },
         {
           "name": "MarketBriefIntent",
           "samples": [
-            "market brief",
-            "market update",
-            "give me a market summary",
-            "how is the market today",
-            "summarize today's market"
+            "मार्केट अपडेट",
+            "आज मार्केट कैसा है",
+            "मार्केट समरी दो",
+            "today market summary"
           ]
         },
         {
           "name": "MarketSentimentIntent",
           "samples": [
-            "market sentiment",
-            "is the market bullish or bearish",
-            "how is sentiment today",
-            "tell me the market mood"
+            "मार्केट सेंटिमेंट",
+            "market bullish है या bearish",
+            "आज का market mood क्या है",
+            "sentiment update"
           ]
         },
         {
           "name": "MorningBriefingIntent",
           "samples": [
-            "morning briefing",
-            "daily briefing",
-            "give me my briefing",
-            "start my day",
-            "what is my briefing today"
+            "मॉर्निंग ब्रीफिंग",
+            "आज का briefing दो",
+            "मेरा day start कराओ",
+            "morning update"
           ]
         },
         {
           "name": "NewsSummaryIntent",
           "samples": [
-            "market news",
-            "news summary",
-            "summarize market news",
-            "latest stock news",
-            "what is the latest market news"
+            "मार्केट न्यूज़",
+            "आज की मार्केट खबरें",
+            "न्यूज़ समरी दो",
+            "latest stock news"
           ]
         },
         {
           "name": "WatchlistSummaryIntent",
           "samples": [
+            "मेरी watchlist",
             "watchlist summary",
-            "what is on my watchlist",
-            "summarize my watchlist",
+            "मेरी watchlist में क्या है",
             "watchlist update"
           ]
         },
@@ -106,44 +102,43 @@
             }
           ],
           "samples": [
-            "add {question} to my watchlist",
-            "put {question} on my watchlist",
-            "watch {question}",
-            "save {question} in my watchlist"
+            "मेरी watchlist में {question} जोड़ो",
+            "watchlist में {question} add करो",
+            "{question} को मेरी watchlist में डालो"
           ]
         },
         {
           "name": "ClearWatchlistIntent",
           "samples": [
-            "clear my watchlist",
-            "reset my watchlist",
-            "remove all watchlist items"
+            "मेरी watchlist साफ करो",
+            "watchlist clear करो",
+            "watchlist reset करो"
           ]
         },
         {
           "name": "TopMoversIntent",
           "samples": [
             "top movers",
-            "top gainers today",
-            "top losers today",
-            "which stocks are moving"
+            "आज के top gainers",
+            "आज के top losers",
+            "कौन से stocks move कर रहे हैं"
           ]
         },
         {
           "name": "EarningsCalendarIntent",
           "samples": [
-            "earnings this week",
-            "important events today",
+            "इस हफ्ते earnings",
+            "आने वाले earnings",
             "economic calendar",
-            "upcoming earnings"
+            "important events today"
           ]
         },
         {
           "name": "TradingLessonIntent",
           "samples": [
-            "teach me trading",
-            "give me a trading lesson",
-            "teach me one concept",
+            "मुझे trading सिखाओ",
+            "एक trading lesson दो",
+            "आज का trading concept",
             "daily trading lesson"
           ]
         },
@@ -156,17 +151,17 @@
             }
           ],
           "samples": [
-            "explain the strategy {question}",
-            "what is the strategy {question}",
-            "teach me the strategy {question}"
+            "strategy {question} समझाओ",
+            "मुझे {question} strategy समझाओ",
+            "what is strategy {question}"
           ]
         },
         {
           "name": "AlertSummaryIntent",
           "samples": [
+            "मेरे alerts क्या हैं",
             "alert summary",
-            "what are my alerts",
-            "summarize my alerts",
+            "मेरे alerts बताओ",
             "do I have any alerts"
           ]
         },
@@ -179,10 +174,9 @@
             }
           ],
           "samples": [
-            "remember {question}",
-            "remember that {question}",
-            "save {question}",
-            "note that {question}"
+            "याद रखो {question}",
+            "note करो {question}",
+            "save करो {question}"
           ]
         },
         {
@@ -194,26 +188,25 @@
             }
           ],
           "samples": [
-            "remind me to {question}",
-            "set a reminder for {question}",
+            "मुझे याद दिलाना {question}",
+            "reminder set करो {question}",
             "note a reminder to {question}"
           ]
         },
         {
           "name": "RecallMemoryIntent",
           "samples": [
-            "what do you remember",
-            "recall my preferences",
-            "what did I tell you",
-            "show my notes"
+            "तुम्हें क्या याद है",
+            "मेरे notes बताओ",
+            "what did I tell you"
           ]
         },
         {
           "name": "ListRemindersIntent",
           "samples": [
-            "what are my reminders",
-            "list my reminders",
-            "show my reminders"
+            "मेरे reminders बताओ",
+            "मेरे reminder क्या हैं",
+            "list my reminders"
           ]
         },
         {
@@ -225,19 +218,17 @@
             }
           ],
           "samples": [
-            "log a trade note {question}",
-            "save a journal note {question}",
-            "journal that {question}",
-            "note this trade lesson {question}"
+            "journal में लिखो {question}",
+            "trade note save करो {question}",
+            "journal that {question}"
           ]
         },
         {
           "name": "ReviewJournalIntent",
           "samples": [
-            "review my journal",
-            "read my trade notes",
-            "what are my journal notes",
-            "show my journal"
+            "मेरा journal दिखाओ",
+            "मेरे trade notes पढ़ो",
+            "review my journal"
           ]
         },
         {
@@ -252,46 +243,39 @@
             "buy {question}",
             "sell {question}",
             "exit {question}",
-            "close {question}",
-            "place a paper trade for {question}",
-            "create a trade idea for {question}"
+            "paper trade {question}"
           ]
         },
         {
           "name": "ConfirmTradeIntent",
           "samples": [
+            "trade confirm करो",
             "confirm trade",
-            "confirm order",
-            "yes confirm the trade",
-            "go ahead with the paper trade"
+            "हाँ trade confirm करो"
           ]
         },
         {
           "name": "CancelTradeIntent",
           "samples": [
+            "trade cancel करो",
             "cancel trade",
-            "cancel order",
-            "do not place it",
-            "never mind"
+            "नहीं cancel करो"
           ]
         },
         {
           "name": "PortfolioSummaryIntent",
           "samples": [
             "portfolio summary",
-            "give me my portfolio summary",
-            "how is my portfolio",
-            "what are my open positions",
-            "summarize my trades"
+            "मेरा portfolio कैसा है",
+            "मेरे open positions क्या हैं"
           ]
         },
         {
           "name": "RiskStatusIntent",
           "samples": [
             "risk status",
-            "what is my risk today",
-            "do I have any trading risk",
-            "tell me my current risk"
+            "आज का risk क्या है",
+            "trading risk बताओ"
           ]
         },
         {

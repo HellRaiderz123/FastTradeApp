@@ -434,6 +434,8 @@ async def get_calendar_events(
             "total_count": len(events),
             "event_types": sorted(event_types),
             "upcoming_high_impact": high_impact_count,
+            "data_source": "live_feeds",
+            "sources": sorted({str(e.get("source") or "unknown") for e in events}),
         }
     
     except Exception as e:
@@ -451,8 +453,8 @@ async def get_today_events():
         # Enrich events with countdown and days_until
         today_events = [enrich_event_with_countdown(e) for e in today_events]
         
-        # If we have events, it's real data
-        data_source = "nse_rss_and_rbi" if today_events else "rbi_calendar"
+        # If we have events, they are coming from current live feeds.
+        data_source = "live_feeds" if today_events else "live_feeds_unavailable"
         
         return {
             "date": datetime.now().strftime("%Y-%m-%d"),
@@ -499,7 +501,8 @@ async def get_week_events():
             "end_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
             "events_by_day": events_by_day,
             "total_count": len(week_events),
-            "data_source": "nse_rss_and_rbi"
+            "data_source": "live_feeds",
+            "sources": sorted({str(e.get("source") or "unknown") for e in week_events})
         }
     
     except Exception as e:
@@ -527,10 +530,11 @@ async def get_earnings_calendar(days_ahead: int = 30):
         return {
             "earnings": earnings,
             "count": len(earnings),
-            "data_source": "nse_rss",
+            "data_source": "live_feeds",
+            "sources": sorted({str(e.get("source") or "unknown") for e in earnings}),
             "timestamp": datetime.now().isoformat()
         }
-    
+
     except Exception as e:
         logger.error(f"Earnings calendar error: {str(e)}", exc_info=True)
         return {
@@ -539,12 +543,6 @@ async def get_earnings_calendar(days_ahead: int = 30):
             "data_source": "error",
             "error": str(e)
         }
-        logger.error(f"Earnings calendar error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch earnings: {str(e)}")
-    
-    except Exception as e:
-        logger.error(f"Earnings calendar error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch earnings: {str(e)}")
 
 
 @router.get("/ipo")

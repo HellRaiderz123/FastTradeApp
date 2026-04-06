@@ -120,7 +120,7 @@ function EventRow({ event }: { event: any }) {
     <View style={styles.eventRow}>
       <View style={{ flex: 1, paddingRight: 8 }}>
         <Text style={styles.eventTitle}>{event?.title || event?.name || 'Event'}</Text>
-        <Text style={styles.eventMeta}>{event?.type || 'economic'} • {event?.date || '-'}</Text>
+        <Text style={styles.eventMeta}>{event?.type || 'economic'} • {event?.source || 'Live'} • {event?.date || '-'}</Text>
         {event?.countdown ? <Text style={styles.eventCountdown}>{event.countdown}</Text> : null}
       </View>
       <Tag label={impact.toUpperCase()} color={impactColor} bg={`${impactColor}22`} />
