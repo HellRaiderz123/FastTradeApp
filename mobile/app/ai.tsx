@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import * as Speech from 'expo-speech';
 import { aiAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { GlassCard, ScreenHeader, Tag } from '../components/ui';
@@ -24,6 +25,8 @@ const ACTION_LABELS: Record<string, string> = {
   add_transaction: '📝 Transaction Added',
   run_scanner: '🔍 Scanner Ran',
   close_position: '📉 Position Closed',
+  place_trade: '🛒 Trade Placed',
+  trade_confirmation_required: '🛡️ Confirmation Required',
 };
 
 function ActionBadge({ action }: { action: ActionResult }) {
@@ -31,7 +34,7 @@ function ActionBadge({ action }: { action: ActionResult }) {
   const label = ACTION_LABELS[action.tool] ?? action.tool.replace(/_/g, ' ');
   const detail = ok
     ? Object.entries(action.result)
-        .filter(([k]) => !['success', 'action', 'id'].includes(k))
+        .filter(([k]) => !['success', 'action', 'id', 'requires_confirmation', 'order_preview', 'message'].includes(k))
         .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
         .join(' · ')
     : action.result.error;
@@ -44,9 +47,100 @@ function ActionBadge({ action }: { action: ActionResult }) {
   );
 }
 
+const getSpeechRecognitionCtor = () => {
+  const g = globalThis as any;
+  return g?.SpeechRecognition || g?.webkitSpeechRecognition || null;
+};
+
+const speakAssistantText = async (text: string) => {
+  const cleaned = String(text || '').trim();
+  if (!cleaned) return;
+
+  if (Platform.OS === 'web') {
+    const synth = (globalThis as any)?.speechSynthesis;
+    const Utterance = (globalThis as any)?.SpeechSynthesisUtterance;
+    if (!synth || !Utterance) return;
+    synth.cancel();
+    const utterance = new Utterance(cleaned);
+    utterance.lang = 'en-IN';
+    utterance.rate = 1.02;
+    utterance.pitch = 0.95;
+    synth.speak(utterance);
+    return;
+  }
+
+  try {
+    Speech.stop();
+    Speech.speak(cleaned, { language: 'en-IN', rate: 0.98, pitch: 0.95 });
+  } catch {
+    // no-op
+  }
+};
+
+const stopAssistantVoice = () => {
+  if (Platform.OS === 'web') {
+    const synth = (globalThis as any)?.speechSynthesis;
+    synth?.cancel?.();
+    return;
+  }
+  try {
+    Speech.stop();
+  } catch {
+    // no-op
+  }
+};
+
+const buildTradeConfirmationPrompt = (action: ActionResult) => {
+  const preview = (action.result.order_preview as Record<string, unknown> | undefined) ?? {};
+  const parts = [
+    preview.trade_action,
+    preview.quantity,
+    preview.symbol,
+    preview.order_type,
+    preview.product,
+  ].filter(Boolean);
+  return `Confirm place trade now: ${parts.join(' ')}.`;
+};
+
+function TradeConfirmCard({
+  action,
+  onConfirm,
+  onCancel,
+  busy,
+}: {
+  action: ActionResult;
+  onConfirm: (action: ActionResult) => void;
+  onCancel: () => void;
+  busy: boolean;
+}) {
+  const requiresConfirmation = Boolean(action.result?.requires_confirmation);
+  const preview = (action.result.order_preview as Record<string, unknown> | undefined) ?? {};
+  if (!requiresConfirmation) return null;
+
+  const summary = [preview.trade_action, preview.quantity, preview.symbol, preview.order_type, preview.product]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <GlassCard style={styles.confirmCard}>
+      <Text style={styles.confirmTitle}>Live trade confirmation required</Text>
+      <Text style={styles.confirmText}>{summary || 'Review the order preview and confirm before execution.'}</Text>
+      <View style={styles.confirmActions}>
+        <TouchableOpacity style={[styles.confirmBtn, styles.confirmBtnPrimary, busy && styles.starterChipDisabled]} onPress={() => onConfirm(action)} disabled={busy}>
+          <Text style={styles.confirmBtnText}>Confirm</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.confirmBtn, styles.confirmBtnSecondary, busy && styles.starterChipDisabled]} onPress={onCancel} disabled={busy}>
+          <Text style={styles.confirmBtnText}>Cancel</Text>
+        </TouchableOpacity>
+      </View>
+    </GlassCard>
+  );
+}
+
 const STARTERS = [
   'Show my open positions',
-  'Add Food budget ₹3000',
+  'Build my pre-market game plan',
+  'Buy 1 share of TCS at market price as a dry run',
   'What scanner signals fired this week?',
   'Summarize my trading performance',
 ];
@@ -55,14 +149,63 @@ export default function AIScreen() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [jarvisMode, setJarvisMode] = useState(true);
+  const [isListening, setIsListening] = useState(false);
   const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string; actions?: ActionResult[] }>>([
     {
       role: 'assistant',
-      content: 'FastTrade AI is ready.\nI can answer questions AND take actions — add budgets, record expenses, run scanners, close positions, and more.\nTry: "Add a Food budget of ₹3000" or "Run my RSI scanner".',
+      content: 'Jarvis mode is ready. I can speak responses, manage FastTrade actions, and keep live trade control behind confirmation. Try: "Build my pre-market game plan" or "Buy 1 share of TCS as a dry run".',
     },
   ]);
 
   const canSend = useMemo(() => message.trim().length > 0 && !loading, [message, loading]);
+
+  useEffect(() => {
+    const last = history[history.length - 1];
+    if (!voiceEnabled || !last || last.role !== 'assistant') return;
+    void speakAssistantText(last.content);
+  }, [history, voiceEnabled]);
+
+  const handleVoiceInput = async () => {
+    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
+    if (!SpeechRecognitionCtor) {
+      Alert.alert(
+        'Voice input tip',
+        Platform.OS === 'web'
+          ? 'Speech recognition is not supported in this browser right now.'
+          : 'On native mobile, use your device keyboard mic for dictation. Web voice recognition is supported directly in the browser UI.',
+      );
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.lang = 'en-IN';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.onstart = () => setIsListening(true);
+      recognition.onerror = () => {
+        setIsListening(false);
+        Alert.alert('Voice input', 'I could not hear that clearly. Please try again.');
+      };
+      recognition.onend = () => setIsListening(false);
+      recognition.onresult = (event: any) => {
+        const transcript = Array.from(event?.results || [])
+          .map((result: any) => result?.[0]?.transcript || '')
+          .join(' ')
+          .trim();
+        if (transcript) {
+          setMessage(transcript);
+          void send(transcript);
+        }
+      };
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      Alert.alert('Voice input', 'Voice recognition could not be started on this device.');
+    }
+  };
 
   const send = async (text?: string) => {
     const outgoing = (text ?? message).trim();
@@ -78,7 +221,10 @@ export default function AIScreen() {
     setLoading(true);
 
     try {
-      const res = await aiAPI.query(outgoing, nextHistory);
+      const res = await aiAPI.query(outgoing, nextHistory, {
+        voice_mode: voiceEnabled || jarvisMode,
+        assistant_style: jarvisMode ? 'jarvis' : undefined,
+      });
       const reply = res.data?.answer || res.data?.response || res.data?.message || 'No response from backend.';
       const actions: ActionResult[] = res.data?.actions?.length ? res.data.actions : [];
       setHistory((prev) => [...prev, { role: 'assistant', content: reply, actions }]);
@@ -103,14 +249,23 @@ export default function AIScreen() {
   const resetConversation = async () => {
     setRefreshing(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    stopAssistantVoice();
     setHistory([
       {
         role: 'assistant',
-        content: 'Fresh chat started. Ask anything or give a command.',
+        content: 'Fresh Jarvis session started. Ask anything or give a trading command.',
       },
     ]);
     setMessage('');
     setRefreshing(false);
+  };
+
+  const confirmTrade = async (action: ActionResult) => {
+    await send(buildTradeConfirmationPrompt(action));
+  };
+
+  const cancelTrade = async () => {
+    await send('Cancel that pending trade. Do not place the live order.');
   };
 
   return (
@@ -119,8 +274,8 @@ export default function AIScreen() {
       <SafeAreaView edges={['top']} style={styles.safeArea}>
         <ScreenHeader
           title="AI Desk"
-          subtitle="Natural-language queries and actions"
-          badge={<Tag label="AGENTIC" color={Colors.accent} bg={Colors.accentSoft} />}
+          subtitle="Jarvis-style voice copilot with confirmation-gated trade control"
+          badge={<Tag label="JARVIS" color={Colors.accent} bg={Colors.accentSoft} />}
         />
 
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -130,6 +285,27 @@ export default function AIScreen() {
             keyboardShouldPersistTaps="handled"
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={resetConversation} tintColor={Colors.accent} />}
           >
+            <View style={styles.modeRow}>
+              <TouchableOpacity
+                style={[styles.modeChip, jarvisMode && styles.modeChipActive]}
+                onPress={() => setJarvisMode((prev) => !prev)}
+              >
+                <Text style={[styles.modeText, jarvisMode && styles.modeTextActive]}>{jarvisMode ? '🤖 Jarvis ON' : '🤖 Jarvis OFF'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modeChip, voiceEnabled && styles.modeChipActive]}
+                onPress={() => {
+                  if (voiceEnabled) stopAssistantVoice();
+                  setVoiceEnabled((prev) => !prev);
+                }}
+              >
+                <Text style={[styles.modeText, voiceEnabled && styles.modeTextActive]}>{voiceEnabled ? '🔊 Voice ON' : '🔇 Voice OFF'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modeChip, isListening && styles.modeChipActive]} onPress={handleVoiceInput}>
+                <Text style={[styles.modeText, isListening && styles.modeTextActive]}>{isListening ? '🎙️ Listening…' : '🎤 Speak'}</Text>
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.starterRow}>
               {STARTERS.map((starter) => (
                 <TouchableOpacity key={starter} style={[styles.starterChip, loading && styles.starterChipDisabled]} onPress={() => send(starter)} disabled={loading}>
@@ -151,7 +327,12 @@ export default function AIScreen() {
                     </GlassCard>
                     {item.actions && item.actions.length > 0 && (
                       <View style={styles.actionsWrap}>
-                        {item.actions.map((a, ai) => <ActionBadge key={ai} action={a} />)}
+                        {item.actions.map((a, ai) => (
+                          <View key={ai}>
+                            <ActionBadge action={a} />
+                            <TradeConfirmCard action={a} onConfirm={confirmTrade} onCancel={cancelTrade} busy={loading} />
+                          </View>
+                        ))}
                       </View>
                     )}
                   </View>
@@ -179,11 +360,16 @@ export default function AIScreen() {
                 style={styles.input}
                 multiline
               />
-              <TouchableOpacity style={[styles.sendButton, !canSend && styles.sendButtonDisabled]} disabled={!canSend} onPress={() => send()}>
-                <LinearGradient colors={canSend ? ['#1D4ED8', '#3B82F6'] : ['#334155', '#334155']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.sendGradient}>
-                  <Text style={styles.sendText}>Send</Text>
-                </LinearGradient>
-              </TouchableOpacity>
+              <View style={styles.composerActions}>
+                <TouchableOpacity style={styles.voiceButton} onPress={handleVoiceInput}>
+                  <Text style={styles.voiceButtonText}>{isListening ? 'Listening…' : 'Speak'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.sendButton, !canSend && styles.sendButtonDisabled]} disabled={!canSend} onPress={() => send()}>
+                  <LinearGradient colors={canSend ? ['#1D4ED8', '#3B82F6'] : ['#334155', '#334155']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.sendGradient}>
+                    <Text style={styles.sendText}>Send</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </KeyboardAvoidingView>
@@ -200,6 +386,20 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
   headerSub: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
   scroll: { padding: Spacing.lg, flexGrow: 1 },
+  modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 as any, marginBottom: Spacing.md },
+  modeChip: {
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.bgGlass,
+    borderRadius: Radius.full,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  modeChipActive: { borderColor: Colors.borderAccent, backgroundColor: Colors.accentGlow },
+  modeText: { color: Colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  modeTextActive: { color: Colors.textPrimary },
   starterRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: Spacing.md },
   starterChip: {
     borderWidth: 1,
@@ -239,6 +439,14 @@ const styles = StyleSheet.create({
   actionDetail: { fontSize: 11, marginTop: 2 },
   actionDetailOk: { color: '#4ade80' },
   actionDetailErr: { color: '#f87171' },
+  confirmCard: { marginTop: 6, borderColor: '#a16207', backgroundColor: '#1c1917' },
+  confirmTitle: { color: '#fbbf24', fontSize: 12, fontWeight: '700', marginBottom: 4 },
+  confirmText: { color: Colors.textPrimary, fontSize: 12, lineHeight: 18 },
+  confirmActions: { flexDirection: 'row', marginTop: 10 },
+  confirmBtn: { borderRadius: Radius.md, paddingHorizontal: 12, paddingVertical: 8, marginRight: 8 },
+  confirmBtnPrimary: { backgroundColor: '#1d4ed8' },
+  confirmBtnSecondary: { backgroundColor: '#334155' },
+  confirmBtnText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   composerWrap: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.lg, paddingTop: 8 },
   composer: {
     backgroundColor: Colors.bgGlass,
@@ -248,7 +456,10 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   input: { color: Colors.textPrimary, minHeight: 44, maxHeight: 120, paddingHorizontal: 4, paddingTop: 8 },
-  sendButton: { marginTop: 10, borderRadius: Radius.md, overflow: 'hidden', alignSelf: 'flex-end' },
+  composerActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
+  voiceButton: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.md, backgroundColor: Colors.bgGlassStrong, borderWidth: 1, borderColor: Colors.border },
+  voiceButtonText: { color: Colors.textPrimary, fontWeight: '700', fontSize: 12 },
+  sendButton: { borderRadius: Radius.md, overflow: 'hidden', alignSelf: 'flex-end' },
   sendButtonDisabled: { opacity: 0.55 },
   sendGradient: { paddingHorizontal: 16, paddingVertical: 10 },
   sendText: { color: '#fff', fontWeight: '700' },

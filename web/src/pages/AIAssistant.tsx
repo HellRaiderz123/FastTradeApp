@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Loader2, CheckCircle, XCircle, Zap, BarChart3, ClipboardList, Target, ArrowRight } from 'lucide-react';
+import { Send, Bot, User, Loader2, CheckCircle, XCircle, Zap, BarChart3, ClipboardList, Target, ArrowRight, Mic, MicOff, Volume2, VolumeX, ShieldAlert } from 'lucide-react';
 import axios from 'axios';
 
 interface TableRow { [key: string]: string }
@@ -39,6 +39,8 @@ const ACTION_LABELS: Record<string, string> = {
   trade_autopsy: 'Trade Autopsy Ready',
   run_scanner: 'Scanner Ran',
   close_position: 'Position Closed',
+  place_trade: 'Trade Placed',
+  trade_confirmation_required: 'Confirmation Required',
 };
 
 function ActionCard({ action }: { action: ActionResult }) {
@@ -56,7 +58,7 @@ function ActionCard({ action }: { action: ActionResult }) {
         {ok ? (
           <span className="ml-2 opacity-80">
             {Object.entries(action.result)
-              .filter(([k]) => !['success', 'action', 'id', 'priorities', 'summary', 'trade', 'coaching_flags', 'notes', 'watchlist', 'market_sentiment', 'by_strategy', 'by_time_block', 'by_day_of_week', 'strengths', 'top_exit_reasons', 'best_trade', 'worst_trade'].includes(k))
+              .filter(([k]) => !['success', 'action', 'id', 'requires_confirmation', 'order_preview', 'message', 'priorities', 'summary', 'trade', 'coaching_flags', 'notes', 'watchlist', 'market_sentiment', 'by_strategy', 'by_time_block', 'by_day_of_week', 'strengths', 'top_exit_reasons', 'best_trade', 'worst_trade'].includes(k))
               .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
               .join(' · ')}
           </span>
@@ -203,6 +205,57 @@ function PlaybookResultCard({ action }: { action: ActionResult }) {
   return null;
 }
 
+const buildTradeConfirmationPrompt = (action: ActionResult) => {
+  const preview = (action.result.order_preview as Record<string, unknown> | undefined) ?? {};
+  const parts = [preview.trade_action, preview.quantity, preview.symbol, preview.order_type, preview.product].filter(Boolean);
+  return `Confirm and place that live order now: ${parts.join(' ')}.`;
+};
+
+function TradeConfirmationCard({
+  action,
+  onConfirm,
+  onCancel,
+  disabled,
+}: {
+  action: ActionResult;
+  onConfirm: (action: ActionResult) => void;
+  onCancel: () => void;
+  disabled: boolean;
+}) {
+  const requiresConfirmation = Boolean(action.result?.requires_confirmation);
+  const preview = (action.result.order_preview as Record<string, unknown> | undefined) ?? {};
+  if (!requiresConfirmation) return null;
+
+  const summary = [preview.trade_action, preview.quantity, preview.symbol, preview.order_type, preview.product]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <div className="mt-2 rounded-xl border border-amber-700 bg-amber-950/30 p-3">
+      <div className="flex items-center gap-2 text-amber-300 text-xs font-semibold mb-2">
+        <ShieldAlert className="w-4 h-4" /> Live trade confirmation required
+      </div>
+      <div className="text-xs text-slate-200 mb-3">{summary || 'Review the order preview before placing the live order.'}</div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => onConfirm(action)}
+          disabled={disabled}
+          className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-500 disabled:opacity-50"
+        >
+          Confirm & Place
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={disabled}
+          className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold border border-slate-700 hover:bg-slate-700 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const PLAYBOOKS: PlaybookItem[] = [
   {
     title: 'Pre-Market Plan',
@@ -229,21 +282,85 @@ const PLAYBOOKS: PlaybookItem[] = [
 
 const SUGGESTIONS = [
   'Analyze my strategy performance',
+  'Build my pre-market game plan',
+  'Buy 1 share of TCS at market price as a dry run',
   'What scanner signals fired this week?',
   'How much am I spending on brokerage?',
   'What is my profit factor?',
-  'Which stock made me the most money?',
 ];
 
 export default function AIAssistant() {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'bot', text: 'Hi! I can now build pre-market plans, review your journal, and do trade autopsies using your actual FastTrade data.\nAsk me to rank your watchlist, review the last 30 days, add budgets, run scanners, or coach a recent trade.\nTry: "Build my pre-market game plan" or "Do a trade autopsy on my last closed trade".' },
+    { role: 'bot', text: 'Jarvis mode is online. I can speak replies, manage FastTrade actions, and keep live trade placement behind explicit confirmation. Try: "Build my pre-market game plan" or "Buy 1 share of TCS as a dry run".' },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [jarvisMode, setJarvisMode] = useState(true);
+  const [isListening, setIsListening] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  useEffect(() => {
+    if (!voiceEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      return;
+    }
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'bot') return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(last.text);
+    utterance.lang = 'en-IN';
+    utterance.rate = jarvisMode ? 1.02 : 1;
+    utterance.pitch = 0.95;
+    window.speechSynthesis.speak(utterance);
+
+    return () => window.speechSynthesis.cancel();
+  }, [messages, voiceEnabled, jarvisMode]);
+
+  const startListening = () => {
+    if (typeof window === 'undefined') return;
+    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) {
+      window.alert('Speech recognition is not supported in this browser. Use Chrome/Edge, or type your command.');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionCtor();
+      recognitionRef.current = recognition;
+      recognition.lang = 'en-IN';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.onstart = () => setIsListening(true);
+      recognition.onend = () => setIsListening(false);
+      recognition.onerror = () => {
+        setIsListening(false);
+        window.alert('I could not catch that clearly. Please try again.');
+      };
+      recognition.onresult = (event: any) => {
+        const transcript = Array.from(event?.results || [])
+          .map((result: any) => result?.[0]?.transcript || '')
+          .join(' ')
+          .trim();
+        if (transcript) {
+          setInput(transcript);
+          void send(transcript);
+        }
+      };
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      window.alert('Voice recognition could not be started.');
+    }
+  };
+
+  const stopListening = () => {
+    recognitionRef.current?.stop?.();
+    setIsListening(false);
+  };
 
   const send = async (text: string) => {
     if (!text.trim() || loading) return;
@@ -255,7 +372,12 @@ export default function AIAssistant() {
       const history = updatedMessages
         .slice(1)
         .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
-      const { data } = await axios.post('/api/ai-chat/query', { message: text, history });
+      const { data } = await axios.post('/api/ai-chat/query', {
+        message: text,
+        history,
+        voice_mode: voiceEnabled || jarvisMode,
+        assistant_style: jarvisMode ? 'jarvis' : undefined,
+      });
       setMessages(prev => [...prev, {
         role: 'bot',
         text: data.answer,
@@ -278,7 +400,32 @@ export default function AIAssistant() {
             <Zap className="w-3 h-3" /> Agentic
           </span>
         </h1>
-        <p className="text-slate-400 text-sm mt-1">Ask questions or give commands — the AI can read data and take actions.</p>
+        <p className="text-slate-400 text-sm mt-1">Jarvis-style voice copilot with full FastTrade actions and confirmation-gated live orders.</p>
+        <div className="flex flex-wrap gap-2 mt-3">
+          <button
+            onClick={() => setJarvisMode(prev => !prev)}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${jarvisMode ? 'bg-blue-600/20 border-blue-500 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
+          >
+            {jarvisMode ? '🤖 Jarvis ON' : '🤖 Jarvis OFF'}
+          </button>
+          <button
+            onClick={() => {
+              if (voiceEnabled && typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
+              setVoiceEnabled(prev => !prev);
+            }}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1 ${voiceEnabled ? 'bg-emerald-600/20 border-emerald-500 text-emerald-200' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
+          >
+            {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+            {voiceEnabled ? 'Voice ON' : 'Voice OFF'}
+          </button>
+          <button
+            onClick={isListening ? stopListening : startListening}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold border flex items-center gap-1 ${isListening ? 'bg-amber-600/20 border-amber-500 text-amber-200' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
+          >
+            {isListening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+            {isListening ? 'Listening…' : 'Speak'}
+          </button>
+        </div>
       </div>
 
       {/* AI Playbooks */}
@@ -328,6 +475,12 @@ export default function AIAssistant() {
                   {m.actions.map((a, ai) => (
                     <React.Fragment key={ai}>
                       <ActionCard action={a} />
+                      <TradeConfirmationCard
+                        action={a}
+                        onConfirm={(action) => send(buildTradeConfirmationPrompt(action))}
+                        onCancel={() => send('Cancel that pending trade. Do not place the live order.')}
+                        disabled={loading}
+                      />
                       <PlaybookResultCard action={a} />
                     </React.Fragment>
                   ))}
@@ -397,6 +550,14 @@ export default function AIAssistant() {
           onKeyDown={e => e.key === 'Enter' && send(input)}
           disabled={loading}
         />
+        <button
+          onClick={isListening ? stopListening : startListening}
+          disabled={loading}
+          className="px-4 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-xl transition border border-slate-700"
+          title={isListening ? 'Stop listening' : 'Speak a command'}
+        >
+          {isListening ? <MicOff className="w-4 h-4 text-amber-300" /> : <Mic className="w-4 h-4 text-slate-200" />}
+        </button>
         <button onClick={() => send(input)} disabled={loading || !input.trim()}
           className="px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-xl transition">
           <Send className="w-4 h-4 text-white" />

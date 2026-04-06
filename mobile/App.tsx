@@ -60,6 +60,7 @@ export default function App() {
   return (
     <NavigationContainer>
       <Tab.Navigator
+        id="main-tabs"
         screenOptions={{
           headerShown: false,
           tabBarStyle: {

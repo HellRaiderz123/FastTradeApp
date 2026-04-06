@@ -36,22 +36,6 @@ export default function ScannerScreen() {
   const [explaining, setExplaining] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
 
-  const handleExplain = useCallback(async () => {
-    if (!selected?.id || usingFallbackData) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setExplaining(true);
-    setExplanation(null);
-    try {
-      const res = await scannerAPI.explainStrategy(selected.id);
-      setExplanation(res.data.explanation || null);
-    } catch (e: any) {
-      const msg = e?.response?.data?.detail || 'LLM not configured';
-      setExplanation(`⚠️ ${msg}`);
-    } finally {
-      setExplaining(false);
-    }
-  }, [selected?.id, usingFallbackData]);
-
   const load = useCallback(async () => {
     setLoadError(null);
     try {
@@ -77,6 +61,22 @@ export default function ScannerScreen() {
   const selected = useMemo(() => {
     return strategies.find((strategy) => strategy.id === selectedId) || strategies[0] || null;
   }, [selectedId, strategies]);
+
+  const handleExplain = useCallback(async () => {
+    if (!selected?.id || usingFallbackData) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setExplaining(true);
+    setExplanation(null);
+    try {
+      const res = await scannerAPI.explainStrategy(selected.id);
+      setExplanation(res.data.explanation || null);
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || 'LLM not configured';
+      setExplanation(`⚠️ ${msg}`);
+    } finally {
+      setExplaining(false);
+    }
+  }, [selected?.id, usingFallbackData]);
 
   useEffect(() => {
     load();

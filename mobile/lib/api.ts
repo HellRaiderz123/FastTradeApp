@@ -262,21 +262,26 @@ const hasChatAnswerShape = (data: any): boolean => {
 };
 
 export const aiAPI = {
-  query: async (message: string, history: any[] = []) => {
+  query: async (
+    message: string,
+    history: any[] = [],
+    options: { voice_mode?: boolean; assistant_style?: string } = {},
+  ) => {
+    const payload = { message, history, ...options };
     try {
-      const primary = await aiApi.post('/ai-chat/query', { message, history }, { timeout: AI_TIMEOUT });
+      const primary = await aiApi.post('/ai-chat/query', payload, { timeout: AI_TIMEOUT });
       // AI base can be reachable but mispointed (health/html payload). In that case,
       // retry through main API base which is typically user-configured and verified.
       if (hasChatAnswerShape(primary?.data)) {
         return primary;
       }
-      return api.post('/ai-chat/query', { message, history }, { timeout: AI_TIMEOUT });
+      return api.post('/ai-chat/query', payload, { timeout: AI_TIMEOUT });
     } catch (error: any) {
       const status = error?.response?.status;
       // Fallback to main backend when AI backend is down/unreachable/misconfigured.
       // Keep 4xx (except 404) as-is because they are usually request/auth issues.
       if (!status || status >= 500 || status === 404) {
-        return api.post('/ai-chat/query', { message, history }, { timeout: AI_TIMEOUT });
+        return api.post('/ai-chat/query', payload, { timeout: AI_TIMEOUT });
       }
       throw error;
     }

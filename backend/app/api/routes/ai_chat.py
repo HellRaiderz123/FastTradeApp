@@ -95,6 +95,8 @@ def get_db():
 class ChatRequest(BaseModel):
     message: str
     history: list = []
+    voice_mode: bool = False
+    assistant_style: str | None = None
 
 
 def _fmt(val):
@@ -1433,7 +1435,13 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
 
 # ── Agentic LLM call with function-calling loop ────────────────────────────
 
-def _call_llm(message: str, history: list, db: Session) -> tuple[str, list]:
+def _call_llm(
+    message: str,
+    history: list,
+    db: Session,
+    voice_mode: bool = False,
+    assistant_style: str | None = None,
+) -> tuple[str, list]:
     """
     Run the LLM with agentic tool support.
     Returns (answer_text, actions_list).
@@ -1450,6 +1458,18 @@ def _call_llm(message: str, history: list, db: Session) -> tuple[str, list]:
 
     context = _build_context(db)
     system = SYSTEM_PROMPT.format(context=context)
+
+    requested_style = (assistant_style or "").strip().lower()
+    if voice_mode or requested_style == "jarvis":
+        system += """
+
+JARVIS VOICE MODE:
+- Sound like a calm, elite trading copilot.
+- Reply in 1 to 3 crisp spoken sentences unless the user asks for detail.
+- Put the answer or action first, then one short risk note if needed.
+- For live orders, summarize the order preview and wait for explicit confirmation before execution.
+- Avoid filler, markdown, bullet points, or verbose explanations in voice mode.
+"""
 
     messages = [{"role": "system", "content": system}]
     for h in history[-10:]:
@@ -1513,7 +1533,13 @@ def _call_llm(message: str, history: list, db: Session) -> tuple[str, list]:
 @router.post("/query")
 def chat_query(req: ChatRequest, db: Session = Depends(get_db)):
     try:
-        answer, actions = _call_llm(req.message, req.history, db)
+        answer, actions = _call_llm(
+            req.message,
+            req.history,
+            db,
+            voice_mode=bool(req.voice_mode),
+            assistant_style=req.assistant_style,
+        )
         return {"ok": True, "answer": answer, "actions": actions}
     except Exception as e:
         return {"ok": False, "answer": f"Error: {str(e)}", "actions": []}
