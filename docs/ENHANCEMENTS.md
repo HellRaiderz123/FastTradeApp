@@ -1,6 +1,6 @@
 # FastTradeApp — Enhancements & Roadmap
 
-> **Last audited:** 2026-03-25 — Full deep codebase scan across all modules
+> **Last audited:** 2026-04-08 — Full repo scan + focused trading-safety / auto-trader review
 > **Legend:** ✅ Done · 🔧 Partial · ❌ Not started
 
 ---
@@ -43,6 +43,8 @@
 | Zerodha auto-login (daily 8 AM) | ✅ | `services/zerodha_auto_login.py` + scheduler |
 | Zerodha WebSocket ticker (LTP mode) | ✅ | `services/zerodha_ticker.py` — LTP cache, symbol→token map |
 | Zerodha GTT orders | ❌ | No `place_gtt()` anywhere — exits rely on polling every 10s |
+| Idempotent order placement | ❌ | `routes/execute.py` accepts `idempotency_key` but does not persist/dedupe retries yet |
+| Partial fill reconciliation | 🔧 | `services/order_monitor.py` stores partial fills, but `broker_reconcile.py` still mainly reconciles open/closed state |
 
 ---
 
@@ -61,6 +63,8 @@
 | TP/SL auto-exit (10s polling) | ✅ | `core/exit/auto_exit.py` scheduler |
 | Trailing stop loss | ✅ | `core/risk/tp_sl_calculator.py` |
 | Expiry auto-exit | ✅ | `core/market/expiry_exit.py` scheduler |
+| Manual override cooldown after manual exit | ❌ | `exit.py` sets `exit_reason="MANUAL"`, but `core/auto_trader.py` can re-enter immediately if the signal still persists |
+| Strategy-specific TP/SL for ratio backspreads | 🔧 | `core/risk/tp_sl_calculator.py` special-cases `BULL_PUT` / `BEAR_CALL` / `IRON_CONDOR`; call/put ratio backspreads still use generic ₹ thresholds |
 | Trade cost calculator | ✅ | `routes/trade_costs.py` + `TradeCostTracker.tsx` |
 | Risk limits (DB-backed, IV regime) | ✅ | `core/risk/risk_limits_config.py` |
 | Drawdown tracker | ✅ | `core/risk/drawdown_tracker.py` |
@@ -110,7 +114,7 @@
 | Signal diagnostics | ✅ | `core/learning/signal_diagnostics.py` + Journal UI |
 | AI Chat — Ollama (offline LLM) | ✅ | `routes/ai_chat.py` — full context: positions, trades, strategies, scanner, finance, trade costs |
 | AI Chat — multi-turn conversation | ✅ | `history` field in `ChatRequest`, last 10 turns passed to Ollama |
-| AI Chat — OpenAI fallback | ❌ | No `OPENAI_API_KEY` support yet |
+| AI Chat — OpenAI / Groq / custom fallback | ✅ | `LLM_PROVIDER`, `OPENAI_API_KEY`, `GROQ_API_KEY`, and `LLM_BASE_URL` are supported in `routes/ai_chat.py` |
 | Reinforcement Learning agent | ❌ | No RL agent — needs 6-12 months live trade data first |
 
 ---
@@ -184,8 +188,8 @@
 
 | Item | Status | Evidence |
 |------|--------|----------|
-| Expo React Native app | 🔧 | `mobile/app/` — dashboard, journal, positions, strategies, backtest, settings |
-| Mobile feature parity with web | ❌ | Missing: screener, ML center, auto-trader, finance tracker, options chain, watchlists |
+| Expo React Native app | 🔧 | `mobile/app/` — dashboard, journal, positions, strategies, backtest, settings, watchlists, options chain |
+| Mobile feature parity with web | 🔧 | Missing: Auto Trader control, full Screener parity, ML Center, Finance Tracker, Condition Scanner; watchlists and options chain already exist |
 | Mobile push notifications | ❌ | Not wired |
 
 ---
@@ -200,6 +204,35 @@
 | `/api/docs` not rendering via port 3000 | Added explicit Nginx routes for `/api/docs`, `/api/redoc`, `/api/openapi.json` |
 | `discover_condition_strategies.py` not in Docker | Added `COPY scripts/ ./scripts/` to backend Dockerfile |
 | `max_candidates` cap too low | Raised `StrategyDiscoveryRequest.max_candidates` from `le=250` to `le=500` |
+| Watchlist `Change %` blank / missing | `watchlists.py` now computes `change_pct` from full quote + OHLC and the web UI accepts both `change_pct` / `change_percent` |
+| Options Chain lacked actionable analytics | Added PCR, support/resistance, max pain, and buildup heuristics to `OptionsChain.tsx` |
+| Jarvis interpreted `close my current position` as symbol `CURRENT` | `ai_chat.py` now resolves the latest/current open trade correctly and AI badges show failures clearly |
+
+---
+
+## Fresh Audit Additions — 2026-04-08
+
+### 🟢 Highest-ROI Fixes Identified in the Latest Repo Scan
+
+#### 1. Idempotent execution guard for trade placement
+**Why:** `routes/execute.py` accepts an `idempotency_key` header, but retries are not yet deduplicated server-side. A timeout/retry path can still risk duplicate order placement.
+**Files:** `backend/app/api/routes/execute.py`
+
+#### 2. Manual-exit cooldown / human override lock
+**Why:** After a manual close, `exit_reason="MANUAL"` is stored, but `core/auto_trader.py` can re-enter the same underlying immediately if the signal still says approved. A short cooldown (e.g. 15–30 min) would respect human override without disabling the whole engine.
+**Files:** `backend/app/api/routes/exit.py`, `backend/app/core/auto_trader.py`
+
+#### 3. Strategy-specific TP/SL for `CALL_RATIO_BACKSPREAD` and `PUT_RATIO_BACKSPREAD`
+**Why:** Auto Trader TP/SL is functioning, but ratio backspreads still fall back to generic rupee-based thresholds in `tp_sl_calculator.py`. These structures deserve a more tailored exit model.
+**Files:** `backend/app/core/risk/tp_sl_calculator.py`, `backend/app/core/strategies/option_spread_15m/engine.py`
+
+#### 4. Partial fill + quantity drift reconciliation
+**Why:** Partial fills are detected in `order_monitor.py`, but full quantity-aware recovery and broker/local drift handling are still incomplete. This is one of the highest leverage execution-safety improvements after GTT.
+**Files:** `backend/app/services/order_monitor.py`, `backend/app/core/exit/broker_reconcile.py`
+
+#### 5. Broker-side TP/SL protection using Zerodha GTT
+**Why:** `auto_exit.py` still relies on polling. If the app or server is down, exits are not broker-native. GTT remains one of the most valuable safety upgrades.
+**Files:** `backend/app/core/exit/auto_exit.py`, `backend/app/core/execution/zerodha.py`
 
 ---
 
@@ -251,10 +284,10 @@
 **What:** New endpoint `GET /portfolio/greeks` aggregating across all open `ExecutionIntent` legs. New page `OptionsGreeks.tsx`.
 **Files:** new `routes/portfolio_greeks.py`, new `OptionsGreeks.tsx`
 
-#### 9. AI Chat — OpenAI Fallback
-**Why:** Ollama `llama3.2:3b` is fast but limited in reasoning quality. For complex analysis questions, GPT-4o would give much better answers.
-**What:** If `OPENAI_API_KEY` is set in `.env`, route to OpenAI instead of Ollama. Same context injection, same multi-turn history.
-**Files:** `routes/ai_chat.py`, `.env.example`
+#### 9. Trade Execution Safety — Idempotency + Audit Trail
+**Why:** `execute.py` accepts `idempotency_key`, but retries are not deduped yet. Combined with limited end-to-end audit logging, this is one of the biggest operational safety gaps left in the project.
+**What:** Persist `idempotency_key → intent_id`, return cached execution results on retry, and write a `trade_audit_log` entry for create / approve / execute / reject / exit transitions.
+**Files:** `routes/execute.py`, `core/risk/circuit_breaker.py`, new `routes/audit.py`
 
 #### 10. Condition Scanner — More Indicator Families
 **Why:** Current lab has 13 families (EMA, SMA, RSI, MACD, BB, STOCH, WMA, DEMA/TEMA, Volume). Missing: Supertrend, Ichimoku, CCI, Williams %R, Parabolic SAR.
@@ -279,7 +312,7 @@
 **Files:** `routes/screener.py`, `Screener.tsx`
 
 #### 13. Mobile App Feature Parity
-**What:** Add to Expo app: Screener, Auto Trader control, Finance Tracker, ML predictions, Watchlists, Condition Scanner. Wire Expo push notifications to backend trade alerts.
+**What:** Add to Expo app: Screener, Auto Trader control, Finance Tracker, ML predictions, and Condition Scanner. Deepen parity for the existing Watchlists / Options Chain screens and wire Expo push notifications to backend trade alerts.
 **Files:** `mobile/app/` (multiple new screens)
 
 ---
@@ -325,7 +358,7 @@ NEXT SPRINT:
 
 LATER:
   8. Options Greeks portfolio    → net Delta/Theta/Vega across all positions
-  9. AI Chat OpenAI fallback     → better reasoning for complex questions
+  9. Idempotent execution + audit trail → safer retries and clearer compliance history
  10. More indicator families     → Supertrend, Ichimoku, CCI, SAR
 ```
 

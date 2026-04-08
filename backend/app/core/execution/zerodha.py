@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Dict, Any, List
 from datetime import date
@@ -7,6 +8,14 @@ from app.core.utils.time import now_ist
 from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 from app.services.zerodha_ticker import subscribe_symbols as subscribe_to_ticker
 from app.core.execution.base import get_ticket
+from app.core.execution.protection import (
+    get_protection_ratios,
+    get_protection_state,
+    round_to_tick,
+    store_protection_state,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_expiry(expiry_str: str | None) -> date | None:
@@ -57,7 +66,8 @@ class ZerodhaExecutionAdapter:
 
         # Estimate entry credit using current LTP and store per-leg price for MTM
         entry_credit_total = self._estimate_entry_credit_and_store_leg_prices(intent)
-        
+        intent.entry_credit = entry_credit_total  # type: ignore[attr-defined]
+
         # Calculate margin requirement using Zerodha order_margins API
         margin_required = self._calculate_margin_requirement(orders)
 
@@ -68,41 +78,43 @@ class ZerodhaExecutionAdapter:
             if symbols:
                 subscribe_to_ticker(symbols)
         except Exception as e:
-            # Non-blocking: if subscription fails, execution still proceeds
-            import logging
-            logging.getLogger(__name__).warning(f"⚠️  Failed to subscribe to ticker: {e}")
+            logger.warning("⚠️  Failed to subscribe to ticker: %s", e)
 
-        if self.dry_run:
+        if not self.dry_run:
+            product = os.getenv("ZERODHA_PRODUCT", "NRML")
+            placed = []
+            for o in orders:
+                order_id = self.kite.place_order(
+                    variety=getattr(self.kite, "VARIETY_REGULAR", "regular"),
+                    exchange=o["exchange"],
+                    tradingsymbol=o["tradingsymbol"],
+                    transaction_type=o["transaction_type"],
+                    quantity=int(o["quantity"]),
+                    order_type=getattr(self.kite, "ORDER_TYPE_MARKET", "MARKET"),
+                    product=getattr(self.kite, "PRODUCT_NRML", product) if product == "NRML" else product,
+                    validity=getattr(self.kite, "VALIDITY_DAY", "DAY"),
+                )
+                placed.append({"order_id": order_id, "order": o})
+
+            protection = self.sync_protection(intent)
             return {
-                "mode": "ZERODHA_DRY_RUN",
+                "mode": "ZERODHA_LIVE",
                 "orders": orders,
-                "created_at": now_ist().isoformat(),
+                "placed": placed,
+                "filled_at": now_ist().isoformat(),
                 "entry_credit": entry_credit_total,
                 "margin_required": margin_required,
+                "protection": protection,
             }
 
-        product = os.getenv("ZERODHA_PRODUCT", "NRML")
-        placed = []
-        for o in orders:
-            order_id = self.kite.place_order(
-                variety=getattr(self.kite, "VARIETY_REGULAR", "regular"),
-                exchange=o["exchange"],
-                tradingsymbol=o["tradingsymbol"],
-                transaction_type=o["transaction_type"],
-                quantity=int(o["quantity"]),
-                order_type=getattr(self.kite, "ORDER_TYPE_MARKET", "MARKET"),
-                product=getattr(self.kite, "PRODUCT_NRML", product) if product == "NRML" else product,
-                validity=getattr(self.kite, "VALIDITY_DAY", "DAY"),
-            )
-            placed.append({"order_id": order_id, "order": o})
-
+        protection = self.sync_protection(intent)
         return {
-            "mode": "ZERODHA_LIVE",
+            "mode": "ZERODHA_DRY_RUN",
             "orders": orders,
-            "placed": placed,
-            "filled_at": now_ist().isoformat(),
+            "created_at": now_ist().isoformat(),
             "entry_credit": entry_credit_total,
             "margin_required": margin_required,
+            "protection": protection,
         }
 
     # ============================
@@ -113,6 +125,7 @@ class ZerodhaExecutionAdapter:
 
         # Estimate cost to close using LTP
         final_pnl, exit_cost_total = self._estimate_exit_cost_and_pnl(intent)
+        protection_cancel = self.cancel_protection(intent)
 
         if self.dry_run:
             return {
@@ -121,6 +134,7 @@ class ZerodhaExecutionAdapter:
                 "exited_at": now_ist().isoformat(),
                 "exit_cost": exit_cost_total,
                 "final_pnl": final_pnl,
+                "protection_cancel": protection_cancel,
             }
 
         product = os.getenv("ZERODHA_PRODUCT", "NRML")
@@ -145,7 +159,178 @@ class ZerodhaExecutionAdapter:
             "closed_at": now_ist().isoformat(),
             "exit_cost": exit_cost_total,
             "final_pnl": final_pnl,
+            "protection_cancel": protection_cancel,
         }
+
+    def sync_protection(self, intent) -> Dict[str, Any]:
+        protection = {
+            "provider": "ZERODHA_GTT",
+            "enabled": False,
+            "mode": "PREVIEW" if self.dry_run else "LIVE",
+            "synced_at": now_ist().isoformat(),
+            "orders": [],
+        }
+        plans = self._build_protection_plans(intent)
+        if not plans:
+            protection["reason"] = "No broker-side TP/SL plan could be derived from the current intent."
+            store_protection_state(intent, protection)
+            return protection
+
+        existing = get_protection_state(intent)
+        if not self.dry_run and existing.get("orders"):
+            protection["previous_cancel"] = self.cancel_protection(intent)
+
+        for plan in plans:
+            row = {
+                "tradingsymbol": plan["tradingsymbol"],
+                "exchange": plan["exchange"],
+                "quantity": plan["quantity"],
+                "trigger_type": plan["trigger_type"],
+                "trigger_values": plan["trigger_values"],
+                "last_price": plan["last_price"],
+                "target_price": plan.get("target_price"),
+                "stop_price": plan.get("stop_price"),
+            }
+            if self.dry_run:
+                row["preview"] = True
+            else:
+                try:
+                    trigger_id = self.kite.place_gtt(
+                        trigger_type=plan["trigger_type"],
+                        tradingsymbol=plan["tradingsymbol"],
+                        exchange=plan["exchange"],
+                        trigger_values=plan["trigger_values"],
+                        last_price=plan["last_price"],
+                        orders=plan["orders"],
+                    )
+                    row["trigger_id"] = str(trigger_id)
+                except Exception as exc:
+                    row["error"] = str(exc)
+                    protection.setdefault("errors", []).append(str(exc))
+                    logger.warning("Failed to place Zerodha GTT for %s: %s", plan["tradingsymbol"], exc)
+            protection["orders"].append(row)
+
+        protection["enabled"] = bool(protection["orders"]) and not protection.get("errors")
+        store_protection_state(intent, protection)
+        return protection
+
+    def cancel_protection(self, intent) -> Dict[str, Any]:
+        existing = get_protection_state(intent)
+        cancellation = {
+            "provider": existing.get("provider", "ZERODHA_GTT"),
+            "cancelled": False,
+            "cancelled_at": now_ist().isoformat(),
+            "orders": [],
+        }
+        for row in existing.get("orders", []):
+            if not isinstance(row, dict):
+                continue
+            trigger_id = row.get("trigger_id")
+            item = {
+                "tradingsymbol": row.get("tradingsymbol"),
+                "trigger_id": trigger_id,
+            }
+            if not trigger_id:
+                item["skipped"] = True
+            elif self.dry_run:
+                item["cancelled"] = True
+                item["preview"] = True
+            else:
+                try:
+                    self.kite.delete_gtt(trigger_id)
+                    item["cancelled"] = True
+                except Exception as exc:
+                    item["cancelled"] = False
+                    item["error"] = str(exc)
+                    logger.warning("Failed to cancel Zerodha GTT %s: %s", trigger_id, exc)
+            cancellation["orders"].append(item)
+
+        cancellation["cancelled"] = bool(cancellation["orders"]) and all(
+            item.get("cancelled") or item.get("skipped") for item in cancellation["orders"]
+        )
+        if existing:
+            updated_state = dict(existing)
+            updated_state["active"] = False
+            updated_state["last_cancel"] = cancellation
+            store_protection_state(intent, updated_state)
+        return cancellation
+
+    def _build_protection_plans(self, intent) -> List[Dict[str, Any]]:
+        ticket = get_ticket(intent)
+        if not ticket.get("legs"):
+            return []
+        if getattr(intent, "tp", None) is None and getattr(intent, "sl", None) is None:
+            return []
+
+        orders = self._build_orders(intent)
+        ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
+        profit_ratio, loss_ratio = get_protection_ratios(intent)
+        latest_prices = get_ltp([leg.get("symbol") for leg in ticket.get("legs", []) if leg.get("symbol")])
+        product = os.getenv("ZERODHA_PRODUCT", "NRML")
+
+        plans: List[Dict[str, Any]] = []
+        for broker_order, leg in zip(orders, ticket.get("legs", [])):
+            entry_price = float(leg.get("price") or latest_prices.get(leg.get("symbol")) or 0.0)
+            if entry_price <= 0:
+                continue
+
+            leg_qty = self._resolve_leg_qty(leg, ticket_qty)
+            leg_side = str(leg.get("side") or "").upper()
+            exit_side = getattr(self.kite, "TRANSACTION_TYPE_BUY", "BUY") if leg_side == "SELL" else getattr(self.kite, "TRANSACTION_TYPE_SELL", "SELL")
+
+            if leg_side == "SELL":
+                target_price = round_to_tick(max(0.05, entry_price * (1 - profit_ratio)))
+                stop_price = round_to_tick(entry_price * (1 + loss_ratio))
+            else:
+                target_price = round_to_tick(entry_price * (1 + profit_ratio))
+                stop_price = round_to_tick(max(0.05, entry_price * (1 - loss_ratio)))
+
+            trigger_pairs = []
+            if getattr(intent, "sl", None) is not None:
+                trigger_pairs.append((
+                    stop_price,
+                    {
+                        "exchange": broker_order["exchange"],
+                        "tradingsymbol": broker_order["tradingsymbol"],
+                        "transaction_type": exit_side,
+                        "quantity": int(leg_qty),
+                        "order_type": getattr(self.kite, "ORDER_TYPE_LIMIT", "LIMIT"),
+                        "product": getattr(self.kite, "PRODUCT_NRML", product) if product == "NRML" else product,
+                        "price": stop_price,
+                    },
+                ))
+            if getattr(intent, "tp", None) is not None:
+                trigger_pairs.append((
+                    target_price,
+                    {
+                        "exchange": broker_order["exchange"],
+                        "tradingsymbol": broker_order["tradingsymbol"],
+                        "transaction_type": exit_side,
+                        "quantity": int(leg_qty),
+                        "order_type": getattr(self.kite, "ORDER_TYPE_LIMIT", "LIMIT"),
+                        "product": getattr(self.kite, "PRODUCT_NRML", product) if product == "NRML" else product,
+                        "price": target_price,
+                    },
+                ))
+
+            if not trigger_pairs:
+                continue
+
+            trigger_pairs.sort(key=lambda item: item[0])
+            trigger_type = getattr(self.kite, "GTT_TYPE_OCO", "two-leg") if len(trigger_pairs) > 1 else getattr(self.kite, "GTT_TYPE_SINGLE", "single")
+            plans.append({
+                "tradingsymbol": broker_order["tradingsymbol"],
+                "exchange": broker_order["exchange"],
+                "quantity": int(leg_qty),
+                "trigger_type": trigger_type,
+                "trigger_values": [pair[0] for pair in trigger_pairs],
+                "orders": [pair[1] for pair in trigger_pairs],
+                "last_price": round_to_tick(entry_price),
+                "target_price": target_price,
+                "stop_price": stop_price,
+            })
+
+        return plans
 
     # ============================
     # ORDER BUILDERS

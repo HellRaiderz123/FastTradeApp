@@ -747,6 +747,33 @@ def _default_question(intent_name: str) -> str:
     return defaults.get(intent_name, "")
 
 
+def _normalize_generic_voice_question(question: str, intent_name: str, is_hindi: bool) -> str:
+    cleaned = _short_text(question or "", 220).strip()
+    if not cleaned:
+        return ""
+
+    generic_intents = {
+        "GenericQuestionIntent",
+        "AskNvidiaIntent",
+        "AskFastTradeIntent",
+        "StrategyExplainerIntent",
+    }
+    if intent_name not in generic_intents:
+        return cleaned
+
+    lowered = cleaned.lower()
+    if re.match(r"^(what|who|when|where|why|how|is|are|can|do|does|should|tell me|explain|define)\b", lowered):
+        return cleaned
+
+    token_count = len(re.findall(r"[a-zA-Z0-9%+.-]+", cleaned))
+    if 1 <= token_count <= 4:
+        if is_hindi:
+            return f"Explain briefly what {cleaned} is and why it matters, in simple Hindi or Hinglish."
+        return f"Explain briefly what {cleaned} is and why it matters in simple terms."
+
+    return cleaned
+
+
 @router.get("/health")
 def alexa_health() -> dict[str, Any]:
     return {
@@ -975,11 +1002,12 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
 
     if req_type == "LaunchRequest":
         analytics["intent_name"] = "LaunchRequest"
-        welcome_text = (
+        welcome_intro = (
             f"{ALEXA_SKILL_NAME} में आपका स्वागत है।"
             if is_hindi
             else f"Welcome to {ALEXA_SKILL_NAME}."
         )
+        welcome_text = f"{welcome_intro} {default_reprompt}".strip()
         return respond(welcome_text, reprompt=default_reprompt)
 
     if req_type == "SessionEndedRequest":
@@ -1212,7 +1240,7 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
         "TradeActionIntent",
     } or _extract_question(intent):
         raw_question = _extract_question(intent)
-        question = raw_question or _default_question(intent_name)
+        question = _normalize_generic_voice_question(raw_question or _default_question(intent_name), intent_name, is_hindi)
         analytics["question"] = raw_question
 
         if intent_name == "WatchlistSummaryIntent" and user_memory.get("watchlist"):
@@ -1282,6 +1310,7 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
                 "Use plain language, highlight one relevant risk or caution when useful, and avoid jargon overload.",
                 "Avoid dramatic, slang, or aggressive phrasing.",
                 "Do not use markdown, bullet points, or JSON.",
+                "If the user says only a short keyword like Google, RSI, or Tesla, treat it as a request for a brief explanation instead of refusing it as a web search.",
                 "If the question is about FastTrade portfolio, risk, positions, or market context, use the available trading context.",
             ]
             if live_market_context:
@@ -1316,6 +1345,8 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
                     f"{continuity_instruction} "
                     "Use clear spoken language and keep the response easy to understand. "
                     "Avoid dramatic, slang, or aggressive phrasing. "
+                    "If the user only says a short keyword like Google, RSI, or Tesla, interpret it as asking what it is and answer directly. "
+                    "Do not claim you cannot search the web unless the user explicitly asks for live real-time web results. "
                     "If live market data or recent conversation is provided, use it directly instead of guessing. "
                     "Do not use markdown, bullet points, or JSON."
                 ),

@@ -43,6 +43,22 @@ class ExecutionAdapter(ABC):
         """
         pass
 
+    def sync_protection(self, intent) -> Dict[str, Any]:
+        """Best-effort broker-side TP/SL sync for the current position."""
+        return {
+            "provider": "APP_ONLY",
+            "enabled": False,
+            "reason": "Broker-side protection is not implemented for this execution adapter.",
+        }
+
+    def cancel_protection(self, intent) -> Dict[str, Any]:
+        """Best-effort cancellation for any outstanding broker-side protection."""
+        return {
+            "provider": "APP_ONLY",
+            "cancelled": False,
+            "reason": "No broker-side protection cancellation is required for this execution adapter.",
+        }
+
 from typing import Dict, Any
 
 class SignalResult(Dict[str, Any]):

@@ -48,9 +48,31 @@ def update_tp_sl(
         intent.sl = sl
     if trailing_sl is not None:
         intent.trailing_sl_pct = trailing_sl
+
+    protection = None
+    if getattr(intent, "executed", False) and getattr(intent, "status", None) == "EXECUTED":
+        try:
+            from app.core.execution.mode import get_execution_mode
+            from app.core.execution.factory import get_execution_adapter
+
+            executor = get_execution_adapter(get_execution_mode())
+            protection = executor.sync_protection(intent)
+        except Exception as exc:
+            logger.warning("Failed to refresh broker-side TP/SL protection for %s: %s", intent.intent_id, exc)
+            protection = {
+                "enabled": False,
+                "error": str(exc),
+            }
+
     db.commit()
     db.refresh(intent)
-    return {"success": True, "tp": intent.tp, "sl": intent.sl, "trailing_sl": intent.trailing_sl_pct}
+    return {
+        "success": True,
+        "tp": intent.tp,
+        "sl": intent.sl,
+        "trailing_sl": intent.trailing_sl_pct,
+        "protection": protection,
+    }
 
 @router.post("/create")
 def create_intent(
