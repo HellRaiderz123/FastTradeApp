@@ -6,6 +6,7 @@ from collections import defaultdict
 import json
 import logging
 import os
+import re
 import httpx
 
 from app.db.session import SessionLocal
@@ -75,6 +76,111 @@ def _as_bool(val, default: bool = False) -> bool:
     if isinstance(val, str):
         return val.strip().lower() in {"1", "true", "yes", "y", "on"}
     return default
+
+
+def _preferred_tool_choice(message: str, history: list | None = None):
+    return "auto"
+
+
+def _normalize_voice_answer(text: str) -> str:
+    cleaned = str(text or "")
+    cleaned = re.sub(r"[*_`#]+", "", cleaned)
+    cleaned = re.sub(r"\n\s*[-•]\s*", "; ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _extract_direct_ai_action(message: str):
+    text = str(message or "").strip()
+    normalized = " ".join(text.lower().split())
+    if not normalized:
+        return None
+
+    generic_close_match = re.search(
+        r"(?:close|exit|square\s*off)(?:\s+my|\s+the)?\s+(?:(current|latest|open|active)\s+)?(?:position|postion|trade)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if generic_close_match:
+        return "close_position", {"reference": (generic_close_match.group(1) or "current").lower()}
+
+    close_match = re.search(
+        r"(?:close|exit|square\s*off)(?:\s+my|\s+the)?(?:\s+(?:position|postion|trade)(?:\s+in)?)?\s+([A-Za-z][A-Za-z0-9&.-]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if close_match:
+        candidate = close_match.group(1).upper()
+        if candidate.lower() in {"current", "latest", "open", "active", "position", "postion", "trade"}:
+            return "close_position", {"reference": "current"}
+        return "close_position", {"underlying": candidate}
+
+    trade_match = re.search(
+        r"\b(buy|sell)\b\s*(?:(\d+)\s*(?:share|shares|qty|quantity|lot|lots)?)?\s*(?:of\s+)?([A-Za-z][A-Za-z0-9&.-]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if trade_match:
+        action = trade_match.group(1).upper()
+        quantity = int(trade_match.group(2) or 1)
+        symbol = trade_match.group(3).upper()
+        product = "MIS" if re.search(r"\bmis\b", normalized) else "NRML" if re.search(r"\bnrml\b", normalized) else "CNC"
+        price_match = re.search(r"(?:limit(?:\s+price)?|at)\s*₹?\s*(\d+(?:\.\d+)?)", normalized)
+        use_market = "market" in normalized or not price_match
+        order_type = "MARKET" if use_market else "LIMIT"
+        price = None if use_market else float(price_match.group(1))
+        dry_run = any(term in normalized for term in ("dry run", "paper trade", "paper only", "simulate"))
+        confirmed = any(term in normalized for term in ("confirm", "place now", "execute now", "confirm and place"))
+        return "place_trade", {
+            "symbol": symbol,
+            "action": action,
+            "quantity": quantity,
+            "product": product,
+            "order_type": order_type,
+            "exchange": "NSE",
+            "price": price,
+            "dry_run": dry_run,
+            "confirmed": confirmed,
+        }
+
+    return None
+
+
+def _summarize_direct_action(tool_name: str, result: dict, voice_mode: bool = False) -> str:
+    if not result.get("success"):
+        text = result.get("error") or "Action failed."
+        return _normalize_voice_answer(text) if voice_mode else text
+
+    if result.get("requires_confirmation"):
+        preview = result.get("order_preview") or {}
+        text = (
+            f"Order ready: {preview.get('trade_action')} {preview.get('quantity')} {preview.get('symbol')} "
+            f"as a {preview.get('order_type')} {preview.get('product')} order on {preview.get('exchange')}. "
+            "Please confirm to execute."
+        )
+        return _normalize_voice_answer(text) if voice_mode else text
+
+    if result.get("action") == "placed_trade":
+        text = (
+            f"Order placed: {result.get('trade_action')} {result.get('quantity')} {result.get('symbol')}. "
+            f"Order ID {result.get('order_id')}."
+        )
+        return _normalize_voice_answer(text) if voice_mode else text
+
+    if result.get("action") == "simulated_trade":
+        preview = result.get("would_place") or {}
+        text = (
+            f"Dry run ready: {preview.get('trade_action')} {preview.get('quantity')} {preview.get('symbol')} "
+            f"via {preview.get('order_type')} {preview.get('product')}. No live order was placed."
+        )
+        return _normalize_voice_answer(text) if voice_mode else text
+
+    if result.get("action") == "closed_position":
+        text = f"Closed the {result.get('underlying')} position."
+        return _normalize_voice_answer(text) if voice_mode else text
+
+    text = result.get("message") or f"Completed {tool_name.replace('_', ' ')}."
+    return _normalize_voice_answer(text) if voice_mode else text
 
 
 # AI trade safety controls (override via backend .env)
@@ -1256,18 +1362,40 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                 return {"success": False, "error": f"Scanner call failed: {str(e)}"}
 
         elif name == "close_position":
-            intent = (
-                db.query(ExecutionIntent)
-                .filter(
-                    ExecutionIntent.underlying.ilike(f"%{args['underlying']}%"),
-                    ExecutionIntent.status == "EXECUTED",
-                    ExecutionIntent.closed_at.is_(None),
-                )
-                .order_by(ExecutionIntent.created_at.desc())
-                .first()
+            underlying = str(args.get("underlying") or "").strip().upper()
+            reference = str(args.get("reference") or "").strip().lower()
+
+            open_query = db.query(ExecutionIntent).filter(
+                ExecutionIntent.status == "EXECUTED",
+                ExecutionIntent.closed_at.is_(None),
             )
-            if not intent:
-                return {"success": False, "error": f"No open position found for '{args['underlying']}'"}
+
+            if underlying:
+                intent = (
+                    open_query
+                    .filter(ExecutionIntent.underlying.ilike(f"%{underlying}%"))
+                    .order_by(ExecutionIntent.created_at.desc())
+                    .first()
+                )
+                if not intent:
+                    return {"success": False, "error": f"No open position found for '{underlying}'"}
+            else:
+                open_positions = open_query.order_by(ExecutionIntent.created_at.desc()).all()
+                if not open_positions:
+                    return {"success": False, "error": "No open positions found right now."}
+
+                if reference in {"current", "latest", "open", "active", "position", "trade", ""}:
+                    if reference in {"current", "latest"} or len(open_positions) == 1:
+                        intent = open_positions[0]
+                    else:
+                        symbols = ", ".join(dict.fromkeys(pos.underlying for pos in open_positions[:5]))
+                        return {
+                            "success": False,
+                            "error": f"You have multiple open positions ({symbols}). Please specify which symbol to close.",
+                        }
+                else:
+                    intent = open_positions[0]
+
             try:
                 resp = httpx.post(
                     f"http://localhost:8000/exit/manual/{intent.intent_id}",
@@ -1478,13 +1606,14 @@ JARVIS VOICE MODE:
 
     actions_taken: list[dict] = []
     max_tool_rounds = 5  # prevent infinite loops
+    tool_choice = _preferred_tool_choice(message, history)
 
     for _round in range(max_tool_rounds):
         try:
             resp = httpx.post(
                 f"{LLM_BASE_URL}/chat/completions",
                 headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-                json={"model": LLM_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": "auto"},
+                json={"model": LLM_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": tool_choice},
                 timeout=30.0,
             )
             resp.raise_for_status()
@@ -1505,7 +1634,10 @@ JARVIS VOICE MODE:
 
         if finish_reason != "tool_calls" or not assistant_message.get("tool_calls"):
             # No tool call — return the final text answer
-            return assistant_message.get("content") or "", actions_taken
+            final_text = assistant_message.get("content") or ""
+            if voice_mode or requested_style == "jarvis":
+                final_text = _normalize_voice_answer(final_text)
+            return final_text, actions_taken
 
         # Execute each tool call
         for tc in assistant_message["tool_calls"]:
@@ -1525,6 +1657,7 @@ JARVIS VOICE MODE:
                 "tool_call_id": tc["id"],
                 "content": json.dumps(result),
             })
+            tool_choice = "auto"
 
     # Exhausted rounds — ask LLM to summarize with what we have
     return "I completed the requested actions. Please review the action details above.", actions_taken
@@ -1533,11 +1666,21 @@ JARVIS VOICE MODE:
 @router.post("/query")
 def chat_query(req: ChatRequest, db: Session = Depends(get_db)):
     try:
+        voice_mode = bool(req.voice_mode) or (req.assistant_style or "").strip().lower() == "jarvis"
+
+        direct_action = _extract_direct_ai_action(req.message)
+        if direct_action:
+            tool_name, tool_args = direct_action
+            result = _execute_tool(tool_name, tool_args, db)
+            actions = [{"tool": tool_name, "args": tool_args, "result": result}]
+            answer = _summarize_direct_action(tool_name, result, voice_mode=voice_mode)
+            return {"ok": True, "answer": answer, "actions": actions}
+
         answer, actions = _call_llm(
             req.message,
             req.history,
             db,
-            voice_mode=bool(req.voice_mode),
+            voice_mode=voice_mode,
             assistant_style=req.assistant_style,
         )
         return {"ok": True, "answer": answer, "actions": actions}

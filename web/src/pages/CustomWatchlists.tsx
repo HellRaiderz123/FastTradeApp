@@ -19,6 +19,7 @@ interface Quote {
   ltp: number | null;
   change: number | null;
   change_pct: number | null;
+  change_percent?: number | null;
   volume: number | null;
   high: number | null;
   low: number | null;
@@ -152,9 +153,14 @@ const CustomWatchlists: React.FC = () => {
     }
   };
 
-  const formatChange = (value: number | null) => {
-    if (value === null) return '-';
+  const formatChange = (value: number | null | undefined) => {
+    if (value === null || value === undefined || Number.isNaN(value)) return '-';
     return value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+  };
+
+  const getChangePercent = (quote: Quote) => {
+    const value = quote.change_pct ?? quote.change_percent ?? null;
+    return value === undefined || Number.isNaN(value) ? null : value;
   };
 
   return (
@@ -308,7 +314,8 @@ const CustomWatchlists: React.FC = () => {
                       </thead>
                       <tbody>
                         {quotes.map((quote, idx) => {
-                          const isPositive = (quote.change || 0) >= 0;
+                          const changePercent = getChangePercent(quote);
+                          const isPositive = (quote.change ?? changePercent ?? 0) >= 0;
                           return (
                             <tr
                               key={quote.symbol}
@@ -326,7 +333,7 @@ const CustomWatchlists: React.FC = () => {
                               <td className={`p-3 text-right font-semibold ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
                                 <div className="flex items-center justify-end gap-1">
                                   {isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                  {quote.change_pct !== null ? `${quote.change_pct.toFixed(2)}%` : '-'}
+                                  {changePercent !== null ? `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%` : '-'}
                                 </div>
                               </td>
                               <td className="p-3 text-right text-gray-400">

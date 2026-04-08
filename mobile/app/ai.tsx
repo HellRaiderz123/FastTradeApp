@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -13,6 +13,32 @@ interface ActionResult {
   args: Record<string, unknown>;
   result: { success: boolean; action?: string; error?: string; [key: string]: unknown };
 }
+
+type SpeechRecognitionModuleLike = {
+  start: (options: Record<string, unknown>) => void;
+  stop: () => void;
+  abort: () => void;
+  requestPermissionsAsync?: () => Promise<{ granted?: boolean; canAskAgain?: boolean }>;
+  isRecognitionAvailable?: () => boolean;
+  addListener?: (eventName: string, listener: (event?: any) => void) => { remove?: () => void };
+};
+
+let speechRecognitionModuleCache: SpeechRecognitionModuleLike | null | undefined;
+
+const getSpeechRecognitionModule = (): SpeechRecognitionModuleLike | null => {
+  if (speechRecognitionModuleCache !== undefined) {
+    return speechRecognitionModuleCache;
+  }
+
+  try {
+    const speechPackage = require('expo-speech-recognition');
+    speechRecognitionModuleCache = speechPackage?.ExpoSpeechRecognitionModule ?? null;
+  } catch {
+    speechRecognitionModuleCache = null;
+  }
+
+  return speechRecognitionModuleCache ?? null;
+};
 
 const ACTION_LABELS: Record<string, string> = {
   create_budget: '💰 Budget Created',
@@ -31,7 +57,8 @@ const ACTION_LABELS: Record<string, string> = {
 
 function ActionBadge({ action }: { action: ActionResult }) {
   const ok = action.result.success;
-  const label = ACTION_LABELS[action.tool] ?? action.tool.replace(/_/g, ' ');
+  const baseLabel = ACTION_LABELS[action.tool] ?? action.tool.replace(/_/g, ' ');
+  const label = ok ? baseLabel : `${baseLabel} Failed`;
   const detail = ok
     ? Object.entries(action.result)
         .filter(([k]) => !['success', 'action', 'id', 'requires_confirmation', 'order_preview', 'message'].includes(k))
@@ -47,42 +74,59 @@ function ActionBadge({ action }: { action: ActionResult }) {
   );
 }
 
-const getSpeechRecognitionCtor = () => {
-  const g = globalThis as any;
-  return g?.SpeechRecognition || g?.webkitSpeechRecognition || null;
+const WAKE_WORD_REGEX = /(?:^|\b)(?:hey\s+)?jarvis\b[\s,.:;-]*/i;
+const JARVIS_CONTEXTUAL_STRINGS = ['Jarvis', 'FastTrade', 'Nifty', 'Bank Nifty', 'TCS', 'Infosys', 'Zerodha', 'Kite', 'NSE', 'BSE'];
+
+const normalizeSpeechText = (text: string) => String(text || '').replace(/\s+/g, ' ').trim();
+
+const extractWakeCommand = (text: string) => {
+  const cleaned = normalizeSpeechText(text);
+  const match = cleaned.match(WAKE_WORD_REGEX);
+  if (!match || match.index === undefined) return null;
+  return cleaned.slice(match.index + match[0].length).trim();
 };
 
-const speakAssistantText = async (text: string) => {
-  const cleaned = String(text || '').trim();
+const isSpeechRecognitionAvailable = () => {
+  try {
+    return Boolean(getSpeechRecognitionModule()?.isRecognitionAvailable?.());
+  } catch {
+    return false;
+  }
+};
+
+const getDefaultVoiceStatus = (voiceAvailable: boolean, wakeWordEnabled = true) => {
+  if (!voiceAvailable) {
+    return 'Spoken replies are enabled. Live voice input needs the FastTrade development build, not Expo Go.';
+  }
+  return wakeWordEnabled
+    ? 'Say "Jarvis" and your command to start.'
+    : 'Tap the mic and speak your command.';
+};
+
+const speakAssistantText = async (
+  text: string,
+  callbacks?: { onStart?: () => void; onDone?: () => void; onError?: () => void }
+) => {
+  const cleaned = normalizeSpeechText(text);
   if (!cleaned) return;
 
-  if (Platform.OS === 'web') {
-    const synth = (globalThis as any)?.speechSynthesis;
-    const Utterance = (globalThis as any)?.SpeechSynthesisUtterance;
-    if (!synth || !Utterance) return;
-    synth.cancel();
-    const utterance = new Utterance(cleaned);
-    utterance.lang = 'en-IN';
-    utterance.rate = 1.02;
-    utterance.pitch = 0.95;
-    synth.speak(utterance);
-    return;
-  }
-
   try {
-    Speech.stop();
-    Speech.speak(cleaned, { language: 'en-IN', rate: 0.98, pitch: 0.95 });
+    await Speech.stop();
+    Speech.speak(cleaned, {
+      language: 'en-IN',
+      rate: 0.98,
+      pitch: 0.92,
+      onStart: () => callbacks?.onStart?.(),
+      onDone: () => callbacks?.onDone?.(),
+      onStopped: () => callbacks?.onDone?.(),
+      onError: () => callbacks?.onError?.(),
+    });
   } catch {
-    // no-op
+    callbacks?.onError?.();
   }
 };
 
 const stopAssistantVoice = () => {
-  if (Platform.OS === 'web') {
-    const synth = (globalThis as any)?.speechSynthesis;
-    synth?.cancel?.();
-    return;
-  }
   try {
     Speech.stop();
   } catch {
@@ -146,64 +190,50 @@ const STARTERS = [
 ];
 
 export default function AIScreen() {
+  const initialVoiceAvailable = isSpeechRecognitionAvailable();
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [jarvisMode, setJarvisMode] = useState(true);
+  const [handsFreeMode, setHandsFreeMode] = useState(true);
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(true);
   const [isListening, setIsListening] = useState(false);
+  const [voiceAvailable, setVoiceAvailable] = useState(initialVoiceAvailable);
+  const [voiceSessionArmed, setVoiceSessionArmed] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState(getDefaultVoiceStatus(initialVoiceAvailable, true));
   const [history, setHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string; actions?: ActionResult[] }>>([
     {
       role: 'assistant',
-      content: 'Jarvis mode is ready. I can speak responses, manage FastTrade actions, and keep live trade control behind confirmation. Try: "Build my pre-market game plan" or "Buy 1 share of TCS as a dry run".',
+      content: 'Jarvis mode is ready. I can speak responses, listen for commands, manage FastTrade actions, and keep live trade control behind confirmation.',
     },
   ]);
 
   const canSend = useMemo(() => message.trim().length > 0 && !loading, [message, loading]);
+  const speechSubscriptionsRef = useRef<Array<{ remove?: () => void }>>([]);
+  const lastSpeechTextRef = useRef('');
 
-  useEffect(() => {
-    const last = history[history.length - 1];
-    if (!voiceEnabled || !last || last.role !== 'assistant') return;
-    void speakAssistantText(last.content);
-  }, [history, voiceEnabled]);
+  const clearSpeechListeners = () => {
+    speechSubscriptionsRef.current.forEach((subscription) => subscription?.remove?.());
+    speechSubscriptionsRef.current = [];
+  };
 
-  const handleVoiceInput = async () => {
-    const SpeechRecognitionCtor = getSpeechRecognitionCtor();
-    if (!SpeechRecognitionCtor) {
-      Alert.alert(
-        'Voice input tip',
-        Platform.OS === 'web'
-          ? 'Speech recognition is not supported in this browser right now.'
-          : 'On native mobile, use your device keyboard mic for dictation. Web voice recognition is supported directly in the browser UI.',
-      );
-      return;
+  const stopListeningSession = (manual = true) => {
+    const speechModule = getSpeechRecognitionModule();
+    try {
+      if (manual) {
+        speechModule?.abort?.();
+      } else {
+        speechModule?.stop?.();
+      }
+    } catch {
+      // ignore stop errors
     }
 
-    try {
-      const recognition = new SpeechRecognitionCtor();
-      recognition.lang = 'en-IN';
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
-      recognition.onstart = () => setIsListening(true);
-      recognition.onerror = () => {
-        setIsListening(false);
-        Alert.alert('Voice input', 'I could not hear that clearly. Please try again.');
-      };
-      recognition.onend = () => setIsListening(false);
-      recognition.onresult = (event: any) => {
-        const transcript = Array.from(event?.results || [])
-          .map((result: any) => result?.[0]?.transcript || '')
-          .join(' ')
-          .trim();
-        if (transcript) {
-          setMessage(transcript);
-          void send(transcript);
-        }
-      };
-      recognition.start();
-    } catch {
-      setIsListening(false);
-      Alert.alert('Voice input', 'Voice recognition could not be started on this device.');
+    clearSpeechListeners();
+    setIsListening(false);
+    if (manual) {
+      setVoiceStatus(getDefaultVoiceStatus(voiceAvailable, wakeWordEnabled));
     }
   };
 
@@ -214,6 +244,7 @@ export default function AIScreen() {
     }
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setVoiceStatus(`Processing: ${outgoing}`);
 
     const nextHistory = [...history, { role: 'user' as const, content: outgoing }];
     setHistory(nextHistory);
@@ -240,23 +271,196 @@ export default function AIScreen() {
             : 'The backend assistant is not reachable right now.',
         },
       ]);
+      setVoiceStatus('Backend connection issue. Please try again.');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
 
     setLoading(false);
   };
 
+  const startVoiceSession = async (auto = false) => {
+    const speechModule = getSpeechRecognitionModule();
+    if (!speechModule) {
+      setVoiceAvailable(false);
+      setIsListening(false);
+      setVoiceStatus('Voice input needs the FastTrade development build. Expo Go cannot load the native speech module.');
+      if (!auto) {
+        Alert.alert(
+          'Mobile Jarvis voice',
+          'The app can speak replies now, but live voice recognition requires the FastTrade development build. Please open the custom app built with `npx expo run:android` or `npx expo run:ios` instead of Expo Go.'
+        );
+      }
+      return;
+    }
+
+    const available = isSpeechRecognitionAvailable();
+    setVoiceAvailable(available);
+    if (!available) {
+      setVoiceStatus('Speech recognition is unavailable on this device. Enable Siri/Dictation on iPhone or a Google speech service on Android.');
+      if (!auto) {
+        Alert.alert(
+          'Voice recognition unavailable',
+          Platform.OS === 'ios'
+            ? 'Please enable Siri & Dictation and reopen the app.'
+            : 'Please enable a speech recognition service such as Google Voice Typing on this device.'
+        );
+      }
+      return;
+    }
+
+    if (!auto) {
+      setVoiceSessionArmed(true);
+    }
+
+    if (loading) {
+      setVoiceStatus('Hold on — I am still processing the previous request.');
+      return;
+    }
+
+    try {
+      const permission = await speechModule.requestPermissionsAsync?.();
+      if (permission && permission.granted === false) {
+        setVoiceStatus('Microphone or speech permission was denied.');
+        Alert.alert('Permission needed', 'Please allow microphone and speech recognition access to use Jarvis voice mode.');
+        return;
+      }
+
+      clearSpeechListeners();
+      lastSpeechTextRef.current = '';
+
+      const startSubscription = speechModule.addListener?.('start', () => {
+        setIsListening(true);
+        setVoiceStatus(wakeWordEnabled ? 'Listening… say "Jarvis" and your command.' : 'Listening… speak your command.');
+      });
+
+      const resultSubscription = speechModule.addListener?.('result', (event: any) => {
+        const transcript = normalizeSpeechText(
+          Array.isArray(event?.results)
+            ? event.results.map((result: any) => result?.transcript || result?.segment || '').join(' ')
+            : String(event?.value || '')
+        );
+
+        if (!transcript) return;
+
+        lastSpeechTextRef.current = transcript;
+        const wakeCommand = wakeWordEnabled ? extractWakeCommand(transcript) : transcript;
+        const candidateCommand = normalizeSpeechText(wakeCommand || transcript);
+        setMessage(candidateCommand);
+
+        if (event?.isFinal) {
+          if (wakeWordEnabled && !wakeCommand) {
+            setVoiceStatus('Wake word missing. Say "Jarvis" followed by your command.');
+            return;
+          }
+
+          setIsListening(false);
+          setVoiceStatus(`Executing: ${candidateCommand}`);
+          clearSpeechListeners();
+          try {
+            speechModule.stop?.();
+          } catch {
+            // ignore stop errors
+          }
+          void send(candidateCommand);
+          return;
+        }
+
+        setVoiceStatus(`Heard: ${candidateCommand}`);
+      });
+
+      const errorSubscription = speechModule.addListener?.('error', (event: any) => {
+        clearSpeechListeners();
+        setIsListening(false);
+        const code = String(event?.error || 'unknown');
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          setVoiceStatus('Microphone permission is blocked. Please allow it in settings.');
+        } else if (code === 'no-speech') {
+          setVoiceStatus('No speech detected. Please try again.');
+        } else {
+          setVoiceStatus(`Voice recognition error: ${code}`);
+        }
+      });
+
+      const endSubscription = speechModule.addListener?.('end', () => {
+        clearSpeechListeners();
+        setIsListening(false);
+        if (!lastSpeechTextRef.current) {
+          setVoiceStatus(getDefaultVoiceStatus(voiceAvailable, wakeWordEnabled));
+        }
+      });
+
+      speechSubscriptionsRef.current = [startSubscription, resultSubscription, errorSubscription, endSubscription].filter(Boolean) as Array<{ remove?: () => void }>;
+
+      speechModule.start({
+        lang: 'en-IN',
+        interimResults: true,
+        maxAlternatives: 1,
+        continuous: handsFreeMode,
+        addsPunctuation: true,
+        contextualStrings: JARVIS_CONTEXTUAL_STRINGS,
+        androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' },
+        iosTaskHint: 'dictation',
+      });
+    } catch (error: any) {
+      clearSpeechListeners();
+      setIsListening(false);
+      setVoiceStatus('Voice recognition could not be started on this build.');
+      if (!auto) {
+        Alert.alert('Voice input', String(error?.message || 'Voice recognition could not be started on this device.'));
+      }
+    }
+  };
+
+  useEffect(() => {
+    setVoiceAvailable(isSpeechRecognitionAvailable());
+    return () => {
+      clearSpeechListeners();
+      stopAssistantVoice();
+    };
+  }, []);
+
+  useEffect(() => {
+    const last = history[history.length - 1];
+    if (!voiceEnabled || !last || last.role !== 'assistant') return;
+
+    void speakAssistantText(last.content, {
+      onStart: () => setVoiceStatus('Jarvis is speaking…'),
+      onDone: () => {
+        if (voiceSessionArmed && handsFreeMode && voiceAvailable && !loading) {
+          setVoiceStatus(wakeWordEnabled ? 'Standing by — say "Jarvis" and your next command.' : 'Standing by for your next command.');
+          setTimeout(() => {
+            void startVoiceSession(true);
+          }, 350);
+        } else {
+          setVoiceStatus(getDefaultVoiceStatus(voiceAvailable, wakeWordEnabled));
+        }
+      },
+      onError: () => setVoiceStatus('Voice playback is unavailable right now.'),
+    });
+  }, [history, voiceEnabled, handsFreeMode, voiceAvailable, wakeWordEnabled, voiceSessionArmed, loading]);
+
+  const handleVoiceInput = async () => {
+    if (isListening) {
+      stopListeningSession(true);
+      return;
+    }
+    await startVoiceSession(false);
+  };
+
   const resetConversation = async () => {
     setRefreshing(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    stopListeningSession(true);
     stopAssistantVoice();
+    setVoiceSessionArmed(false);
     setHistory([
       {
         role: 'assistant',
-        content: 'Fresh Jarvis session started. Ask anything or give a trading command.',
+        content: 'Fresh Jarvis session started. Say "Jarvis" and your command, or tap a starter prompt below.',
       },
     ]);
     setMessage('');
+    setVoiceStatus(getDefaultVoiceStatus(voiceAvailable, wakeWordEnabled));
     setRefreshing(false);
   };
 
@@ -285,6 +489,27 @@ export default function AIScreen() {
             keyboardShouldPersistTaps="handled"
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={resetConversation} tintColor={Colors.accent} />}
           >
+            <GlassCard style={styles.voiceHeroCard}>
+              <View style={styles.voiceHeroRow}>
+                <TouchableOpacity
+                  style={[styles.voiceOrb, isListening && styles.voiceOrbActive]}
+                  onPress={handleVoiceInput}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.voiceOrbIcon}>{isListening ? '🛑' : '🎙️'}</Text>
+                </TouchableOpacity>
+                <View style={styles.voiceHeroContent}>
+                  <Text style={styles.voiceHeroTitle}>{isListening ? 'Jarvis is listening' : 'Engage Jarvis'}</Text>
+                  <Text style={styles.voiceHeroText}>{voiceStatus}</Text>
+                  <Text style={styles.voiceHeroHint}>
+                    {wakeWordEnabled
+                      ? 'Example: "Jarvis buy 1 share of TCS as a dry run"'
+                      : 'Example: "Buy 1 share of TCS as a dry run"'}
+                  </Text>
+                </View>
+              </View>
+            </GlassCard>
+
             <View style={styles.modeRow}>
               <TouchableOpacity
                 style={[styles.modeChip, jarvisMode && styles.modeChipActive]}
@@ -301,10 +526,28 @@ export default function AIScreen() {
               >
                 <Text style={[styles.modeText, voiceEnabled && styles.modeTextActive]}>{voiceEnabled ? '🔊 Voice ON' : '🔇 Voice OFF'}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.modeChip, isListening && styles.modeChipActive]} onPress={handleVoiceInput}>
-                <Text style={[styles.modeText, isListening && styles.modeTextActive]}>{isListening ? '🎙️ Listening…' : '🎤 Speak'}</Text>
+              <TouchableOpacity
+                style={[styles.modeChip, handsFreeMode && styles.modeChipActive]}
+                onPress={() => setHandsFreeMode((prev) => !prev)}
+              >
+                <Text style={[styles.modeText, handsFreeMode && styles.modeTextActive]}>{handsFreeMode ? '🎧 Hands-Free ON' : '🎧 Hands-Free OFF'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modeChip, wakeWordEnabled && styles.modeChipActive]}
+                onPress={() => setWakeWordEnabled((prev) => !prev)}
+              >
+                <Text style={[styles.modeText, wakeWordEnabled && styles.modeTextActive]}>{wakeWordEnabled ? '🗣️ Wake Word ON' : '🗣️ Wake Word OFF'}</Text>
               </TouchableOpacity>
             </View>
+
+            {!voiceAvailable && (
+              <GlassCard style={styles.warningCard}>
+                <Text style={styles.warningTitle}>Voice input needs a custom build</Text>
+                <Text style={styles.warningText}>
+                  This screen will not crash now, but full microphone recognition requires the FastTrade development build or App Store/TestFlight build — not Expo Go.
+                </Text>
+              </GlassCard>
+            )}
 
             <View style={styles.starterRow}>
               {STARTERS.map((starter) => (
@@ -355,14 +598,14 @@ export default function AIScreen() {
               <TextInput
                 value={message}
                 onChangeText={setMessage}
-                placeholder="Ask a question or give a command..."
+                placeholder={wakeWordEnabled ? 'Say "Jarvis" or type a command...' : 'Ask a question or give a command...'}
                 placeholderTextColor={Colors.textMuted}
                 style={styles.input}
                 multiline
               />
               <View style={styles.composerActions}>
-                <TouchableOpacity style={styles.voiceButton} onPress={handleVoiceInput}>
-                  <Text style={styles.voiceButtonText}>{isListening ? 'Listening…' : 'Speak'}</Text>
+                <TouchableOpacity style={[styles.voiceButton, isListening && styles.voiceButtonActive]} onPress={handleVoiceInput}>
+                  <Text style={styles.voiceButtonText}>{isListening ? 'Stop Mic' : 'Start Mic'}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.sendButton, !canSend && styles.sendButtonDisabled]} disabled={!canSend} onPress={() => send()}>
                   <LinearGradient colors={canSend ? ['#1D4ED8', '#3B82F6'] : ['#334155', '#334155']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.sendGradient}>
@@ -386,7 +629,36 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 28, fontWeight: '700', color: Colors.textPrimary, letterSpacing: -0.5 },
   headerSub: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
   scroll: { padding: Spacing.lg, flexGrow: 1 },
+  voiceHeroCard: {
+    marginBottom: Spacing.md,
+    borderColor: Colors.borderAccent,
+    backgroundColor: Colors.bgGlassStrong,
+  },
+  voiceHeroRow: { flexDirection: 'row', alignItems: 'center' },
+  voiceOrb: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 1,
+    borderColor: Colors.borderAccent,
+    backgroundColor: Colors.accentGlow,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  voiceOrbActive: {
+    backgroundColor: '#7c2d12',
+    borderColor: '#f59e0b',
+  },
+  voiceOrbIcon: { fontSize: 28 },
+  voiceHeroContent: { flex: 1 },
+  voiceHeroTitle: { color: Colors.textPrimary, fontSize: 16, fontWeight: '700' },
+  voiceHeroText: { color: Colors.textSecondary, fontSize: 13, lineHeight: 19, marginTop: 4 },
+  voiceHeroHint: { color: Colors.textMuted, fontSize: 12, marginTop: 6 },
   modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 as any, marginBottom: Spacing.md },
+  warningCard: { marginBottom: Spacing.md, borderColor: '#a16207', backgroundColor: '#1c1917' },
+  warningTitle: { color: '#fbbf24', fontSize: 13, fontWeight: '700', marginBottom: 4 },
+  warningText: { color: Colors.textSecondary, fontSize: 12, lineHeight: 18 },
   modeChip: {
     borderWidth: 1,
     borderColor: Colors.border,
@@ -458,6 +730,7 @@ const styles = StyleSheet.create({
   input: { color: Colors.textPrimary, minHeight: 44, maxHeight: 120, paddingHorizontal: 4, paddingTop: 8 },
   composerActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
   voiceButton: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: Radius.md, backgroundColor: Colors.bgGlassStrong, borderWidth: 1, borderColor: Colors.border },
+  voiceButtonActive: { borderColor: '#f59e0b', backgroundColor: '#7c2d12' },
   voiceButtonText: { color: Colors.textPrimary, fontWeight: '700', fontSize: 12 },
   sendButton: { borderRadius: Radius.md, overflow: 'hidden', alignSelf: 'flex-end' },
   sendButtonDisabled: { opacity: 0.55 },

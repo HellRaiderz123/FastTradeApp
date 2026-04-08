@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   TrendingUp,
   TrendingDown,
   Activity,
   RefreshCcw,
-  Download,
   Info,
 } from 'lucide-react';
 import { optionsAPI } from '../lib/api';
@@ -48,6 +47,33 @@ interface ChainData {
   days_to_expiry: number;
   strikes: StrikeData[];
   atm_strike: number;
+}
+
+type BuildupLabel = 'Long Buildup' | 'Short Buildup' | 'Short Covering' | 'Long Unwinding';
+
+interface OptionSignal {
+  strike: number;
+  side: 'CE' | 'PE';
+  label: BuildupLabel;
+  tone: 'bullish' | 'bearish' | 'neutral';
+  score: number;
+  changePercent: number;
+  oi: number;
+}
+
+interface OptionAnalytics {
+  totalCallOi: number;
+  totalPutOi: number;
+  totalCallVolume: number;
+  totalPutVolume: number;
+  pcr: number;
+  supportStrike: number | null;
+  resistanceStrike: number | null;
+  maxPain: number | null;
+  biasLabel: string;
+  biasTone: string;
+  biasNote: string;
+  signals: OptionSignal[];
 }
 
 const OptionsChain: React.FC = () => {
@@ -97,12 +123,22 @@ const OptionsChain: React.FC = () => {
     }
   };
 
-  const formatNumber = (num: number | undefined): string => {
-    if (num === undefined || num === null) return '-';
+  const formatNumber = (num: number | undefined | null): string => {
+    if (num === undefined || num === null || Number.isNaN(num)) return '-';
     if (Math.abs(num) >= 100000) {
       return (num / 100000).toFixed(2) + 'L';
     }
-    return num.toLocaleString();
+    return num.toLocaleString('en-IN');
+  };
+
+  const formatDecimal = (num: number | undefined | null, digits = 2): string => {
+    if (num === undefined || num === null || Number.isNaN(num)) return '—';
+    return num.toFixed(digits);
+  };
+
+  const formatPercent = (num: number | undefined | null, digits = 1, signed = false): string => {
+    if (num === undefined || num === null || Number.isNaN(num)) return '—';
+    return `${signed && num >= 0 ? '+' : ''}${num.toFixed(digits)}%`;
   };
 
   const getDeltaColor = (delta: number): string => {
@@ -110,6 +146,140 @@ const OptionsChain: React.FC = () => {
     if (delta > 0.3) return 'text-yellow-400';
     return 'text-red-400';
   };
+
+  const getSignalClasses = (tone: OptionSignal['tone']) => {
+    if (tone === 'bullish') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+    if (tone === 'bearish') return 'border-red-500/30 bg-red-500/10 text-red-300';
+    return 'border-slate-600 bg-slate-800/70 text-slate-300';
+  };
+
+  const analytics = useMemo<OptionAnalytics | null>(() => {
+    if (!chainData) return null;
+
+    const totalCallOi = chainData.strikes.reduce((sum, item) => sum + (item.call?.oi || 0), 0);
+    const totalPutOi = chainData.strikes.reduce((sum, item) => sum + (item.put?.oi || 0), 0);
+    const totalCallVolume = chainData.strikes.reduce((sum, item) => sum + (item.call?.volume || 0), 0);
+    const totalPutVolume = chainData.strikes.reduce((sum, item) => sum + (item.put?.volume || 0), 0);
+    const callOis = chainData.strikes.map((item) => item.call?.oi || 0).filter((oi) => oi > 0);
+    const putOis = chainData.strikes.map((item) => item.put?.oi || 0).filter((oi) => oi > 0);
+    const avgCallOi = callOis.length ? callOis.reduce((sum, oi) => sum + oi, 0) / callOis.length : 0;
+    const avgPutOi = putOis.length ? putOis.reduce((sum, oi) => sum + oi, 0) / putOis.length : 0;
+    const atmIndex = chainData.strikes.findIndex((item) => item.strike === chainData.atm_strike);
+
+    const buildSignal = (option: OptionData | null, side: 'CE' | 'PE', strike: number): OptionSignal | null => {
+      if (!option) return null;
+
+      const oi = option.oi || 0;
+      const changePercent = option.change_percent ?? 0;
+      const avgOi = side === 'CE' ? avgCallOi : avgPutOi;
+
+      if (oi <= 0 || Math.abs(changePercent) < 0.5 || avgOi <= 0) {
+        return null;
+      }
+
+      const oiRatio = oi / avgOi;
+      let label: BuildupLabel | null = null;
+
+      if (changePercent >= 0.5 && oiRatio >= 1.15) label = 'Long Buildup';
+      else if (changePercent <= -0.5 && oiRatio >= 1.15) label = 'Short Buildup';
+      else if (changePercent >= 0.5 && oiRatio <= 0.9) label = 'Short Covering';
+      else if (changePercent <= -0.5 && oiRatio <= 0.9) label = 'Long Unwinding';
+
+      if (!label) return null;
+
+      const tone: OptionSignal['tone'] =
+        side === 'CE'
+          ? label === 'Long Buildup' || label === 'Short Covering'
+            ? 'bullish'
+            : 'bearish'
+          : label === 'Long Buildup' || label === 'Short Covering'
+            ? 'bearish'
+            : 'bullish';
+
+      const strikeIndex = chainData.strikes.findIndex((item) => item.strike === strike);
+      const proximityBoost = atmIndex >= 0 && strikeIndex >= 0 ? Math.max(0, 4 - Math.abs(strikeIndex - atmIndex)) : 0;
+      const score = Math.abs(changePercent) * 2 + Math.max(0, oiRatio - 1) * 8 + proximityBoost;
+
+      return { strike, side, label, tone, score, changePercent, oi };
+    };
+
+    const focusStrikes = chainData.strikes.filter((_, index) => atmIndex === -1 || Math.abs(index - atmIndex) <= 4);
+    const signals = focusStrikes
+      .flatMap((item) => [buildSignal(item.call, 'CE', item.strike), buildSignal(item.put, 'PE', item.strike)])
+      .filter((item): item is OptionSignal => Boolean(item))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+
+    const supportStrike =
+      chainData.strikes.reduce<StrikeData | null>((best, item) => {
+        if (!best || (item.put?.oi || 0) > (best.put?.oi || 0)) return item;
+        return best;
+      }, null)?.strike ?? null;
+
+    const resistanceStrike =
+      chainData.strikes.reduce<StrikeData | null>((best, item) => {
+        if (!best || (item.call?.oi || 0) > (best.call?.oi || 0)) return item;
+        return best;
+      }, null)?.strike ?? null;
+
+    const maxPain = chainData.strikes.reduce(
+      (best, candidate) => {
+        const payout = chainData.strikes.reduce((total, item) => {
+          const callLoss = (item.call?.oi || 0) * Math.max(candidate.strike - item.strike, 0);
+          const putLoss = (item.put?.oi || 0) * Math.max(item.strike - candidate.strike, 0);
+          return total + callLoss + putLoss;
+        }, 0);
+
+        return payout < best.payout ? { strike: candidate.strike, payout } : best;
+      },
+      { strike: chainData.atm_strike, payout: Number.POSITIVE_INFINITY }
+    ).strike;
+
+    const pcr = totalCallOi > 0 ? totalPutOi / totalCallOi : 0;
+    const bullishScore =
+      signals.filter((item) => item.tone === 'bullish').reduce((sum, item) => sum + item.score, 0) +
+      (pcr > 1 ? Math.min((pcr - 1) * 12, 8) : 0);
+    const bearishScore =
+      signals.filter((item) => item.tone === 'bearish').reduce((sum, item) => sum + item.score, 0) +
+      (pcr < 1 ? Math.min((1 - pcr) * 12, 8) : 0);
+
+    let biasLabel = 'Balanced Setup';
+    let biasTone = 'text-slate-200';
+    let biasNote = `PCR ${pcr.toFixed(2)} with support near ${supportStrike ?? '—'} and resistance near ${resistanceStrike ?? '—'}.`;
+
+    if (bullishScore - bearishScore > 4) {
+      biasLabel = 'Bullish Bias';
+      biasTone = 'text-emerald-300';
+      biasNote = `Call short covering / put writing is stronger. Support is building near ${supportStrike ?? '—'}.`;
+    } else if (bearishScore - bullishScore > 4) {
+      biasLabel = 'Bearish Bias';
+      biasTone = 'text-red-300';
+      biasNote = `Call writing / put long buildup dominates. Resistance is clustered near ${resistanceStrike ?? '—'}.`;
+    } else if (pcr >= 1.15) {
+      biasLabel = 'Supportive PCR';
+      biasTone = 'text-blue-300';
+      biasNote = `Put OI is heavier than call OI. Dips may find support near ${supportStrike ?? '—'}.`;
+    } else if (pcr <= 0.85) {
+      biasLabel = 'Resistance Heavy';
+      biasTone = 'text-orange-300';
+      biasNote = `Call OI is dominating overhead. Watch ${resistanceStrike ?? '—'} for supply pressure.`;
+    }
+
+    return {
+      totalCallOi,
+      totalPutOi,
+      totalCallVolume,
+      totalPutVolume,
+      pcr,
+      supportStrike,
+      resistanceStrike,
+      maxPain,
+      biasLabel,
+      biasTone,
+      biasNote,
+      signals,
+    };
+  }, [chainData]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
@@ -207,6 +377,93 @@ const OptionsChain: React.FC = () => {
         </div>
       )}
 
+      {/* Snapshot Analytics */}
+      {analytics && (
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Activity size={18} className="text-blue-400" />
+              <h3 className="text-white font-semibold">Chain Snapshot</h3>
+            </div>
+            <div className={`text-xl font-bold ${analytics.biasTone}`}>{analytics.biasLabel}</div>
+            <p className="text-sm text-slate-400 mt-1">{analytics.biasNote}</p>
+            <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
+              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <div className="text-slate-400 text-xs">PCR</div>
+                <div className="text-white font-semibold mt-1">{analytics.pcr.toFixed(2)}</div>
+              </div>
+              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <div className="text-slate-400 text-xs">Max Pain</div>
+                <div className="text-white font-semibold mt-1">{analytics.maxPain ?? '—'}</div>
+              </div>
+              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <div className="text-slate-400 text-xs">Support</div>
+                <div className="text-emerald-300 font-semibold mt-1">{analytics.supportStrike ?? '—'}</div>
+              </div>
+              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <div className="text-slate-400 text-xs">Resistance</div>
+                <div className="text-red-300 font-semibold mt-1">{analytics.resistanceStrike ?? '—'}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <TrendingUp size={18} className="text-emerald-400" />
+              <h3 className="text-white font-semibold">OI & Volume Breadth</h3>
+            </div>
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <span className="text-slate-400">Total Call OI</span>
+                <span className="text-white font-semibold">{formatNumber(analytics.totalCallOi)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <span className="text-slate-400">Total Put OI</span>
+                <span className="text-white font-semibold">{formatNumber(analytics.totalPutOi)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <span className="text-slate-400">Call Volume</span>
+                <span className="text-white font-semibold">{formatNumber(analytics.totalCallVolume)}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
+                <span className="text-slate-400">Put Volume</span>
+                <span className="text-white font-semibold">{formatNumber(analytics.totalPutVolume)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Info size={18} className="text-violet-400" />
+              <h3 className="text-white font-semibold">Buildup Signals</h3>
+            </div>
+            <div className="space-y-2">
+              {analytics.signals.length > 0 ? (
+                analytics.signals.map((signal) => (
+                  <div
+                    key={`${signal.strike}-${signal.side}-${signal.label}`}
+                    className={`rounded-lg border px-3 py-2 ${getSignalClasses(signal.tone)}`}
+                  >
+                    <div className="flex items-center justify-between gap-2 text-sm">
+                      <span className="font-semibold">{signal.strike} {signal.side}</span>
+                      <span className="text-[11px] uppercase tracking-wide">{signal.label}</span>
+                    </div>
+                    <div className="text-[11px] opacity-80 mt-1">
+                      Premium {formatPercent(signal.changePercent, 1, true)} • OI {formatNumber(signal.oi)}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-slate-400">No strong buildup signal around ATM right now.</p>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-3">
+              Snapshot heuristics use premium move + relative OI concentration near ATM.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Error Display */}
       {error && (
         <div className="bg-red-900/20 border border-red-500 rounded-lg p-4 mb-6 text-red-400">
@@ -286,7 +543,7 @@ const OptionsChain: React.FC = () => {
                         </span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">{strike.call?.iv ? strike.call.iv.toFixed(1) : '—'}%</span>
+                        <span className="text-slate-300 text-xs">{formatPercent(strike.call?.iv, 1)}</span>
                       </td>
                       {showGreeks && (
                         <>
@@ -294,21 +551,21 @@ const OptionsChain: React.FC = () => {
                             className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}
                           >
                             <span className={`text-xs font-medium ${getDeltaColor(strike.call?.delta || 0)}`}>
-                              {strike.call?.delta ? strike.call.delta.toFixed(2) : '—'}
+                              {formatDecimal(strike.call?.delta, 2)}
                             </span>
                           </td>
                           <td
                             className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}
                           >
                             <span className="text-slate-300 text-xs">
-                              {strike.call?.theta ? strike.call.theta.toFixed(2) : '—'}
+                              {formatDecimal(strike.call?.theta, 2)}
                             </span>
                           </td>
                         </>
                       )}
                       <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
                         <span className="text-white font-medium">
-                          {strike.call?.ltp ? strike.call.ltp.toFixed(2) : '—'}
+                          {formatDecimal(strike.call?.ltp, 2)}
                         </span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
@@ -319,8 +576,7 @@ const OptionsChain: React.FC = () => {
                               : 'text-red-400'
                           }`}
                         >
-                          {(strike.call?.change_percent || 0) >= 0 ? '+' : ''}
-                          {strike.call?.change_percent ? strike.call.change_percent.toFixed(1) : '—'}%
+                          {formatPercent(strike.call?.change_percent, 1, true)}
                         </span>
                       </td>
 
@@ -341,13 +597,12 @@ const OptionsChain: React.FC = () => {
                               : 'text-red-400'
                           }`}
                         >
-                          {(strike.put?.change_percent || 0) >= 0 ? '+' : ''}
-                          {strike.put?.change_percent ? strike.put.change_percent.toFixed(1) : '—'}%
+                          {formatPercent(strike.put?.change_percent, 1, true)}
                         </span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
                         <span className="text-white font-medium">
-                          {strike.put?.ltp ? strike.put.ltp.toFixed(2) : '—'}
+                          {formatDecimal(strike.put?.ltp, 2)}
                         </span>
                       </td>
                       {showGreeks && (
@@ -356,20 +611,20 @@ const OptionsChain: React.FC = () => {
                             className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}
                           >
                             <span className={`text-xs font-medium ${getDeltaColor(Math.abs(strike.put?.delta || 0))}`}>
-                              {strike.put?.delta ? strike.put.delta.toFixed(2) : '—'}
+                              {formatDecimal(strike.put?.delta, 2)}
                             </span>
                           </td>
                           <td
                             className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}
                           >
                             <span className="text-slate-300 text-xs">
-                              {strike.put?.theta ? strike.put.theta.toFixed(2) : '—'}
+                              {formatDecimal(strike.put?.theta, 2)}
                             </span>
                           </td>
                         </>
                       )}
                       <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">{strike.put?.iv ? strike.put.iv.toFixed(1) : '—'}%</span>
+                        <span className="text-slate-300 text-xs">{formatPercent(strike.put?.iv, 1)}</span>
                       </td>
                       <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
                         <span className="text-slate-300 text-xs">

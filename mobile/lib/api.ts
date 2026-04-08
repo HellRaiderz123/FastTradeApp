@@ -14,15 +14,50 @@ export const setUnauthorizedHandler = (handler: (() => void | Promise<void>) | n
 };
 
 const trimTrailingSlash = (url: string) => url.replace(/\/+$/, '');
+const DEFAULT_BACKEND_PORT = '8000';
+
+const extractExpoHost = (): string | null => {
+  const candidates = [
+    (Constants.expoConfig as { hostUri?: string } | undefined)?.hostUri,
+    (Constants as any)?.expoGoConfig?.debuggerHost,
+    (Constants as any)?.manifest2?.extra?.expoClient?.hostUri,
+    (Constants as any)?.manifest?.debuggerHost,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || !candidate.trim()) continue;
+    const host = candidate.split(',')[0].trim().split(':')[0]?.trim();
+    if (host) {
+      return host;
+    }
+  }
+
+  return null;
+};
+
+const isLegacyDevApiBase = (url: string) => {
+  const normalized = trimTrailingSlash(url);
+  return (
+    /:[\/]?11434\b/i.test(normalized) ||
+    /^https?:\/\/192\.168\.1\.(101|103):8000$/i.test(normalized) ||
+    (Platform.OS === 'android' && /^https?:\/\/(localhost|127\.0\.0\.1):8000$/i.test(normalized))
+  );
+};
 
 const getDefaultApiBaseUrl = () => {
+  const expoHost = extractExpoHost();
+
+  if (expoHost && expoHost !== 'localhost' && expoHost !== '127.0.0.1') {
+    return `http://${expoHost}:${DEFAULT_BACKEND_PORT}`;
+  }
+
   if (Platform.OS === 'web') {
-    return 'http://192.168.1.101:8000';
+    return `http://localhost:${DEFAULT_BACKEND_PORT}`;
   }
   if (Platform.OS === 'android') {
-    return 'http://192.168.1.101:8000';
+    return `http://10.0.2.2:${DEFAULT_BACKEND_PORT}`;
   }
-  return 'http://192.168.1.101:8000';
+  return `http://127.0.0.1:${DEFAULT_BACKEND_PORT}`;
 };
 
 const getDefaultAiApiBaseUrl = () => getDefaultApiBaseUrl();
@@ -64,12 +99,13 @@ export const persistAiApiBaseUrl = async (nextUrl: string) => {
 export const syncApiBaseUrlFromStorage = async () => {
   const stored = await AsyncStorage.getItem(API_BASE_STORAGE_KEY);
   if (stored?.trim()) {
-    if (stored.includes('192.168.1.103:8000')) {
+    const normalizedStored = trimTrailingSlash(stored);
+    if (isLegacyDevApiBase(normalizedStored)) {
       const migrated = getDefaultApiBaseUrl();
       setApiBaseUrl(migrated);
       await AsyncStorage.setItem(API_BASE_STORAGE_KEY, migrated);
     } else {
-      setApiBaseUrl(stored);
+      setApiBaseUrl(normalizedStored);
     }
   }
   return getApiBaseUrl();
@@ -78,14 +114,15 @@ export const syncApiBaseUrlFromStorage = async () => {
 export const syncAiApiBaseUrlFromStorage = async () => {
   const stored = await AsyncStorage.getItem(AI_API_BASE_STORAGE_KEY);
   if (stored?.trim()) {
+    const normalizedStored = trimTrailingSlash(stored);
     // Migration: older versions stored direct Ollama URL (:11434), but mobile
     // AI client calls /ai-chat/query which is served by FastTrade backend.
     // Move stale Ollama base or legacy LAN IP to backend base to avoid connection issues.
-    if (/:[\/]?11434\b/.test(stored) || stored.includes('192.168.1.103:8000')) {
+    if (isLegacyDevApiBase(normalizedStored)) {
       setAiApiBaseUrl(getApiBaseUrl());
       await AsyncStorage.setItem(AI_API_BASE_STORAGE_KEY, getAiApiBaseUrl());
     } else {
-      setAiApiBaseUrl(stored);
+      setAiApiBaseUrl(normalizedStored);
     }
   }
   return getAiApiBaseUrl();
@@ -158,6 +195,19 @@ aiApi.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+const isConnectivityError = (error: any) => {
+  if (error?.response) return false;
+  const details = `${error?.code || ''} ${error?.message || ''}`;
+  return /ECONNABORTED|timeout|Network Error|network request failed/i.test(details);
+};
+
+const attachConnectionHelp = (error: any, baseUrl: string) => {
+  if (error && !error?.response) {
+    error.message = `Could not reach FastTrade backend at ${baseUrl}. If you're on the Android emulator, use http://10.0.2.2:8000. On a real phone, use your PC's LAN IP.`;
+  }
+  return error;
+};
 
 // ── Journal / Positions ──────────────────────────────────────────────
 export const journalAPI = {
@@ -432,8 +482,33 @@ export const settingsAPI = {
 
 // ── Auth ─────────────────────────────────────────────────────────────
 export const authAPI = {
-  login: (username: string, password: string) =>
-    api.post('/auth/login', { username, password }),
+  login: async (username: string, password: string) => {
+    try {
+      return await api.post('/auth/login', { username, password });
+    } catch (error: any) {
+      const currentBase = getApiBaseUrl();
+      const fallbackBase = getDefaultApiBaseUrl();
+
+      if (isConnectivityError(error) && fallbackBase !== currentBase) {
+        try {
+          const response = await axios.post(
+            `${fallbackBase}/auth/login`,
+            { username, password },
+            {
+              headers: { 'Content-Type': 'application/json' },
+              timeout: 15000,
+            }
+          );
+          await persistApiBaseUrl(fallbackBase);
+          return response;
+        } catch (retryError: any) {
+          throw attachConnectionHelp(retryError, fallbackBase);
+        }
+      }
+
+      throw attachConnectionHelp(error, currentBase);
+    }
+  },
   me: () => api.get('/auth/me'),
 };
 

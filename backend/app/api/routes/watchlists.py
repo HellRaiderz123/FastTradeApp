@@ -226,24 +226,66 @@ async def get_watchlist_quotes(watchlist_id: int, db: Session = Depends(get_db))
     quotes = []
     for symbol in symbols:
         try:
-            quote = kite.get_quote(symbol)
-            if quote:
+            full_quote = kite.get_full_quote(symbol) or {}
+            ltp_quote = kite.get_quote(symbol) or {}
+            quote = full_quote or ltp_quote
+
+            if not quote:
                 quotes.append({
                     "symbol": symbol,
-                    "ltp": quote.get("last_price"),
-                    "change": quote.get("change"),
-                    "change_pct": quote.get("change_percent"),
-                    "volume": quote.get("volume"),
-                    "high": quote.get("ohlc", {}).get("high"),
-                    "low": quote.get("ohlc", {}).get("low"),
-                    "open": quote.get("ohlc", {}).get("open"),
-                    "close": quote.get("ohlc", {}).get("close"),
+                    "ltp": None,
+                    "change": None,
+                    "change_pct": None,
+                    "change_percent": None,
+                    "volume": None,
+                    "high": None,
+                    "low": None,
+                    "open": None,
+                    "close": None,
+                    "error": "No quote data available",
                 })
+                continue
+
+            ltp = quote.get("last_price")
+            ohlc = quote.get("ohlc", {}) or {}
+            prev_close = ohlc.get("close") or quote.get("close")
+
+            change = quote.get("change")
+            if change is None:
+                change = quote.get("net_change")
+            if change is None and ltp is not None and prev_close not in (None, 0):
+                change = float(ltp) - float(prev_close)
+
+            change_pct = quote.get("change_percent")
+            if change_pct is None:
+                change_pct = quote.get("change_pct")
+            if change_pct is None and change is not None and prev_close not in (None, 0):
+                change_pct = (float(change) / float(prev_close)) * 100
+
+            quotes.append({
+                "symbol": symbol,
+                "ltp": round(float(ltp), 2) if ltp is not None else None,
+                "change": round(float(change), 2) if change is not None else None,
+                "change_pct": round(float(change_pct), 2) if change_pct is not None else None,
+                "change_percent": round(float(change_pct), 2) if change_pct is not None else None,
+                "volume": quote.get("volume"),
+                "high": ohlc.get("high"),
+                "low": ohlc.get("low"),
+                "open": ohlc.get("open"),
+                "close": prev_close,
+            })
         except Exception as e:
-            # Fallback for symbols without quotes
             quotes.append({
                 "symbol": symbol,
                 "ltp": None,
+                "change": None,
+                "change_pct": None,
+                "change_percent": None,
+                "volume": None,
+                "high": None,
+                "low": None,
+                "open": None,
+                "close": None,
                 "error": str(e)
             })
     

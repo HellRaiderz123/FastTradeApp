@@ -226,20 +226,38 @@ app = FastAPI(
 )
 
 # 🔐 CORS Middleware - Allow frontend requests
+raw_cors_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
+default_cors_origins = {
+    "http://localhost:3000",      # Frontend dev server
+    "http://localhost:5173",      # Vite dev server
+    "http://localhost:5174",      # Alternative Vite port
+    "http://localhost:8081",      # Expo/web dev server
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:8081",
+    "http://192.168.1.104:3000",
+    "http://192.168.1.104:5173",
+    "http://192.168.1.104:8081",
+}
+extra_cors_origins = {
+    origin.strip().rstrip("/")
+    for origin in raw_cors_origins.split(",")
+    if origin.strip()
+}
+cors_allowed_origins = sorted(
+    origin.rstrip("/") for origin in (default_cors_origins | extra_cors_origins)
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",      # Frontend dev server
-        "http://localhost:5173",      # Vite dev server
-        "http://localhost:5174",      # Alternative Vite port
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=cors_allowed_origins,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-logger.info("✅ CORS middleware enabled for frontend requests")
+logger.info("✅ CORS middleware enabled for frontend requests: %s", ", ".join(cors_allowed_origins))
 
 
 # 🔍 Request ID & Performance Tracking Middleware

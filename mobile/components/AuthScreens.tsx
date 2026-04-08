@@ -86,12 +86,12 @@ export function LoginScreen() {
                   <TextInput
                     value={apiBaseInput}
                     onChangeText={setApiBaseInput}
-                    placeholder="e.g. http://192.168.1.103:8000"
+                    placeholder="e.g. http://10.0.2.2:8000 or http://192.168.1.x:8000"
                     placeholderTextColor={Colors.textMuted}
                     style={styles.settingsInput}
                   />
                   <Text style={styles.settingsHelp}>
-                    🔍 Find your IP: Check your device's network settings or router. Default: {getDefaultApiBaseUrl()}
+                    Android emulator: `http://10.0.2.2:8000` • iPhone simulator: `http://127.0.0.1:8000` • Real phone: your PC&apos;s LAN IP. Default: {getDefaultApiBaseUrl()}
                   </Text>
                 </View>
 

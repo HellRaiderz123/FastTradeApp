@@ -9,21 +9,45 @@
     ],
     "ios": {
       "supportsTabletMode": true,
-      "bundleIdentifier": "com.fasttrade.app"
+      "bundleIdentifier": "com.fasttrade.app",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Allow FastTrade to recognize your speech for Jarvis voice commands.",
+        "NSMicrophoneUsageDescription": "Allow FastTrade to use the microphone for Jarvis voice commands.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.fasttrade.app"
+      "package": "com.fasttrade.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
-    ]
+      "expo-secure-store",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow FastTrade to use the microphone for Jarvis voice commands.",
+          "speechRecognitionPermission": "Allow FastTrade to recognize your speech for Jarvis voice commands.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3e227c6f-e553-4318-bc3b-516040b3843a"
+      }
+    }
   }
 }

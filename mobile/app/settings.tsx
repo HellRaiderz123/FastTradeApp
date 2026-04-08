@@ -255,7 +255,7 @@ export default function SettingsScreen() {
               onChangeText={setApiBaseInput}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="http://192.168.1.103:8000"
+              placeholder="http://10.0.2.2:8000 or http://192.168.1.x:8000"
               placeholderTextColor={Colors.textFaint}
               style={styles.urlInput}
             />
@@ -263,7 +263,7 @@ export default function SettingsScreen() {
               <PrimaryButton title="Save URL" onPress={handleSaveApiBase} loading={savingApiBase} style={styles.connectionButton} />
               <PrimaryButton title="Reset" onPress={handleResetApiBase} variant="ghost" style={styles.connectionButton} />
             </View>
-            <Text style={styles.connectionHint}>Tip: use `10.0.2.2` for Android emulator and `localhost` for iOS simulator.</Text>
+            <Text style={styles.connectionHint}>Tip: use `10.0.2.2` for Android emulator, `127.0.0.1`/`localhost` for iOS simulator, and your PC&apos;s LAN IP on a real phone.</Text>
             <InfoRow label="Active URL" value={getApiBaseUrl()} />
             <Text style={[styles.inputLabel, { marginTop: 10 }]}>AI Base URL</Text>
             <TextInput
@@ -271,7 +271,7 @@ export default function SettingsScreen() {
               onChangeText={setAiApiBaseInput}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="http://192.168.1.103:8000"
+              placeholder="http://10.0.2.2:8000 or http://192.168.1.x:8000"
               placeholderTextColor={Colors.textFaint}
               style={styles.urlInput}
             />
