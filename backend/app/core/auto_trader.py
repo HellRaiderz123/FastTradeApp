@@ -433,6 +433,7 @@ def _auto_enter_position(
         intent.status = "EXECUTED"
         intent.execution_result = exec_result
         intent.entry_credit = exec_result.get("entry_credit", 0)
+        intent.margin_required = exec_result.get("margin_required") or intent.margin_required
 
         # Force SQLAlchemy to detect in-place ticket mutations
         # (executor.execute stores leg prices + qty on ticket["legs"])
@@ -448,6 +449,7 @@ def _auto_enter_position(
              reason=f"Auto-entry: {strategy} via TA signal",
              details={
                  "entry_credit": exec_result.get("entry_credit", 0),
+                 "margin_required": exec_result.get("margin_required"),
                  "tp": tp, "sl": sl,
                  "mode": cfg.mode,
                  "confidence": engine_result.get("signal", {}).get("confidence", 0),
@@ -456,6 +458,7 @@ def _auto_enter_position(
 
         _notify(db, "notify_trade_executed", strategy, underlying, {
             "entry_credit": exec_result.get("entry_credit", 0),
+            "margin_required": exec_result.get("margin_required"),
             "tp": tp, "sl": sl,
             "mode": cfg.mode,
             "confidence": engine_result.get("signal", {}).get("confidence", 0),

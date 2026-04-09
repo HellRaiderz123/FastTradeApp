@@ -892,8 +892,10 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
     return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
   };
 
-  // Show margin only for Zerodha modes
   const isZerodhaMode = mode && String(mode).toUpperCase().includes('ZERODHA');
+  const isPaperMode = mode && String(mode).toUpperCase().includes('PAPER');
+  const showMargin = marginRequired > 0;
+  const marginLabel = isPaperMode ? 'Estimated Margin' : 'Margin Blocked';
 
   // Placeholder: update TP/SL/trailing for position (replace with real API call)
   const handleEditSubmit = async (e: React.FormEvent) => {
@@ -970,14 +972,14 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
         />
       )}
 
-      <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${isZerodhaMode && marginRequired > 0 ? 'grid-cols-2 md:grid-cols-7' : 'grid-cols-2 md:grid-cols-6'}`}>
+      <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${showMargin ? 'grid-cols-2 md:grid-cols-7' : 'grid-cols-2 md:grid-cols-6'}`}>
         <div>
           <p className="text-xs text-slate-400">Premium {isZerodhaMode ? 'Collected' : ''}</p>
           <p className="font-semibold text-white">₹{entryCredit.toLocaleString()}</p>
         </div>
-        {isZerodhaMode && marginRequired > 0 && (
+        {showMargin && (
           <div>
-            <p className="text-xs text-slate-400">Margin Blocked</p>
+            <p className="text-xs text-slate-400">{marginLabel}</p>
             <p className="font-semibold text-amber-400">₹{marginRequired.toLocaleString()}</p>
           </div>
         )}
@@ -1172,11 +1174,15 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
       <div className="flex justify-between items-center mt-3">
         <div className="flex items-center gap-3">
           <p className={`text-sm font-medium ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
-            {pnlPercentPremium === null ? '-' : `${isProfitable ? '+' : ''}${pnlPercentPremium.toFixed(2)}%`}
+            {pnlPercentMargin !== null
+              ? `${pnlPercentMargin >= 0 ? '+' : ''}${pnlPercentMargin.toFixed(2)}% ROM`
+              : pnlPercentPremium === null
+                ? '-'
+                : `${isProfitable ? '+' : ''}${pnlPercentPremium.toFixed(2)}%`}
           </p>
-          {isZerodhaMode && pnlPercentMargin !== null && (
-            <p className="text-xs font-medium text-amber-400">
-              ROM: {`${pnlPercentMargin >= 0 ? '+' : ''}${pnlPercentMargin.toFixed(2)}%`}
+          {pnlPercentMargin !== null && pnlPercentPremium !== null && (
+            <p className="text-xs font-medium text-slate-400">
+              Premium: {`${pnlPercentPremium >= 0 ? '+' : ''}${pnlPercentPremium.toFixed(2)}%`}
             </p>
           )}
         </div>

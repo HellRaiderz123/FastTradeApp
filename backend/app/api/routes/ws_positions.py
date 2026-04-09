@@ -180,15 +180,18 @@ async def ws_positions(websocket: WebSocket):
                         # Continue with last known MTM instead of crashing
                         mtm = getattr(intent, "pnl", 0)
 
-                    # Backfill margin for Zerodha modes if missing
+                    # Backfill margin for both Zerodha and paper positions if missing.
                     try:
-                        if is_zerodha_mode and zerodha_adapter:
-                            mr = getattr(intent, "margin_required", None)
-                            if (mr is None) or (float(mr or 0) <= 0):
+                        mr = getattr(intent, "margin_required", None)
+                        if (mr is None) or (float(mr or 0) <= 0):
+                            computed_mr = 0.0
+                            if is_zerodha_mode and zerodha_adapter:
                                 computed_mr = zerodha_adapter.calculate_margin_required(intent)
-                                if computed_mr and computed_mr > 0:
-                                    setattr(intent, "margin_required", float(computed_mr))
-                                    changed = True
+                            else:
+                                computed_mr = paper_adapter.estimate_margin_required(intent, getattr(intent, "entry_credit", None))
+                            if computed_mr and computed_mr > 0:
+                                setattr(intent, "margin_required", float(computed_mr))
+                                changed = True
                     except Exception as e:
                         logger.debug(f"⚠️  Margin computation failed for {intent.intent_id}: {e}")
                         # Non-blocking: margin computation failures should not break WS updates

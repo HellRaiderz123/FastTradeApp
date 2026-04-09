@@ -38,6 +38,12 @@ interface ExitConfig {
   tp_pct: number;
   tsl_pct: number;
   exit_mode: string;
+  require_htf_confirm?: boolean;
+  htf_timeframe?: string | null;
+  use_atr_sizing?: boolean;
+  atr_period?: number;
+  atr_multiplier?: number;
+  risk_per_trade_pct?: number;
 }
 
 interface Strategy {
@@ -79,6 +85,12 @@ interface ScanSignal {
   change_percent: number;
   indicators: Record<string, number>;
   conditions_met: number;
+  htf_confirmed?: boolean;
+  htf_timeframe?: string | null;
+  atr?: number | null;
+  suggested_quantity?: number;
+  capital_used?: number;
+  position_sizing?: string;
 }
 
 interface ScanResult {
@@ -177,6 +189,19 @@ const COMPARATORS = [
 
 const STRATEGY_TYPES = ['Equity Swing', 'Equity Intraday', 'Options Buying', 'Options Selling'];
 const TIMEFRAMES = ['1 Min', '5 Min', '15 Min', '1 Hour', 'Day'];
+const HTF_TIMEFRAME_OPTIONS = ['Auto', '5 Min', '15 Min', '1 Hour', 'Day'];
+const DEFAULT_EXIT_CONFIG: ExitConfig = {
+  sl_pct: 5,
+  tp_pct: 10,
+  tsl_pct: 0,
+  exit_mode: 'percentage',
+  require_htf_confirm: false,
+  htf_timeframe: 'Auto',
+  use_atr_sizing: false,
+  atr_period: 14,
+  atr_multiplier: 1.5,
+  risk_per_trade_pct: 1,
+};
 
 const TYPE_COLORS: Record<string, string> = {
   'Equity Swing': 'bg-blue-500/20 text-blue-300 border-blue-500/40',
@@ -239,9 +264,7 @@ const CreateScanner: React.FC = () => {
   const [editorTimeframe, setEditorTimeframe] = useState('1 Hour');
   const [editorUniverse, setEditorUniverse] = useState('NIFTY50');
   const [editorConditions, setEditorConditions] = useState<Condition[]>([]);
-  const [editorExit, setEditorExit] = useState<ExitConfig>({
-    sl_pct: 5, tp_pct: 10, tsl_pct: 0, exit_mode: 'percentage',
-  });
+  const [editorExit, setEditorExit] = useState<ExitConfig>(DEFAULT_EXIT_CONFIG);
   const [saving, setSaving] = useState(false);
 
   // Scan state
@@ -332,7 +355,7 @@ const CreateScanner: React.FC = () => {
     setEditorTimeframe(strategy.timeframe || '1 Hour');
     setEditorUniverse(strategy.universe || 'NIFTY50');
     setEditorConditions([...(strategy.entry_conditions || [])]);
-    setEditorExit({ ...(strategy.exit_config || { sl_pct: 5, tp_pct: 10, tsl_pct: 0, exit_mode: 'percentage' }) });
+    setEditorExit({ ...DEFAULT_EXIT_CONFIG, ...(strategy.exit_config || {}) });
     setEditorAutoScan(strategy.auto_scan_enabled || false);
     setEditorAutoQty(strategy.auto_amount || 10000);
     setEditing(true);
@@ -618,7 +641,7 @@ const CreateScanner: React.FC = () => {
       comparator: 'crosses_above',
       value: '30',
     }]);
-    setEditorExit({ sl_pct: 5, tp_pct: 10, tsl_pct: 0, exit_mode: 'percentage' });
+    setEditorExit(DEFAULT_EXIT_CONFIG);
     setEditorAutoScan(false);
     setEditorAutoQty(10000);
     setEditing(true);
@@ -769,7 +792,8 @@ const CreateScanner: React.FC = () => {
         direction: scanResult.direction,
         strategy_name: scanResult.strategy_name,
         exit_config: scanResult.exit_config,
-        quantity: 1,
+        quantity: signal.suggested_quantity || 1,
+        suggested_quantity: signal.suggested_quantity || 1,
       });
       const o = res.data.order;
       showToast(
@@ -1327,7 +1351,7 @@ const CreateScanner: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-4 text-xs">
+                  <div className="flex gap-4 text-xs mb-4">
                     {['percentage', 'points', 'pnl'].map(m => (
                       <label key={m} className="flex items-center gap-1.5 text-slate-400 cursor-pointer">
                         <input
@@ -1340,6 +1364,88 @@ const CreateScanner: React.FC = () => {
                         {m === 'percentage' ? '%Percentage' : m === 'points' ? 'Points' : 'PNL'}
                       </label>
                     ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 space-y-3">
+                      <label className="flex items-center justify-between gap-3 text-sm text-slate-300 cursor-pointer">
+                        <span className="font-medium">Multi-timeframe confirmation</span>
+                        <input
+                          type="checkbox"
+                          checked={!!editorExit.require_htf_confirm}
+                          onChange={e => setEditorExit({ ...editorExit, require_htf_confirm: e.target.checked })}
+                          className="accent-blue-500"
+                        />
+                      </label>
+                      <div>
+                        <label className="text-xs text-slate-400 block mb-1">Higher timeframe</label>
+                        <select
+                          value={editorExit.htf_timeframe || 'Auto'}
+                          onChange={e => setEditorExit({ ...editorExit, htf_timeframe: e.target.value })}
+                          disabled={!editorExit.require_htf_confirm}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                          title="Higher timeframe confirmation"
+                        >
+                          {HTF_TIMEFRAME_OPTIONS.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+                        </select>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Requires the same setup on the next higher timeframe before a signal is accepted.
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 space-y-3">
+                      <label className="flex items-center justify-between gap-3 text-sm text-slate-300 cursor-pointer">
+                        <span className="font-medium">ATR-based sizing</span>
+                        <input
+                          type="checkbox"
+                          checked={!!editorExit.use_atr_sizing}
+                          onChange={e => setEditorExit({ ...editorExit, use_atr_sizing: e.target.checked })}
+                          className="accent-blue-500"
+                        />
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="text-[11px] text-slate-400 block mb-1">Risk %</label>
+                          <input
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            value={editorExit.risk_per_trade_pct ?? 1}
+                            onChange={e => setEditorExit({ ...editorExit, risk_per_trade_pct: parseFloat(e.target.value) || 1 })}
+                            disabled={!editorExit.use_atr_sizing}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-slate-400 block mb-1">ATR period</label>
+                          <input
+                            type="number"
+                            min="2"
+                            step="1"
+                            value={editorExit.atr_period ?? 14}
+                            onChange={e => setEditorExit({ ...editorExit, atr_period: parseInt(e.target.value || '14', 10) || 14 })}
+                            disabled={!editorExit.use_atr_sizing}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-slate-400 block mb-1">ATR x</label>
+                          <input
+                            type="number"
+                            min="0.5"
+                            step="0.1"
+                            value={editorExit.atr_multiplier ?? 1.5}
+                            onChange={e => setEditorExit({ ...editorExit, atr_multiplier: parseFloat(e.target.value) || 1.5 })}
+                            disabled={!editorExit.use_atr_sizing}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Uses ATR to size quantity by risk instead of a flat allocation cap.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -1524,6 +1630,28 @@ const CreateScanner: React.FC = () => {
                                   <span key={k}>{k}: {v}</span>
                                 ))}
                               </div>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 mb-2 text-[10px]">
+                              {sig.htf_confirmed && sig.htf_timeframe && (
+                                <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                                  HTF: {sig.htf_timeframe}
+                                </span>
+                              )}
+                              {sig.position_sizing && (
+                                <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                                  {sig.position_sizing}
+                                </span>
+                              )}
+                              {sig.suggested_quantity ? (
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                                  Qty: {sig.suggested_quantity}
+                                </span>
+                              ) : null}
+                              {typeof sig.atr === 'number' ? (
+                                <span className="px-1.5 py-0.5 rounded bg-slate-700/70 text-slate-300 border border-slate-600">
+                                  ATR: {sig.atr}
+                                </span>
+                              ) : null}
                             </div>
                             <button
                               onClick={() => executeSignal(sig)}

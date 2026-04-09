@@ -84,3 +84,90 @@ def test_backtest_enters_next_bar_and_uses_intrabar_tp_exit():
     assert trade["entry_price"] == candles[3].open
     assert trade["exit_reason"] == "TP"
     assert trade["exit_price"] == round(candles[3].open * 1.05, 2)
+
+
+def test_backtest_requires_higher_timeframe_confirmation():
+    candles = [
+        _candle(0, 95, 97, 94, 95),
+        _candle(1, 96, 100, 95, 99),
+        _candle(2, 100, 106, 99, 105),
+        _candle(3, 102, 104, 101, 103),
+    ]
+    higher_tf_candles = [
+        _candle(0, 94, 98, 93, 97),
+        _candle(1, 97, 99, 95, 99),
+    ]
+
+    result = _backtest_symbol(
+        symbol="TEST",
+        conditions=[
+            {
+                "indicator": "CLOSE",
+                "params": {},
+                "comparator": "higher_than",
+                "value": "100",
+            }
+        ],
+        direction="BUY",
+        exit_config={
+            "sl_pct": 5.0,
+            "tp_pct": 5.0,
+            "tsl_pct": 0.0,
+            "require_htf_confirm": True,
+            "htf_timeframe": "Day",
+        },
+        candles=candles,
+        initial_capital=100000.0,
+        position_size_pct=10.0,
+        lookback=1,
+        date_attr="date",
+        timeframe="1 Hour",
+        htf_timeframe="Day",
+        htf_candles=higher_tf_candles,
+        htf_date_attr="date",
+    )
+
+    assert result["total_trades"] == 0
+
+
+def test_backtest_atr_sizing_normalizes_quantity_by_risk():
+    candles = [
+        _candle(0, 100, 102, 98, 100),
+        _candle(1, 100, 104, 96, 101),
+        _candle(2, 101, 106, 96, 103),
+        _candle(3, 100, 110, 99, 108),
+    ]
+
+    result = _backtest_symbol(
+        symbol="TEST",
+        conditions=[
+            {
+                "indicator": "CLOSE",
+                "params": {},
+                "comparator": "higher_than",
+                "value": "102",
+            }
+        ],
+        direction="BUY",
+        exit_config={
+            "sl_pct": 5.0,
+            "tp_pct": 0.0,
+            "tsl_pct": 0.0,
+            "use_atr_sizing": True,
+            "atr_period": 3,
+            "atr_multiplier": 2.0,
+            "risk_per_trade_pct": 1.0,
+        },
+        candles=candles,
+        initial_capital=100000.0,
+        position_size_pct=50.0,
+        lookback=2,
+        date_attr="date",
+    )
+
+    assert result["total_trades"] == 1
+    trade = result["trades"][0]
+
+    assert trade["position_sizing"] == "ATR"
+    assert trade["quantity"] == 68
+    assert trade["capital_used"] == 6800.0

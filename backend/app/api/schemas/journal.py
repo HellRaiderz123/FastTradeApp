@@ -38,6 +38,7 @@ class ExecutionIntentOut(BaseModel):
     exit_reason: Optional[str]
     
     entry_credit: Optional[float]
+    margin_required: Optional[float]
     execution_result: Optional[Any]  # Contains mode, orders, timestamps, etc.
     created_at: datetime
     closed_at: Optional[datetime]

@@ -140,7 +140,16 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
             ltp = quote.get("last_price")
             volume = quote.get("volume")
 
-        result = _scan_symbol(symbol, conditions, db, ltp=ltp, volume=volume, timeframe=timeframe or "Day")
+        result = _scan_symbol(
+            symbol,
+            conditions,
+            db,
+            ltp=ltp,
+            volume=volume,
+            timeframe=timeframe or "Day",
+            exit_config=exit_config,
+            capital_base=float(strategy.get("auto_amount", 10000.0) or 10000.0),
+        )
         if result:
             signals.append(result)
 
@@ -171,10 +180,16 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
         pass
 
     for sig in signals:
-        # Calculate quantity from amount and current price
+        # Calculate quantity from amount and current price (ATR-aware if configured)
         ltp = sig["ltp"]
-        quantity = max(1, int(auto_amount // ltp)) if ltp and ltp > 0 else 1
-        logger.info(f"    💰 Amount=₹{auto_amount:,.0f}, LTP=₹{ltp:.2f} → qty={quantity}")
+        quantity = int(sig.get("suggested_quantity") or (max(1, int(auto_amount // ltp)) if ltp and ltp > 0 else 1))
+        logger.info(
+            "    💰 Amount=₹%s, LTP=₹%.2f → qty=%s (%s sizing)",
+            f"{auto_amount:,.0f}",
+            ltp,
+            quantity,
+            sig.get("position_sizing", "FIXED"),
+        )
 
         history = record_scanner_signal(
             db,

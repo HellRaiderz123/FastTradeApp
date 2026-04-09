@@ -321,20 +321,24 @@ class TechnicalIndicators:
         closes: List[float],
         period: int = 14
     ) -> Optional[float]:
-        """Average True Range - measures volatility"""
+        """Average True Range - measures volatility."""
         try:
-            if len(highs) < period + 1:
+            if len(highs) < period or len(lows) < period or len(closes) < period:
                 return None
-            
+
             tr_list = []
-            for i in range(1, len(closes)):
+            for i in range(len(closes)):
                 high_low = highs[i] - lows[i]
-                high_close = abs(highs[i] - closes[i-1])
-                low_close = abs(lows[i] - closes[i-1])
-                tr = max(high_low, high_close, low_close)
+                if i == 0:
+                    tr = high_low
+                else:
+                    high_close = abs(highs[i] - closes[i - 1])
+                    low_close = abs(lows[i] - closes[i - 1])
+                    tr = max(high_low, high_close, low_close)
                 tr_list.append(tr)
-            
-            atr = sum(tr_list[-period:]) / period
+
+            window = tr_list[-period:]
+            atr = sum(window) / max(len(window), 1)
             return round(atr, 2)
         except Exception as e:
             logger.warning(f"Error calculating ATR: {e}")

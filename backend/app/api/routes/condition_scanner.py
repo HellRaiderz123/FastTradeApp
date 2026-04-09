@@ -80,7 +80,13 @@ class ExitConfig(BaseModel):
     tp_pct: float = 10.0
     tsl_pct: float = 0.0
     exit_mode: str = "percentage"  # percentage | points | pnl
-    exit_conditions: List[Condition] = []
+    exit_conditions: List[Condition] = Field(default_factory=list)
+    require_htf_confirm: bool = False
+    htf_timeframe: Optional[str] = None  # Auto-resolve to the next higher timeframe when omitted
+    use_atr_sizing: bool = False
+    atr_period: int = 14
+    atr_multiplier: float = 1.5
+    risk_per_trade_pct: float = 1.0
 
 class StrategyCreate(BaseModel):
     name: str
@@ -465,11 +471,14 @@ def _scan_symbol(
     ltp: Optional[float] = None,
     volume: Optional[int] = None,
     timeframe: str = "Day",
+    exit_config: Optional[Dict[str, Any]] = None,
+    capital_base: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Scan a single symbol against entry conditions using the strategy timeframe.
     Returns match info or None.
     """
+    exit_settings = dict(exit_config or {})
     candle_info = TIMEFRAME_CANDLE_MAP.get(timeframe, TIMEFRAME_CANDLE_MAP["Day"])
     CandleModel, date_attr, _table_label = candle_info
     date_col = getattr(CandleModel, date_attr)
@@ -496,24 +505,40 @@ def _scan_symbol(
         return None
 
     candles = candles[::-1]  # chronological
-
-    closes = [float(c.close) for c in candles]
-    highs = [float(c.high) for c in candles]
-    lows = [float(c.low) for c in candles]
-    volumes = [int(c.volume or 0) for c in candles]
-
-    # Append a lightweight live bar approximation if we have fresh quote data.
-    if ltp and ltp > 0:
-        last_close = closes[-1]
-        live_high = max(last_close, float(ltp))
-        live_low = min(last_close, float(ltp))
-        closes.append(float(ltp))
-        highs.append(live_high)
-        lows.append(live_low)
-        volumes.append(volume if volume and volume > 0 else volumes[-1])
+    closes, highs, lows, volumes = _build_price_series(candles, ltp=ltp, volume=volume)
 
     for cond in conditions:
         if not _evaluate_condition(cond, closes, highs, lows, volumes):
+            return None
+
+    htf_timeframe = None
+    htf_confirmed = True
+    if bool(exit_settings.get("require_htf_confirm")):
+        htf_timeframe = _resolve_confirmation_timeframe(timeframe, exit_settings)
+        if htf_timeframe:
+            htf_info = TIMEFRAME_CANDLE_MAP.get(htf_timeframe)
+            if not htf_info:
+                return None
+            HtfModel, htf_date_attr, _htf_table = htf_info
+            htf_date_col = getattr(HtfModel, htf_date_attr)
+            htf_default_limit = {
+                "1 Min": 600,
+                "5 Min": 600,
+                "15 Min": 600,
+                "1 Hour": 400,
+                "Day": 250,
+            }.get(htf_timeframe, 250)
+            htf_limit = max(htf_default_limit, required_bars + 20)
+            htf_candles = (
+                db.query(HtfModel)
+                .filter(HtfModel.symbol == symbol)
+                .order_by(desc(htf_date_col))
+                .limit(htf_limit)
+                .all()
+            )
+            htf_candles = htf_candles[::-1]
+            htf_confirmed = _conditions_match_on_candles(conditions, htf_candles)
+        if not htf_confirmed:
             return None
 
     indicator_values = {}
@@ -522,6 +547,16 @@ def _scan_symbol(
         val = _compute_indicator(ind, cond.get("params", {}), closes, highs, lows, volumes)
         if val is not None:
             indicator_values[ind] = round(val, 2)
+
+    atr_period = max(int(exit_settings.get("atr_period", 14) or 14), 2)
+    atr_value = TechnicalIndicators.calculate_atr(highs, lows, closes, atr_period) if len(closes) >= atr_period else None
+    sizing = _recommended_position_size(
+        entry_price=float(closes[-1]),
+        available_capital=float(capital_base or 10000.0),
+        position_size_pct=100.0,
+        exit_config=exit_settings,
+        atr_value=atr_value,
+    )
 
     change_pct = 0.0
     if len(closes) >= 2 and closes[-2] != 0:
@@ -535,6 +570,13 @@ def _scan_symbol(
         "conditions_met": len(conditions),
         "timeframe": timeframe,
         "timestamp": datetime.now().isoformat(),
+        "htf_confirmed": htf_confirmed,
+        "htf_timeframe": htf_timeframe,
+        "atr": round(float(atr_value), 2) if atr_value is not None else None,
+        "suggested_quantity": int(sizing["quantity"]),
+        "capital_used": float(sizing["capital_used"]),
+        "position_sizing": sizing["position_sizing"],
+        "risk_amount": float(sizing["risk_amount"]),
     }
 
 
@@ -1071,7 +1113,16 @@ async def scan_strategy(
             ltp = quote.get("last_price")
             volume = quote.get("volume")
 
-        result = _scan_symbol(symbol, conditions, db, ltp=ltp, volume=volume, timeframe=row.timeframe or "Day")
+        result = _scan_symbol(
+            symbol,
+            conditions,
+            db,
+            ltp=ltp,
+            volume=volume,
+            timeframe=row.timeframe or "Day",
+            exit_config=row.exit_config_dict,
+            capital_base=float(row.auto_amount or 10000.0),
+        )
         if result:
             signals.append(result)
 
@@ -1123,7 +1174,11 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
     strategy_name = body.get("strategy_name", "Condition Scanner")
     strategy_id = body.get("strategy_id")
     exit_config = body.get("exit_config", {})
-    quantity = body.get("quantity", 1)
+    quantity = body.get("quantity") or body.get("suggested_quantity") or 1
+    try:
+        quantity = max(1, int(float(quantity)))
+    except Exception:
+        quantity = 1
     timeframe = body.get("timeframe")
     universe = body.get("universe")
     signal_history_id = body.get("signal_history_id")
@@ -1314,6 +1369,128 @@ TIMEFRAME_CANDLE_MAP = {
     "Day":    (CandleDaily, "date",     "candles_daily"),
 }
 
+AUTO_HTF_TIMEFRAME_MAP = {
+    "1 Min": "5 Min",
+    "5 Min": "15 Min",
+    "15 Min": "1 Hour",
+    "1 Hour": "Day",
+    "Day": None,
+}
+
+
+def _resolve_confirmation_timeframe(timeframe: str, exit_config: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    config = exit_config or {}
+    requested = str(config.get("htf_timeframe") or "").strip()
+    if requested and requested.lower() not in {"auto", "higher", "next"}:
+        return requested if requested in TIMEFRAME_CANDLE_MAP else None
+    return AUTO_HTF_TIMEFRAME_MAP.get(timeframe)
+
+
+def _has_time_component(value: Any) -> bool:
+    return isinstance(value, datetime) or hasattr(value, "hour")
+
+
+def _marker_leq(left: Any, right: Any) -> bool:
+    if right is None:
+        return True
+
+    if _has_time_component(left) and _has_time_component(right):
+        return left <= right
+
+    if _has_time_component(left) and not _has_time_component(right):
+        return left.date() <= right
+
+    if not _has_time_component(left) and _has_time_component(right):
+        return left <= right.date()
+
+    return left <= right
+
+
+def _slice_candles_up_to(candles: List[Any], date_attr: str, reference_value: Any) -> List[Any]:
+    if reference_value is None:
+        return list(candles)
+    return [candle for candle in candles if _marker_leq(getattr(candle, date_attr), reference_value)]
+
+
+def _build_price_series(
+    candles: List[Any],
+    *,
+    ltp: Optional[float] = None,
+    volume: Optional[int] = None,
+) -> Tuple[List[float], List[float], List[float], List[int]]:
+    closes = [float(c.close) for c in candles]
+    highs = [float(c.high) for c in candles]
+    lows = [float(c.low) for c in candles]
+    volumes = [int(c.volume or 0) for c in candles]
+
+    if ltp and ltp > 0 and closes:
+        last_close = closes[-1]
+        closes.append(float(ltp))
+        highs.append(max(last_close, float(ltp)))
+        lows.append(min(last_close, float(ltp)))
+        volumes.append(volume if volume and volume > 0 else volumes[-1])
+
+    return closes, highs, lows, volumes
+
+
+def _conditions_match_on_candles(
+    conditions: List[dict],
+    candles: List[Any],
+    *,
+    ltp: Optional[float] = None,
+    volume: Optional[int] = None,
+) -> bool:
+    if len(candles) < _required_history_bars(conditions):
+        return False
+
+    closes, highs, lows, volumes = _build_price_series(candles, ltp=ltp, volume=volume)
+    return all(_evaluate_condition(cond, closes, highs, lows, volumes) for cond in conditions)
+
+
+def _recommended_position_size(
+    *,
+    entry_price: float,
+    available_capital: float,
+    position_size_pct: float,
+    exit_config: Dict[str, Any],
+    atr_value: Optional[float] = None,
+) -> Dict[str, Any]:
+    safe_entry = max(float(entry_price or 0.0), 0.01)
+    safe_capital = max(float(available_capital or 0.0), safe_entry)
+    capital_cap_pct = max(float(position_size_pct or 0.0), 0.0)
+    max_position_value = safe_capital * (capital_cap_pct / 100.0) if capital_cap_pct > 0 else safe_capital
+    max_position_value = max(max_position_value, safe_entry)
+    fixed_qty = max(1, int(max_position_value // safe_entry))
+
+    if not bool(exit_config.get("use_atr_sizing")):
+        capital_used = round(fixed_qty * safe_entry, 2)
+        return {
+            "quantity": fixed_qty,
+            "capital_used": capital_used,
+            "risk_amount": round(max_position_value, 2),
+            "atr": atr_value,
+            "atr_stop_distance": None,
+            "position_sizing": "FIXED",
+        }
+
+    risk_pct = max(float(exit_config.get("risk_per_trade_pct", 1.0) or 0.0), 0.1)
+    atr_multiplier = max(float(exit_config.get("atr_multiplier", 1.5) or 0.0), 0.1)
+    safe_atr = max(float(atr_value or 0.0), safe_entry * 0.002)
+    stop_distance = max(safe_atr * atr_multiplier, 0.05)
+    risk_amount = safe_capital * (risk_pct / 100.0)
+    qty_by_risk = max(1, int(risk_amount // stop_distance))
+    quantity = max(1, min(fixed_qty, qty_by_risk))
+    capital_used = round(quantity * safe_entry, 2)
+
+    return {
+        "quantity": quantity,
+        "capital_used": capital_used,
+        "risk_amount": round(risk_amount, 2),
+        "atr": round(float(atr_value or 0.0), 2) if atr_value is not None else None,
+        "atr_stop_distance": round(stop_distance, 2),
+        "position_sizing": "ATR",
+    }
+
 
 def _get_bar_date(candle, date_attr: str):
     """Normalise candle date/timestamp to a date object for comparisons."""
@@ -1436,16 +1613,27 @@ def _backtest_symbol(
     position_size_pct: float,
     lookback: int = 60,
     date_attr: str = "date",
+    timeframe: str = "Day",
+    htf_timeframe: Optional[str] = None,
+    htf_candles: Optional[List[Any]] = None,
+    htf_date_attr: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Replay candles for one symbol using more realistic Streak-like rules:
     - signal is confirmed on the current bar close
     - entry happens on the *next* bar open
     - SL/TP/TSL are checked against candle high/low intrabar
+    - optional higher-timeframe confirmation filters false positives
+    - optional ATR sizing normalizes risk per trade
     """
     sl_pct = max(float(exit_config.get("sl_pct", 5.0) or 0.0), 0.0) / 100
     tp_pct = max(float(exit_config.get("tp_pct", 10.0) or 0.0), 0.0) / 100
     tsl_pct = max(float(exit_config.get("tsl_pct", 0.0) or 0.0), 0.0) / 100
+    require_htf_confirm = bool(exit_config.get("require_htf_confirm"))
+    resolved_htf_timeframe = htf_timeframe or _resolve_confirmation_timeframe(timeframe, exit_config)
+    resolved_htf_date_attr = htf_date_attr or (TIMEFRAME_CANDLE_MAP.get(resolved_htf_timeframe, (None, "date", None))[1] if resolved_htf_timeframe else date_attr)
+    use_atr_sizing = bool(exit_config.get("use_atr_sizing"))
+    atr_period = max(int(exit_config.get("atr_period", 14) or 14), 2)
 
     trades: List[Dict[str, Any]] = []
     in_trade = False
@@ -1454,6 +1642,13 @@ def _backtest_symbol(
     entry_bar_idx = None
     peak_price = 0.0
     trough_price = float("inf")
+    entry_quantity = 1
+    entry_capital_used = 0.0
+    entry_risk_amount = 0.0
+    entry_atr = None
+    entry_atr_stop_distance = None
+    entry_position_sizing = "FIXED"
+    entry_htf_confirmed = not require_htf_confirm
 
     for i in range(lookback, len(candles)):
         c = candles[i]
@@ -1461,7 +1656,6 @@ def _backtest_symbol(
         bar_open = float(getattr(c, "open", c.close) or c.close)
         bar_high = float(getattr(c, "high", c.close) or c.close)
         bar_low = float(getattr(c, "low", c.close) or c.close)
-        bar_close = float(getattr(c, "close", c.close) or c.close)
 
         closes = [float(x.close) for x in candles[:i + 1]]
         highs = [float(x.high) for x in candles[:i + 1]]
@@ -1527,9 +1721,10 @@ def _backtest_symbol(
 
             if exit_reason and exit_price is not None:
                 if direction == "BUY":
-                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                    pnl_amount = (exit_price - entry_price) * entry_quantity
                 else:
-                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+                    pnl_amount = (entry_price - exit_price) * entry_quantity
+                pnl_pct = ((pnl_amount / entry_capital_used) * 100) if entry_capital_used > 0 else 0.0
 
                 trades.append({
                     "entry_date": entry_date,
@@ -1537,8 +1732,17 @@ def _backtest_symbol(
                     "entry_price": round(entry_price, 2),
                     "exit_price": round(exit_price, 2),
                     "pnl_pct": round(pnl_pct, 2),
+                    "pnl_amount": round(pnl_amount, 2),
                     "exit_reason": exit_reason,
                     "holding_bars": i - entry_bar_idx if entry_bar_idx is not None else 0,
+                    "quantity": entry_quantity,
+                    "capital_used": round(entry_capital_used, 2),
+                    "risk_amount": round(entry_risk_amount, 2),
+                    "atr": entry_atr,
+                    "atr_stop_distance": entry_atr_stop_distance,
+                    "position_sizing": entry_position_sizing,
+                    "htf_confirmed": entry_htf_confirmed,
+                    "htf_timeframe": resolved_htf_timeframe,
                 })
                 in_trade = False
                 continue
@@ -1550,32 +1754,68 @@ def _backtest_symbol(
                     all_met = False
                     break
 
+            htf_confirmed = not require_htf_confirm
+            if all_met and require_htf_confirm:
+                if resolved_htf_timeframe and htf_candles:
+                    reference_value = getattr(c, date_attr)
+                    htf_slice = _slice_candles_up_to(htf_candles, resolved_htf_date_attr, reference_value)
+                    htf_confirmed = _conditions_match_on_candles(conditions, htf_slice)
+                else:
+                    htf_confirmed = False
+                all_met = all_met and htf_confirmed
+
             # Enter on the next bar open after the signal bar closes.
             if all_met and i + 1 < len(candles):
                 next_bar = candles[i + 1]
                 next_open = float(getattr(next_bar, "open", next_bar.close) or next_bar.close)
+                atr_value = TechnicalIndicators.calculate_atr(highs, lows, closes, atr_period) if len(closes) >= atr_period else None
+                sizing = _recommended_position_size(
+                    entry_price=next_open,
+                    available_capital=initial_capital,
+                    position_size_pct=position_size_pct,
+                    exit_config=exit_config,
+                    atr_value=atr_value if use_atr_sizing else None,
+                )
+
                 in_trade = True
                 entry_price = next_open
                 entry_date = _bar_date_str(next_bar, date_attr)
                 entry_bar_idx = i + 1
                 peak_price = next_open
                 trough_price = next_open
+                entry_quantity = int(sizing["quantity"])
+                entry_capital_used = float(sizing["capital_used"])
+                entry_risk_amount = float(sizing["risk_amount"])
+                entry_atr = sizing.get("atr")
+                entry_atr_stop_distance = sizing.get("atr_stop_distance")
+                entry_position_sizing = str(sizing.get("position_sizing") or "FIXED")
+                entry_htf_confirmed = htf_confirmed
 
     if in_trade and len(candles) > 0:
         last = candles[-1]
         last_close = float(getattr(last, "close", 0.0) or 0.0)
         if direction == "BUY":
-            pnl_pct = ((last_close - entry_price) / entry_price) * 100
+            pnl_amount = (last_close - entry_price) * entry_quantity
         else:
-            pnl_pct = ((entry_price - last_close) / entry_price) * 100
+            pnl_amount = (entry_price - last_close) * entry_quantity
+        pnl_pct = ((pnl_amount / entry_capital_used) * 100) if entry_capital_used > 0 else 0.0
         trades.append({
             "entry_date": entry_date,
             "exit_date": _bar_date_str(last, date_attr),
             "entry_price": round(entry_price, 2),
             "exit_price": round(last_close, 2),
             "pnl_pct": round(pnl_pct, 2),
+            "pnl_amount": round(pnl_amount, 2),
             "exit_reason": "OPEN",
             "holding_bars": len(candles) - 1 - (entry_bar_idx or 0),
+            "quantity": entry_quantity,
+            "capital_used": round(entry_capital_used, 2),
+            "risk_amount": round(entry_risk_amount, 2),
+            "atr": entry_atr,
+            "atr_stop_distance": entry_atr_stop_distance,
+            "position_sizing": entry_position_sizing,
+            "htf_confirmed": entry_htf_confirmed,
+            "htf_timeframe": resolved_htf_timeframe,
         })
 
     total_trades = len(trades)
@@ -1637,6 +1877,8 @@ def _run_backtest_for_strategy_payload(
         )
     CandleModel, date_attr, table_label = candle_info
     date_col = getattr(CandleModel, date_attr)
+    resolved_htf_timeframe = _resolve_confirmation_timeframe(timeframe, exit_config)
+    htf_candle_info = TIMEFRAME_CANDLE_MAP.get(resolved_htf_timeframe) if resolved_htf_timeframe else None
 
     if req.end_date:
         end_date = datetime.strptime(req.end_date, "%Y-%m-%d").date()
@@ -1696,6 +1938,24 @@ def _run_backtest_for_strategy_payload(
 
         lookback = max(start_idx, min_bars)
 
+        htf_candles = None
+        htf_date_attr = None
+        if bool(exit_config.get("require_htf_confirm")) and htf_candle_info:
+            HtfModel, htf_date_attr, _htf_table = htf_candle_info
+            htf_date_col = getattr(HtfModel, htf_date_attr)
+            htf_window_start = lookback_start_dt.date() if htf_date_attr == "date" and hasattr(lookback_start_dt, "date") else lookback_start_dt
+            htf_window_end = end_dt.date() if htf_date_attr == "date" and hasattr(end_dt, "date") else end_dt
+            htf_candles = (
+                db.query(HtfModel)
+                .filter(
+                    HtfModel.symbol == symbol,
+                    htf_date_col >= htf_window_start,
+                    htf_date_col <= htf_window_end,
+                )
+                .order_by(htf_date_col)
+                .all()
+            )
+
         result = _backtest_symbol(
             symbol=symbol,
             conditions=conditions,
@@ -1706,6 +1966,10 @@ def _run_backtest_for_strategy_payload(
             position_size_pct=req.position_size_pct,
             lookback=lookback,
             date_attr=date_attr,
+            timeframe=timeframe,
+            htf_timeframe=resolved_htf_timeframe,
+            htf_candles=htf_candles,
+            htf_date_attr=htf_date_attr,
         )
 
         if result["total_trades"] > 0:
@@ -1751,14 +2015,15 @@ def _run_backtest_for_strategy_payload(
     capital = req.initial_capital
     curves = [{"date": str(start_date), "equity": capital}]
     for trade in all_trades:
-        trade_capital = capital * (req.position_size_pct / 100)
-        pnl_amount = trade_capital * (trade["pnl_pct"] / 100)
+        trade_capital = float(trade.get("capital_used") or (capital * (req.position_size_pct / 100)))
+        pnl_amount = float(trade.get("pnl_amount") or (trade_capital * (trade["pnl_pct"] / 100)))
         capital += pnl_amount
         curves.append({
             "date": trade.get("exit_date", trade.get("entry_date", "")),
             "equity": round(capital, 2),
             "symbol": trade.get("symbol", ""),
             "pnl_pct": trade["pnl_pct"],
+            "pnl_amount": round(pnl_amount, 2),
         })
 
     peak_equity = req.initial_capital
@@ -1816,6 +2081,12 @@ def _run_backtest_for_strategy_payload(
             "total_candles_used": total_candles_used,
             "data_source": f"{table_label} (real DB data)",
             "timeframe": timeframe,
+            "htf_confirmation": bool(exit_config.get("require_htf_confirm")),
+            "htf_timeframe": resolved_htf_timeframe,
+            "position_sizing": "ATR" if bool(exit_config.get("use_atr_sizing")) else "FIXED",
+            "risk_per_trade_pct": float(exit_config.get("risk_per_trade_pct", 1.0) or 1.0),
+            "atr_period": int(exit_config.get("atr_period", 14) or 14),
+            "atr_multiplier": float(exit_config.get("atr_multiplier", 1.5) or 1.5),
         },
         "equity_curve": curves,
         "per_symbol": [
@@ -1841,6 +2112,13 @@ def _run_backtest_for_strategy_payload(
                 "pnl_pct": t["pnl_pct"],
                 "exit_reason": t["exit_reason"],
                 "holding_bars": t.get("holding_bars", 0),
+                "quantity": t.get("quantity"),
+                "capital_used": t.get("capital_used"),
+                "pnl_amount": t.get("pnl_amount"),
+                "atr": t.get("atr"),
+                "position_sizing": t.get("position_sizing"),
+                "htf_confirmed": t.get("htf_confirmed"),
+                "htf_timeframe": t.get("htf_timeframe"),
             }
             for t in all_trades
         ],

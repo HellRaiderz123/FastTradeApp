@@ -201,6 +201,13 @@ def list_execution_intents(
             intent.last_mtm_at = now_ist()
             changed = True
 
+            current_margin = getattr(intent, "margin_required", None)
+            if current_margin is None or float(current_margin or 0) <= 0:
+                computed_margin = paper.estimate_margin_required(intent, getattr(intent, "entry_credit", None))
+                if computed_margin and computed_margin > 0:
+                    intent.margin_required = float(computed_margin)
+                    changed = True
+
         if changed:
             db.commit()
     except Exception:
