@@ -171,6 +171,13 @@ export const journalAPI = {
     api.get(`/journal/spread-analysis?limit=${limit}`),
   getSignalDiagnostics: (params?: { limit?: number; lookback_days?: number; underlying?: string; strategy?: string }) =>
     api.get('/journal/signal-diagnostics', { params }),
+  getTaxExport: (params?: { days?: number; format?: 'json' | 'csv' }) =>
+    api.get('/journal/tax-export', {
+      params,
+      responseType: params?.format === 'csv' ? 'blob' : 'json',
+    }),
+  getAuditTrail: (params?: { days?: number; limit?: number }) =>
+    api.get('/journal/audit-trail', { params }),
   deleteExecutionIntent: (intentId: string) =>
     api.delete(`/journal/execution-intents/${intentId}`),
   clearClosedTrades: () =>

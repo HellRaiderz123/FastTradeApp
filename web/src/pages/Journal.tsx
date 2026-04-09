@@ -164,6 +164,23 @@ const Journal: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const exportTaxCSV = async () => {
+    try {
+      const response = await journalAPI.getTaxExport({ days: 365, format: 'csv' });
+      const blob = new Blob([response.data], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `fasttrade_tax_export_${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('success', 'Tax export ready', 'Downloaded ITR-style trade CSV');
+    } catch (error) {
+      console.error('Failed to export tax CSV:', error);
+      showToast('error', 'Export failed', 'Could not generate tax export CSV');
+    }
+  };
+
   const handleClearClosed = async () => {
     if (!confirm('Delete all closed/completed trades? Open positions will be kept.')) return;
     setClearing(true);
@@ -334,6 +351,10 @@ const filteredEntries = entries.filter((entry) => {
             <button onClick={exportCSV} disabled={filteredEntries.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed">
               <Download className="w-4 h-4" />
               Export CSV
+            </button>
+            <button onClick={exportTaxCSV} className="flex items-center gap-2 px-4 py-2 bg-emerald-900/60 rounded-lg hover:bg-emerald-800/70 transition text-emerald-200">
+              <Download className="w-4 h-4" />
+              Tax CSV
             </button>
           </div>
         </div>

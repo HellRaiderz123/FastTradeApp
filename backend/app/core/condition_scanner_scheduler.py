@@ -204,6 +204,15 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
             execution_mode=mode,
         )
 
+        existing_status = str(getattr(history, "status", "") or "").upper() if history else ""
+        if existing_status in {"FILLED_PAPER", "PLACED_LIVE", "EXECUTED", "DRY_RUN"}:
+            logger.info(
+                "    ⏭️ Skipping duplicate auto-execute for %s (%s already recorded)",
+                sig["symbol"],
+                existing_status,
+            )
+            continue
+
         try:
             _auto_execute_signal(
                 history_id=history.id if history else None,

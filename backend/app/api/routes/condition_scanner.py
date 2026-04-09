@@ -87,6 +87,11 @@ class ExitConfig(BaseModel):
     atr_period: int = 14
     atr_multiplier: float = 1.5
     risk_per_trade_pct: float = 1.0
+    apply_slippage: bool = False
+    slippage_pct: float = 0.1
+    walk_forward_enabled: bool = False
+    walk_forward_windows: int = 3
+    walk_forward_train_pct: float = 67.0
 
 class StrategyCreate(BaseModel):
     name: str
@@ -1082,6 +1087,7 @@ async def delete_strategy(strategy_id: int, db: Session = Depends(get_db)):
 @router.post("/scan/{strategy_id}")
 async def scan_strategy(
     strategy_id: int,
+    auto_execute: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """
@@ -1133,6 +1139,7 @@ async def scan_strategy(
 
     mode = get_execution_mode()
     history_rows = []
+    history_pairs: List[Tuple[Dict[str, Any], Any]] = []
     for signal in signals:
         history = record_scanner_signal(
             db,
@@ -1143,11 +1150,43 @@ async def scan_strategy(
             timeframe=row.timeframe,
             universe=universe,
             signal_payload=signal,
-            auto_execute=bool(row.auto_scan_enabled),
+            auto_execute=bool(row.auto_scan_enabled or auto_execute),
             execution_mode=mode,
         )
         if history:
             history_rows.append(_serialize_signal_history(history))
+            history_pairs.append((signal, history))
+
+    auto_execute_requested = bool(auto_execute or row.auto_scan_enabled)
+    auto_executed = 0
+    auto_skipped = 0
+    if auto_execute_requested and history_pairs:
+        from app.core.condition_scanner_scheduler import _auto_execute_signal
+
+        for signal, history in history_pairs:
+            existing_status = str(getattr(history, "status", "") or "").upper()
+            if existing_status in {"FILLED_PAPER", "PLACED_LIVE", "EXECUTED", "DRY_RUN"}:
+                auto_skipped += 1
+                continue
+            try:
+                quantity = int(signal.get("suggested_quantity") or (max(1, int((float(row.auto_amount or 10000.0) or 10000.0) // max(float(signal.get("ltp") or 1.0), 1.0)))))
+                _auto_execute_signal(
+                    history_id=getattr(history, "id", None),
+                    strategy_id=strategy_id,
+                    symbol=signal["symbol"],
+                    ltp=float(signal.get("ltp") or 0.0),
+                    direction=row.direction,
+                    strategy_name=row.name,
+                    exit_config=row.exit_config_dict,
+                    timeframe=row.timeframe,
+                    universe=universe,
+                    quantity=max(1, quantity),
+                    mode=mode,
+                    db=db,
+                )
+                auto_executed += 1
+            except Exception as exec_err:
+                logger.error("Auto execute on scan failed for %s: %s", signal.get("symbol"), exec_err)
 
     return {
         "strategy_id": strategy_id,
@@ -1159,6 +1198,9 @@ async def scan_strategy(
         "matches_found": len(signals),
         "execution_mode": mode,
         "exit_config": row.exit_config_dict,
+        "auto_execute_requested": auto_execute_requested,
+        "auto_executed": auto_executed,
+        "auto_execute_skipped": auto_skipped,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -1500,6 +1542,20 @@ def _get_bar_date(candle, date_attr: str):
     return val                         # already a date
 
 
+def _apply_slippage(price: float, direction: str, *, is_entry: bool, slippage_pct: float) -> float:
+    safe_price = float(price or 0.0)
+    slip_ratio = max(float(slippage_pct or 0.0), 0.0) / 100.0
+    if safe_price <= 0 or slip_ratio <= 0:
+        return round(safe_price, 2)
+
+    side = str(direction or "BUY").upper()
+    if side == "BUY":
+        adjusted = safe_price * (1 + slip_ratio) if is_entry else safe_price * (1 - slip_ratio)
+    else:
+        adjusted = safe_price * (1 - slip_ratio) if is_entry else safe_price * (1 + slip_ratio)
+    return round(adjusted, 2)
+
+
 def _bar_date_str(candle, date_attr: str) -> str:
     """Normalise candle date/timestamp to a display string."""
     val = getattr(candle, date_attr)
@@ -1579,6 +1635,8 @@ class BacktestRequest(BaseModel):
     sl_pct: Optional[float] = None
     tp_pct: Optional[float] = None
     tsl_pct: Optional[float] = None
+    apply_slippage: Optional[bool] = None
+    slippage_pct: Optional[float] = None
 
 
 class StrategyDiscoveryRequest(BaseModel):
@@ -1634,6 +1692,8 @@ def _backtest_symbol(
     resolved_htf_date_attr = htf_date_attr or (TIMEFRAME_CANDLE_MAP.get(resolved_htf_timeframe, (None, "date", None))[1] if resolved_htf_timeframe else date_attr)
     use_atr_sizing = bool(exit_config.get("use_atr_sizing"))
     atr_period = max(int(exit_config.get("atr_period", 14) or 14), 2)
+    apply_slippage = bool(exit_config.get("apply_slippage"))
+    slippage_pct = max(float(exit_config.get("slippage_pct", 0.1) or 0.0), 0.0)
 
     trades: List[Dict[str, Any]] = []
     in_trade = False
@@ -1649,6 +1709,7 @@ def _backtest_symbol(
     entry_atr_stop_distance = None
     entry_position_sizing = "FIXED"
     entry_htf_confirmed = not require_htf_confirm
+    entry_raw_price = 0.0
 
     for i in range(lookback, len(candles)):
         c = candles[i]
@@ -1720,19 +1781,29 @@ def _backtest_symbol(
                         exit_reason, exit_price = max(candidates, key=lambda item: item[1])
 
             if exit_reason and exit_price is not None:
+                raw_exit_price = float(exit_price)
+                effective_exit_price = _apply_slippage(raw_exit_price, direction, is_entry=False, slippage_pct=slippage_pct) if apply_slippage else round(raw_exit_price, 2)
+                slippage_cost = 0.0
+                if apply_slippage:
+                    slippage_cost = (abs(entry_price - entry_raw_price) + abs(effective_exit_price - raw_exit_price)) * entry_quantity
+
                 if direction == "BUY":
-                    pnl_amount = (exit_price - entry_price) * entry_quantity
+                    pnl_amount = (effective_exit_price - entry_price) * entry_quantity
                 else:
-                    pnl_amount = (entry_price - exit_price) * entry_quantity
+                    pnl_amount = (entry_price - effective_exit_price) * entry_quantity
                 pnl_pct = ((pnl_amount / entry_capital_used) * 100) if entry_capital_used > 0 else 0.0
 
                 trades.append({
                     "entry_date": entry_date,
                     "exit_date": bar_date,
                     "entry_price": round(entry_price, 2),
-                    "exit_price": round(exit_price, 2),
+                    "entry_price_raw": round(entry_raw_price, 2),
+                    "exit_price": round(effective_exit_price, 2),
+                    "exit_price_raw": round(raw_exit_price, 2),
                     "pnl_pct": round(pnl_pct, 2),
                     "pnl_amount": round(pnl_amount, 2),
+                    "slippage_cost": round(slippage_cost, 2),
+                    "slippage_pct": round(slippage_pct, 3) if apply_slippage else 0.0,
                     "exit_reason": exit_reason,
                     "holding_bars": i - entry_bar_idx if entry_bar_idx is not None else 0,
                     "quantity": entry_quantity,
@@ -1778,7 +1849,8 @@ def _backtest_symbol(
                 )
 
                 in_trade = True
-                entry_price = next_open
+                entry_raw_price = next_open
+                entry_price = _apply_slippage(next_open, direction, is_entry=True, slippage_pct=slippage_pct) if apply_slippage else round(next_open, 2)
                 entry_date = _bar_date_str(next_bar, date_attr)
                 entry_bar_idx = i + 1
                 peak_price = next_open
@@ -1793,19 +1865,27 @@ def _backtest_symbol(
 
     if in_trade and len(candles) > 0:
         last = candles[-1]
-        last_close = float(getattr(last, "close", 0.0) or 0.0)
+        raw_last_close = float(getattr(last, "close", 0.0) or 0.0)
+        effective_last_close = _apply_slippage(raw_last_close, direction, is_entry=False, slippage_pct=slippage_pct) if apply_slippage else round(raw_last_close, 2)
+        slippage_cost = 0.0
+        if apply_slippage:
+            slippage_cost = (abs(entry_price - entry_raw_price) + abs(effective_last_close - raw_last_close)) * entry_quantity
         if direction == "BUY":
-            pnl_amount = (last_close - entry_price) * entry_quantity
+            pnl_amount = (effective_last_close - entry_price) * entry_quantity
         else:
-            pnl_amount = (entry_price - last_close) * entry_quantity
+            pnl_amount = (entry_price - effective_last_close) * entry_quantity
         pnl_pct = ((pnl_amount / entry_capital_used) * 100) if entry_capital_used > 0 else 0.0
         trades.append({
             "entry_date": entry_date,
             "exit_date": _bar_date_str(last, date_attr),
             "entry_price": round(entry_price, 2),
-            "exit_price": round(last_close, 2),
+            "entry_price_raw": round(entry_raw_price, 2),
+            "exit_price": round(effective_last_close, 2),
+            "exit_price_raw": round(raw_last_close, 2),
             "pnl_pct": round(pnl_pct, 2),
             "pnl_amount": round(pnl_amount, 2),
+            "slippage_cost": round(slippage_cost, 2),
+            "slippage_pct": round(slippage_pct, 3) if apply_slippage else 0.0,
             "exit_reason": "OPEN",
             "holding_bars": len(candles) - 1 - (entry_bar_idx or 0),
             "quantity": entry_quantity,
@@ -1829,6 +1909,7 @@ def _backtest_symbol(
     max_win = max((t["pnl_pct"] for t in trades), default=0)
     max_loss = min((t["pnl_pct"] for t in trades), default=0)
     avg_holding = sum(t.get("holding_bars", 0) for t in trades) / total_trades if total_trades > 0 else 0
+    total_slippage_cost = sum(float(t.get("slippage_cost") or 0.0) for t in trades)
 
     return {
         "symbol": symbol,
@@ -1843,6 +1924,7 @@ def _backtest_symbol(
         "max_win_pct": round(max_win, 2),
         "max_loss_pct": round(max_loss, 2),
         "avg_holding_bars": round(avg_holding, 1),
+        "total_slippage_cost": round(total_slippage_cost, 2),
         "trades": trades,
     }
 
@@ -1868,6 +1950,10 @@ def _run_backtest_for_strategy_payload(
         exit_config["tp_pct"] = req.tp_pct
     if req.tsl_pct is not None:
         exit_config["tsl_pct"] = req.tsl_pct
+    if req.apply_slippage is not None:
+        exit_config["apply_slippage"] = req.apply_slippage
+    if req.slippage_pct is not None:
+        exit_config["slippage_pct"] = req.slippage_pct
 
     candle_info = TIMEFRAME_CANDLE_MAP.get(timeframe)
     if not candle_info:
@@ -2011,6 +2097,7 @@ def _run_backtest_for_strategy_payload(
     total_trades = len(all_trades)
     winners = [t for t in all_trades if t["pnl_pct"] > 0]
     losers = [t for t in all_trades if t["pnl_pct"] <= 0]
+    total_slippage_cost = sum(float(t.get("slippage_cost") or 0.0) for t in all_trades)
 
     capital = req.initial_capital
     curves = [{"date": str(start_date), "equity": capital}]
@@ -2052,6 +2139,8 @@ def _run_backtest_for_strategy_payload(
     else:
         sharpe = 0
 
+    walk_forward = _run_walk_forward_analysis(strategy, req, db, start_date, end_date)
+
     return {
         "strategy_id": strategy_id,
         "strategy_name": strategy.get("name", ""),
@@ -2087,7 +2176,13 @@ def _run_backtest_for_strategy_payload(
             "risk_per_trade_pct": float(exit_config.get("risk_per_trade_pct", 1.0) or 1.0),
             "atr_period": int(exit_config.get("atr_period", 14) or 14),
             "atr_multiplier": float(exit_config.get("atr_multiplier", 1.5) or 1.5),
+            "slippage_enabled": bool(exit_config.get("apply_slippage")),
+            "slippage_pct": float(exit_config.get("slippage_pct", 0.0) or 0.0),
+            "total_slippage_cost": round(total_slippage_cost, 2),
+            "walk_forward_enabled": bool(exit_config.get("walk_forward_enabled")),
+            "walk_forward_pass_rate_pct": float((walk_forward or {}).get("pass_rate_pct", 0.0) or 0.0),
         },
+        "walk_forward": walk_forward,
         "equity_curve": curves,
         "per_symbol": [
             {
@@ -2122,6 +2217,114 @@ def _run_backtest_for_strategy_payload(
             }
             for t in all_trades
         ],
+    }
+
+
+def _run_walk_forward_analysis(
+    strategy: Dict[str, Any],
+    req: BacktestRequest,
+    db: Session,
+    start_date: dt_date,
+    end_date: dt_date,
+) -> Dict[str, Any]:
+    exit_config = dict(strategy.get("exit_config", {}) or {})
+    if not bool(exit_config.get("walk_forward_enabled")):
+        return {
+            "enabled": False,
+            "train_pct": float(exit_config.get("walk_forward_train_pct", 67.0) or 67.0),
+            "windows": [],
+            "pass_rate_pct": 0.0,
+            "consistency_score": 0.0,
+            "avg_out_of_sample_return_pct": 0.0,
+        }
+
+    requested_windows = max(int(exit_config.get("walk_forward_windows", 3) or 3), 1)
+    train_pct = min(max(float(exit_config.get("walk_forward_train_pct", 67.0) or 67.0), 50.0), 90.0)
+    total_days = max((end_date - start_date).days + 1, 1)
+    segment_days = max(total_days // requested_windows, 14)
+
+    wf_strategy = dict(strategy)
+    wf_exit = dict(exit_config)
+    wf_exit["walk_forward_enabled"] = False
+    wf_strategy["exit_config"] = wf_exit
+
+    windows: List[Dict[str, Any]] = []
+    cursor = start_date
+    while cursor <= end_date and len(windows) < requested_windows:
+        segment_end = min(end_date, cursor + timedelta(days=segment_days - 1))
+        span_days = max((segment_end - cursor).days + 1, 1)
+        train_days = max(1, int(span_days * (train_pct / 100.0)))
+        if train_days >= span_days:
+            train_days = span_days - 1
+        if train_days <= 0:
+            break
+
+        train_start = cursor
+        train_end = train_start + timedelta(days=train_days - 1)
+        test_start = train_end + timedelta(days=1)
+        test_end = segment_end
+        if test_start > test_end:
+            break
+
+        train_req = BacktestRequest(
+            start_date=str(train_start),
+            end_date=str(train_end),
+            initial_capital=req.initial_capital,
+            position_size_pct=req.position_size_pct,
+            max_open_trades=req.max_open_trades,
+            sl_pct=req.sl_pct,
+            tp_pct=req.tp_pct,
+            tsl_pct=req.tsl_pct,
+            apply_slippage=req.apply_slippage,
+            slippage_pct=req.slippage_pct,
+        )
+        test_req = BacktestRequest(
+            start_date=str(test_start),
+            end_date=str(test_end),
+            initial_capital=req.initial_capital,
+            position_size_pct=req.position_size_pct,
+            max_open_trades=req.max_open_trades,
+            sl_pct=req.sl_pct,
+            tp_pct=req.tp_pct,
+            tsl_pct=req.tsl_pct,
+            apply_slippage=req.apply_slippage,
+            slippage_pct=req.slippage_pct,
+        )
+
+        train_result = _run_backtest_for_strategy_payload(wf_strategy, train_req, db)
+        test_result = _run_backtest_for_strategy_payload(wf_strategy, test_req, db)
+        train_summary = train_result.get("summary") or {}
+        test_summary = test_result.get("summary") or {}
+        out_return = float(test_summary.get("total_return_pct") or 0.0)
+        train_return = float(train_summary.get("total_return_pct") or 0.0)
+        passed = bool((test_summary.get("total_trades") or 0) > 0 and out_return >= 0)
+
+        windows.append({
+            "train_start": str(train_start),
+            "train_end": str(train_end),
+            "test_start": str(test_start),
+            "test_end": str(test_end),
+            "train_return_pct": round(train_return, 2),
+            "out_of_sample_return_pct": round(out_return, 2),
+            "out_of_sample_trades": int(test_summary.get("total_trades") or 0),
+            "out_of_sample_win_rate": float(test_summary.get("win_rate") or 0.0),
+            "max_drawdown_pct": float(test_summary.get("max_drawdown_pct") or 0.0),
+            "passed": passed,
+            "overfit_gap_pct": round(train_return - out_return, 2),
+        })
+        cursor = segment_end + timedelta(days=1)
+
+    pass_count = sum(1 for row in windows if row.get("passed"))
+    pass_rate_pct = (pass_count / len(windows) * 100.0) if windows else 0.0
+    avg_oos_return = sum(float(row.get("out_of_sample_return_pct") or 0.0) for row in windows) / len(windows) if windows else 0.0
+
+    return {
+        "enabled": True,
+        "train_pct": round(train_pct, 2),
+        "windows": windows,
+        "pass_rate_pct": round(pass_rate_pct, 1),
+        "consistency_score": round(pass_rate_pct, 1),
+        "avg_out_of_sample_return_pct": round(avg_oos_return, 2),
     }
 
 

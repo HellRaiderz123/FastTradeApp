@@ -1,8 +1,12 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
-from typing import List, Optional
+import csv
+import io
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.db.queries import get_recent_strategy_runs
@@ -14,6 +18,9 @@ from app.services.zerodha_ticker import subscribe_symbols as subscribe_to_ticker
 from app.core.spreads import detect_spreads
 from app.core.exit.broker_reconcile import reconcile_broker_positions
 from app.core.learning.signal_diagnostics import compute_signal_diagnostics
+from app.core.risk.cost_calculator import estimate_round_trip_costs
+from app.db.models_auto_trader import AutoTraderLog
+from app.db.models_scanner_signal import ScannerSignalHistory
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +33,69 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _resolve_execution_mode(intent: Any) -> str:
+    try:
+        payload = getattr(intent, "execution_result_dict", None)
+        if isinstance(payload, dict):
+            mode = payload.get("mode")
+            if mode:
+                return str(mode)
+    except Exception:
+        pass
+
+    payload = getattr(intent, "execution_result", None)
+    if isinstance(payload, dict):
+        return str(payload.get("mode") or "UNKNOWN")
+    return "UNKNOWN"
+
+
+def _build_tax_export_row(intent: Any) -> Dict[str, Any]:
+    ticket = getattr(intent, "ticket_dict", None)
+    if not isinstance(ticket, dict):
+        raw_ticket = getattr(intent, "ticket", {})
+        ticket = raw_ticket if isinstance(raw_ticket, dict) else {}
+
+    ticket_qty = max(1, int(ticket.get("lot_size", 1) or 1) * int(ticket.get("lots", 1) or 1))
+    legs_for_costs: List[Dict[str, Any]] = []
+    for leg in ticket.get("legs", []):
+        price = float(leg.get("price", 0.0) or 0.0)
+        if price <= 0:
+            continue
+        leg_qty = int(leg.get("qty") or leg.get("quantity") or ticket_qty or 1)
+        legs_for_costs.append({
+            "side": str(leg.get("side", "BUY")).upper(),
+            "price": price,
+            "quantity": max(1, leg_qty),
+        })
+
+    estimated_charges = estimate_round_trip_costs(legs_for_costs) if legs_for_costs else 0.0
+    gross_pnl = round(float(getattr(intent, "pnl", 0.0) or 0.0), 2)
+    net_pnl = round(gross_pnl - estimated_charges, 2)
+    entry_credit = round(float(getattr(intent, "entry_credit", 0.0) or 0.0), 2)
+
+    created_at = getattr(intent, "created_at", None)
+    closed_at = getattr(intent, "closed_at", None)
+    holding_days = None
+    if created_at and closed_at and hasattr(closed_at, "date") and hasattr(created_at, "date"):
+        holding_days = max((closed_at.date() - created_at.date()).days, 0)
+
+    return {
+        "intent_id": getattr(intent, "intent_id", ""),
+        "opened_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+        "closed_at": closed_at.isoformat() if hasattr(closed_at, "isoformat") else str(closed_at or ""),
+        "strategy": getattr(intent, "strategy", ""),
+        "underlying": getattr(intent, "underlying", ""),
+        "status": getattr(intent, "status", ""),
+        "exit_reason": getattr(intent, "exit_reason", "") or "",
+        "execution_mode": _resolve_execution_mode(intent),
+        "entry_credit": entry_credit,
+        "gross_pnl": gross_pnl,
+        "estimated_charges": round(float(estimated_charges), 2),
+        "net_pnl": net_pnl,
+        "holding_days": holding_days,
+    }
 
 
 def _sync_zerodha_live_positions(db: Session) -> List[ExecutionIntent]:
@@ -305,6 +375,124 @@ def signal_diagnostics(
         underlying=underlying,
         strategy=strategy,
     )
+
+
+@router.get("/tax-export")
+def tax_export(
+    days: int = Query(365, ge=1, le=3650),
+    format: str = Query("json", pattern="^(json|csv)$"),
+    db: Session = Depends(get_db),
+):
+    """Return closed-trade tax export rows with estimated charges and net P&L."""
+    cutoff = now_ist() - timedelta(days=max(days - 1, 0))
+    rows = (
+        db.query(ExecutionIntent)
+        .filter(ExecutionIntent.closed_at.isnot(None), ExecutionIntent.closed_at >= cutoff)
+        .order_by(ExecutionIntent.closed_at.desc())
+        .all()
+    )
+
+    payload_rows = [_build_tax_export_row(intent) for intent in rows]
+    summary = {
+        "trades": len(payload_rows),
+        "gross_pnl": round(sum(float(row.get("gross_pnl") or 0.0) for row in payload_rows), 2),
+        "estimated_charges": round(sum(float(row.get("estimated_charges") or 0.0) for row in payload_rows), 2),
+        "net_pnl": round(sum(float(row.get("net_pnl") or 0.0) for row in payload_rows), 2),
+    }
+
+    if format.lower() == "csv":
+        output = io.StringIO()
+        fieldnames = [
+            "intent_id", "opened_at", "closed_at", "strategy", "underlying",
+            "status", "exit_reason", "execution_mode", "entry_credit",
+            "gross_pnl", "estimated_charges", "net_pnl", "holding_days",
+        ]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in payload_rows:
+            writer.writerow(row)
+
+        filename = f"fasttrade_tax_export_{now_ist().date().isoformat()}.csv"
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    return {"rows": payload_rows, "summary": summary, "count": len(payload_rows), "days": days}
+
+
+@router.get("/audit-trail")
+def audit_trail(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(200, ge=10, le=1000),
+    db: Session = Depends(get_db),
+):
+    """Unified audit trail across journal trades, scanner signals, and auto-trader actions."""
+    cutoff = now_ist() - timedelta(days=max(days - 1, 0))
+    rows: List[Dict[str, Any]] = []
+
+    intents = (
+        db.query(ExecutionIntent)
+        .filter(ExecutionIntent.created_at >= cutoff)
+        .order_by(ExecutionIntent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for intent in intents:
+        rows.append({
+            "timestamp": intent.closed_at or intent.created_at,
+            "source": "JOURNAL",
+            "event": intent.status,
+            "symbol": intent.underlying,
+            "strategy": intent.strategy,
+            "intent_id": intent.intent_id,
+            "details": {
+                "pnl": intent.pnl,
+                "entry_credit": intent.entry_credit,
+                "mode": _resolve_execution_mode(intent),
+                "exit_reason": intent.exit_reason,
+            },
+        })
+
+    signals = (
+        db.query(ScannerSignalHistory)
+        .filter(ScannerSignalHistory.created_at >= cutoff)
+        .order_by(ScannerSignalHistory.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for signal in signals:
+        rows.append({
+            "timestamp": signal.executed_at or signal.last_seen_at or signal.created_at,
+            "source": "SCANNER",
+            "event": signal.status,
+            "symbol": signal.symbol,
+            "strategy": signal.strategy_name,
+            "intent_id": signal.order_id,
+            "details": signal.execution_payload_dict or signal.signal_payload_dict,
+        })
+
+    logs = (
+        db.query(AutoTraderLog)
+        .filter(AutoTraderLog.created_at >= cutoff)
+        .order_by(AutoTraderLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    for log in logs:
+        rows.append({
+            "timestamp": log.created_at,
+            "source": "AUTO_TRADER",
+            "event": log.action,
+            "symbol": log.underlying,
+            "strategy": log.strategy,
+            "intent_id": log.intent_id,
+            "details": log.details,
+        })
+
+    rows.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
+    return {"rows": rows[:limit], "count": min(len(rows), limit), "days": days}
 
 
 @router.delete("/execution-intents/closed")

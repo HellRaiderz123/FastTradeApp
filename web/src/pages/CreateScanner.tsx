@@ -44,6 +44,11 @@ interface ExitConfig {
   atr_period?: number;
   atr_multiplier?: number;
   risk_per_trade_pct?: number;
+  apply_slippage?: boolean;
+  slippage_pct?: number;
+  walk_forward_enabled?: boolean;
+  walk_forward_windows?: number;
+  walk_forward_train_pct?: number;
 }
 
 interface Strategy {
@@ -158,6 +163,20 @@ interface BacktestResult {
   equity_curve: { date: string; equity: number; symbol?: string; pnl_pct?: number }[];
   per_symbol: BacktestSymbolResult[];
   all_trades: BacktestTrade[];
+  walk_forward?: {
+    enabled: boolean;
+    pass_rate_pct?: number;
+    avg_out_of_sample_return_pct?: number;
+    windows?: Array<{
+      train_start: string;
+      train_end: string;
+      test_start: string;
+      test_end: string;
+      out_of_sample_return_pct: number;
+      out_of_sample_trades: number;
+      passed: boolean;
+    }>;
+  };
 }
 
 interface BrokerageConfig {
@@ -201,6 +220,11 @@ const DEFAULT_EXIT_CONFIG: ExitConfig = {
   atr_period: 14,
   atr_multiplier: 1.5,
   risk_per_trade_pct: 1,
+  apply_slippage: false,
+  slippage_pct: 0.1,
+  walk_forward_enabled: false,
+  walk_forward_windows: 3,
+  walk_forward_train_pct: 67,
 };
 
 const TYPE_COLORS: Record<string, string> = {
@@ -767,10 +791,14 @@ const CreateScanner: React.FC = () => {
     setScanResult(null);
     setShowBacktestPanel(false);
     try {
-      const res = await api.post(`/condition-scanner/scan/${selectedId}`);
+      const res = await api.post(`/condition-scanner/scan/${selectedId}`, null, {
+        params: { auto_execute: editorAutoScan },
+      });
       setScanResult(res.data);
       if (res.data.matches_found === 0) {
         showToast('info', 'No signals found in current scan');
+      } else if (res.data.auto_executed > 0) {
+        showToast('success', `${res.data.matches_found} signal(s) found • ${res.data.auto_executed} auto-executed`);
       } else {
         showToast('success', `${res.data.matches_found} signal(s) found!`);
       }
@@ -790,7 +818,10 @@ const CreateScanner: React.FC = () => {
       const res = await api.post('/condition-scanner/execute-signal', {
         symbol: signal.symbol,
         direction: scanResult.direction,
+        strategy_id: scanResult.strategy_id,
         strategy_name: scanResult.strategy_name,
+        timeframe: editorTimeframe,
+        universe: editorUniverse,
         exit_config: scanResult.exit_config,
         quantity: signal.suggested_quantity || 1,
         suggested_quantity: signal.suggested_quantity || 1,
@@ -822,6 +853,8 @@ const CreateScanner: React.FC = () => {
         initial_capital: 100000,
         position_size_pct: 10,
         max_open_trades: 5,
+        apply_slippage: !!editorExit.apply_slippage,
+        slippage_pct: editorExit.slippage_pct ?? 0,
       });
       const resultData = res.data;
       if (!resultData.summary || !resultData.all_trades) {
@@ -1446,6 +1479,76 @@ const CreateScanner: React.FC = () => {
                         Uses ATR to size quantity by risk instead of a flat allocation cap.
                       </p>
                     </div>
+
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 space-y-3">
+                      <label className="flex items-center justify-between gap-3 text-sm text-slate-300 cursor-pointer">
+                        <span className="font-medium">Slippage model</span>
+                        <input
+                          type="checkbox"
+                          checked={!!editorExit.apply_slippage}
+                          onChange={e => setEditorExit({ ...editorExit, apply_slippage: e.target.checked })}
+                          className="accent-blue-500"
+                        />
+                      </label>
+                      <div>
+                        <label className="text-[11px] text-slate-400 block mb-1">Slippage % per side</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.05"
+                          value={editorExit.slippage_pct ?? 0.1}
+                          onChange={e => setEditorExit({ ...editorExit, slippage_pct: parseFloat(e.target.value) || 0 })}
+                          disabled={!editorExit.apply_slippage}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Applies an unfavourable fill on entry and exit to make backtest results closer to live trading.
+                      </p>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 space-y-3">
+                      <label className="flex items-center justify-between gap-3 text-sm text-slate-300 cursor-pointer">
+                        <span className="font-medium">Walk-forward validation</span>
+                        <input
+                          type="checkbox"
+                          checked={!!editorExit.walk_forward_enabled}
+                          onChange={e => setEditorExit({ ...editorExit, walk_forward_enabled: e.target.checked })}
+                          className="accent-blue-500"
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[11px] text-slate-400 block mb-1">Windows</label>
+                          <input
+                            type="number"
+                            min="2"
+                            max="12"
+                            step="1"
+                            value={editorExit.walk_forward_windows ?? 3}
+                            onChange={e => setEditorExit({ ...editorExit, walk_forward_windows: parseInt(e.target.value || '3', 10) || 3 })}
+                            disabled={!editorExit.walk_forward_enabled}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-slate-400 block mb-1">Train %</label>
+                          <input
+                            type="number"
+                            min="50"
+                            max="90"
+                            step="1"
+                            value={editorExit.walk_forward_train_pct ?? 67}
+                            onChange={e => setEditorExit({ ...editorExit, walk_forward_train_pct: parseFloat(e.target.value) || 67 })}
+                            disabled={!editorExit.walk_forward_enabled}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Splits the backtest period into train/test windows to highlight unstable or overfit strategies.
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -1733,10 +1836,15 @@ const CreateScanner: React.FC = () => {
                         </>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 mb-3 text-[9px]">
+                    <div className="flex items-center gap-2 mb-3 text-[9px] flex-wrap">
                       <span className="bg-green-500/10 text-green-400 px-1.5 py-0.5 rounded">
                         {(backtestResult.summary as any).data_source || 'Real DB data'}
                       </span>
+                      {(backtestResult.summary as any).slippage_enabled && (
+                        <span className="bg-amber-500/10 text-amber-300 px-1.5 py-0.5 rounded">
+                          Slippage: {(backtestResult.summary as any).slippage_pct || 0}%
+                        </span>
+                      )}
                       {(backtestResult.summary as any).total_candles_used > 0 && (
                         <span className="text-slate-500">
                           {formatNumber((backtestResult.summary as any).total_candles_used)} candles
@@ -1833,6 +1941,31 @@ const CreateScanner: React.FC = () => {
                         <span className="text-white">{displayedBacktestResult!.summary.symbols_traded}/{displayedBacktestResult!.summary.symbols_scanned}</span>
                       </div>
                     </div>
+
+                    {(displayedBacktestResult as any).walk_forward?.enabled && (
+                      <div className="mb-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-cyan-300 font-semibold">Walk-forward validation</span>
+                          <span className="text-slate-300">
+                            Pass rate: {(displayedBacktestResult as any).walk_forward?.pass_rate_pct ?? 0}%
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 mb-2">
+                          <span>Avg OOS return</span>
+                          <span>{(displayedBacktestResult as any).walk_forward?.avg_out_of_sample_return_pct ?? 0}%</span>
+                        </div>
+                        <div className="space-y-1">
+                          {(((displayedBacktestResult as any).walk_forward?.windows) || []).slice(0, 3).map((window: any, idx: number) => (
+                            <div key={idx} className="flex items-center justify-between rounded bg-slate-900/40 px-2 py-1 text-[10px]">
+                              <span className="text-slate-400">{window.test_start} → {window.test_end}</span>
+                              <span className={window.passed ? 'text-green-400' : 'text-red-400'}>
+                                {window.out_of_sample_return_pct}% • {window.passed ? 'PASS' : 'FAIL'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Tabs: symbols / trades */}
                     <div className="flex border-b border-slate-700 mb-3">
