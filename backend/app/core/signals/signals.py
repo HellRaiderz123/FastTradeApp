@@ -10,6 +10,8 @@ Orchestrates signal generation from multiple sources:
 Merges them into a comprehensive market signal using the new multi-asset Signal architecture.
 """
 
+from datetime import datetime, time as dt_time
+
 from sqlalchemy.orm import Session
 from typing import Dict, Optional, Union
 import logging
@@ -26,7 +28,9 @@ from app.core.market.vix_iv_api import (
     get_vix_iv_data_cached,
     determine_iv_regime,
 )
+from app.core.market.expiry import get_weekly_expiry_for_date
 from app.core.indicators.put_call_ratio import OptionChainAnalysis
+from app.core.utils.time import now_ist
 from app.services.market_data import enrich_chain_with_live_oi, get_option_chain, get_spot
 from app.core.signals.base import (
     Signal,
@@ -223,6 +227,133 @@ def _enrich_signal_with_option_context(signal: Dict, symbol: str) -> Dict:
     except Exception as e:
         logger.warning("⚠️ Failed to enrich signal with option chain context for %s: %s", normalized, e)
         return signal
+
+
+def _apply_weekly_option_entry_filter(
+    signal: Dict,
+    symbol: str,
+    *,
+    asof_dt: Optional[datetime] = None,
+) -> Dict:
+    """Gate direct CE/PE entries using weekly-expiry timing and momentum quality.
+
+    This is intentionally stricter than the base TA bias:
+    - avoids late expiry-day long-option buys
+    - requires clean ADX/RSI/readiness alignment
+    - downgrades to wait/spread-preferred when structure is poor
+    """
+    normalized = str(symbol or "").upper().strip()
+    if normalized not in _OPTION_CHAIN_UNDERLYINGS:
+        return signal
+
+    enriched = signal.copy()
+    indicators = (enriched.get("indicators") or {}).copy()
+    quality_checks = (enriched.get("quality_checks") or {}).copy()
+    existing_ctx = enriched.get("context")
+    context = existing_ctx.copy() if isinstance(existing_ctx, dict) else {}
+
+    asof_dt = asof_dt or now_ist()
+    current_time = dt_time(asof_dt.hour, asof_dt.minute, asof_dt.second)
+
+    try:
+        expiry_date = get_weekly_expiry_for_date(normalized, asof_dt.date())
+    except Exception:
+        expiry_date = asof_dt.date()
+
+    days_to_expiry = max((expiry_date - asof_dt.date()).days, 0)
+    is_expiry_day = days_to_expiry == 0
+
+    bias = str(enriched.get("bias") or "NEUTRAL").upper()
+    confidence = _safe_float(enriched.get("confidence"), default=0.0)
+    readiness = int(_safe_float(enriched.get("trade_readiness_score"), default=0.0))
+    quality_score = int(enriched.get("quality_score", 0) or 0)
+    adx = _safe_float(indicators.get("adx"), default=0.0)
+    rsi = _safe_float(indicators.get("rsi"), default=50.0)
+    iv_regime = str(enriched.get("iv_regime") or context.get("iv_regime") or "NORMAL").upper()
+    oi_confirm = bool(quality_checks.get("oi_bias_confirm", True))
+
+    entry_window_ok = dt_time(9, 20) <= current_time <= dt_time(14, 45)
+    expiry_entry_ok = (not is_expiry_day) or (current_time <= dt_time(12, 15))
+
+    if is_expiry_day and current_time <= dt_time(12, 15):
+        min_confidence = 82.0
+        min_readiness = 65
+        min_adx = 25.0
+    else:
+        min_confidence = 75.0
+        min_readiness = 55
+        min_adx = 22.0
+
+    high_iv_ok = not (iv_regime == "HIGH" and confidence < 82.0)
+    base_gate_ok = all([
+        entry_window_ok,
+        expiry_entry_ok,
+        oi_confirm,
+        high_iv_ok,
+        confidence >= min_confidence,
+        readiness >= min_readiness,
+        quality_score >= 4,
+        adx >= min_adx,
+    ])
+
+    bullish_entry_ok = base_gate_ok and bias == "BULLISH" and 52.0 <= rsi <= 68.0
+    bearish_entry_ok = base_gate_ok and bias == "BEARISH" and 32.0 <= rsi <= 48.0
+
+    blocked_reasons = []
+    if not entry_window_ok:
+        blocked_reasons.append("outside preferred intraday entry window")
+    if not expiry_entry_ok:
+        blocked_reasons.append("expiry-day theta risk")
+    if not oi_confirm:
+        blocked_reasons.append("option-chain confirmation missing")
+    if not high_iv_ok:
+        blocked_reasons.append("IV too high for direct option buying")
+    if confidence < min_confidence or readiness < min_readiness or adx < min_adx or quality_score < 4:
+        blocked_reasons.append("directional momentum not strong enough")
+    if bias == "BULLISH" and not (52.0 <= rsi <= 68.0):
+        blocked_reasons.append("RSI not in clean CE entry zone")
+    if bias == "BEARISH" and not (32.0 <= rsi <= 48.0):
+        blocked_reasons.append("RSI not in clean PE entry zone")
+
+    recommendation = "NO_TRADE"
+    entry_type = "WAIT"
+    if bullish_entry_ok:
+        recommendation = "BUY_CE"
+        entry_type = "OPTION_BUY"
+    elif bearish_entry_ok:
+        recommendation = "BUY_PE"
+        entry_type = "OPTION_BUY"
+    elif bias in {"BULLISH", "BEARISH"}:
+        entry_type = "SPREAD_PREFERRED"
+
+    quality_checks["entry_window_ok"] = entry_window_ok
+    quality_checks["expiry_entry_ok"] = expiry_entry_ok
+    quality_checks["directional_entry_ok"] = recommendation in {"BUY_CE", "BUY_PE"}
+
+    context["options_entry"] = {
+        "recommendation": recommendation,
+        "entry_type": entry_type,
+        "days_to_expiry": days_to_expiry,
+        "is_expiry_day": is_expiry_day,
+        "expiry_date": expiry_date.isoformat() if hasattr(expiry_date, "isoformat") else str(expiry_date),
+        "blocked_reasons": blocked_reasons,
+    }
+
+    reason = str(enriched.get("reason") or "").strip()
+    if recommendation == "BUY_CE" and "Direct BUY_CE allowed" not in reason:
+        enriched["reason"] = f"{reason} | Direct BUY_CE allowed".strip(" |")
+    elif recommendation == "BUY_PE" and "Direct BUY_PE allowed" not in reason:
+        enriched["reason"] = f"{reason} | Direct BUY_PE allowed".strip(" |")
+    elif blocked_reasons:
+        gate_reason = blocked_reasons[0]
+        if gate_reason not in reason:
+            enriched["reason"] = f"{reason} | Entry gate: {gate_reason}".strip(" |")
+
+    enriched["recommendation"] = recommendation
+    enriched["quality_checks"] = quality_checks
+    enriched["quality_score"] = sum(1 for v in quality_checks.values() if v)
+    enriched["context"] = context
+    return enriched
 
 
 def generate_signal_multi_asset(
@@ -515,6 +646,7 @@ def generate_signal(
         "iv_regime": iv_regime,
     })
     final_sig["context"] = existing_ctx
+    final_sig = _apply_weekly_option_entry_filter(final_sig, symbol)
 
     return final_sig
 

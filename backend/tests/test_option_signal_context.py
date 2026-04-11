@@ -1,7 +1,9 @@
+from datetime import datetime
+
 import pytest
 
 from app.core.indicators.put_call_ratio import OptionChainAnalysis
-from app.core.signals.signals import _apply_option_context_to_signal
+from app.core.signals.signals import _apply_option_context_to_signal, _apply_weekly_option_entry_filter
 
 
 def test_option_chain_sentiment_is_bullish_near_support():
@@ -42,3 +44,51 @@ def test_apply_option_context_downgrades_conflicting_bullish_signal():
     assert updated["confidence"] < 78
     assert updated["quality_checks"]["oi_bias_confirm"] is False
     assert "OI/PCR conflict" in updated["reason"]
+
+
+def test_weekly_expiry_gate_blocks_late_expiry_day_option_buy():
+    sig = {
+        "signal": "BULLISH",
+        "bias": "BULLISH",
+        "confidence": 84,
+        "reason": "Strong trend",
+        "trade_readiness_score": 74,
+        "indicators": {"adx": 31, "rsi": 61},
+        "quality_checks": {"oi_bias_confirm": True},
+        "quality_score": 5,
+        "context": {},
+    }
+
+    updated = _apply_weekly_option_entry_filter(
+        sig,
+        "NIFTY",
+        asof_dt=datetime(2026, 4, 14, 13, 5),
+    )
+
+    assert updated["recommendation"] == "NO_TRADE"
+    assert updated["quality_checks"]["expiry_entry_ok"] is False
+    assert "expiry-day theta risk" in updated["reason"]
+
+
+def test_weekly_entry_gate_allows_buy_ce_for_strong_non_expiry_setup():
+    sig = {
+        "signal": "BULLISH",
+        "bias": "BULLISH",
+        "confidence": 83,
+        "reason": "Strong trend",
+        "trade_readiness_score": 76,
+        "indicators": {"adx": 29, "rsi": 60},
+        "quality_checks": {"oi_bias_confirm": True},
+        "quality_score": 5,
+        "context": {},
+    }
+
+    updated = _apply_weekly_option_entry_filter(
+        sig,
+        "NIFTY",
+        asof_dt=datetime(2026, 4, 13, 10, 15),
+    )
+
+    assert updated["recommendation"] == "BUY_CE"
+    assert updated["quality_checks"]["expiry_entry_ok"] is True
+    assert updated["context"]["options_entry"]["entry_type"] == "OPTION_BUY"
