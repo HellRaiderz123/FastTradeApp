@@ -6,6 +6,9 @@ import pytest
 from app.api.routes.condition_scanner import BacktestRequest, _backtest_symbol, _run_backtest_for_strategy_payload
 from app.api.routes.journal import _build_tax_export_row
 from app.core.condition_scanner_scheduler import _scan_and_execute_strategy
+from app.core.condition_strategy_lab import generate_candidate_strategies
+from app.core.market.scheduler import _merge_discovery_leaderboard, _slice_discovery_batch
+from scripts.discover_condition_strategies import _prepare_discovery_batch
 
 
 def _candle(day_offset: int, open_: float, high: float, low: float, close: float):
@@ -121,6 +124,94 @@ def test_walk_forward_summary_is_returned_for_backtests():
     assert "walk_forward" in result
     assert result["walk_forward"]["enabled"] is True
     assert len(result["walk_forward"]["windows"]) >= 1
+
+
+def test_generated_intraday_candidates_use_htf_and_atr_controls():
+    candidates = generate_candidate_strategies(timeframe="15 Min", universe="NIFTY50", max_candidates=12)
+
+    assert candidates
+    exit_config = candidates[0]["exit_config"]
+    assert exit_config["require_htf_confirm"] is True
+    assert exit_config["htf_timeframe"] == "1 Hour"
+    assert exit_config["use_atr_sizing"] is True
+    assert exit_config["apply_slippage"] is True
+
+
+def test_slice_discovery_batch_advances_cursor_and_wraps():
+    items = list(range(120))
+
+    batch = _slice_discovery_batch(items, start_offset=50, batch_size=25)
+    assert batch["items"] == list(range(50, 75))
+    assert batch["next_offset"] == 75
+    assert batch["completed_cycle"] is False
+
+    wrapped = _slice_discovery_batch(items, start_offset=110, batch_size=25)
+    assert wrapped["items"] == list(range(110, 120))
+    assert wrapped["next_offset"] == 0
+    assert wrapped["completed_cycle"] is True
+
+
+def test_prepare_discovery_batch_resumes_shared_progress_cursor():
+    progress_state = {
+        "version": 1,
+        "runs": 2,
+        "strategy_batches": {
+            "NIFTY50|Day|1 Hour|15 Min": {"next_offset": 2}
+        },
+    }
+    candidates_by_timeframe = {
+        "Day": [{"name": "D1"}, {"name": "D2"}],
+        "1 Hour": [{"name": "H1"}, {"name": "H2"}],
+        "15 Min": [{"name": "M1"}, {"name": "M2"}],
+    }
+
+    selected, batch_meta, state_key = _prepare_discovery_batch(
+        timeframe="Day",
+        timeframes=["Day", "1 Hour", "15 Min"],
+        universe="NIFTY50",
+        max_candidates=6,
+        batch_size=2,
+        resume_progress=True,
+        progress_state=progress_state,
+        candidates_by_timeframe=candidates_by_timeframe,
+    )
+
+    assert state_key == "NIFTY50|Day|1 Hour|15 Min"
+    assert [item["name"] for item in selected] == ["M1", "D2"]
+    assert batch_meta["start_offset"] == 2
+    assert batch_meta["next_offset"] == 4
+
+
+def test_merge_discovery_leaderboard_keeps_best_five_across_batches():
+    existing = [
+        {"name": "Old 1", "score": 40.0, "annual_return_pct": 10.0, "max_drawdown_pct": 12.0},
+        {"name": "Old 2", "score": 35.0, "annual_return_pct": 9.0, "max_drawdown_pct": 10.0},
+        {"name": "Old 3", "score": 30.0, "annual_return_pct": 8.0, "max_drawdown_pct": 8.0},
+        {"name": "Old 4", "score": 25.0, "annual_return_pct": 7.0, "max_drawdown_pct": 9.0},
+        {"name": "Old 5", "score": 20.0, "annual_return_pct": 6.0, "max_drawdown_pct": 7.0},
+    ]
+    ranked_batch = [
+        {
+            "strategy": {"name": "New Best", "timeframe": "15 Min", "universe": "NIFTY50"},
+            "score": 55.0,
+            "summary": {"annual_return_pct": 14.0, "max_drawdown_pct": 11.0, "total_trades": 30},
+            "final_capital": 114000.0,
+            "error": None,
+        },
+        {
+            "strategy": {"name": "Not Better", "timeframe": "Day", "universe": "NIFTY50"},
+            "score": 18.0,
+            "summary": {"annual_return_pct": 5.0, "max_drawdown_pct": 10.0, "total_trades": 15},
+            "final_capital": 105000.0,
+            "error": None,
+        },
+    ]
+
+    merged = _merge_discovery_leaderboard(existing, ranked_batch, top_n=5)
+
+    assert len(merged) == 5
+    assert merged[0]["name"] == "New Best"
+    assert "Old 5" not in [row["name"] for row in merged]
 
 
 def test_auto_scan_skips_duplicate_executed_signal(monkeypatch):

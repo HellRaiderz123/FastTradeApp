@@ -141,6 +141,65 @@ def _strategy_with_backtest(db: Session, row: ConditionStrategy) -> dict:
             d["last_backtest_result"] = bt.result_dict
     return d
 
+
+def _get_discovery_leaderboard_snapshot() -> Dict[str, Any]:
+    """Return the latest rolling discovery leaderboard persisted by the scheduler/manual discovery script."""
+    try:
+        from app.core.market.scheduler import _load_discovery_state
+
+        state = _load_discovery_state()
+    except Exception:
+        return {
+            "state_key": None,
+            "last_run_at": None,
+            "next_offset": 0,
+            "total_pool": 0,
+            "last_batch_start": 0,
+            "last_batch_end": 0,
+            "completed_cycle": False,
+            "rolling_top_results": [],
+        }
+
+    batches = (state or {}).get("strategy_batches") or {}
+    if not batches:
+        return {
+            "state_key": None,
+            "last_run_at": None,
+            "next_offset": 0,
+            "total_pool": 0,
+            "last_batch_start": 0,
+            "last_batch_end": 0,
+            "completed_cycle": False,
+            "rolling_top_results": [],
+        }
+
+    state_key, row = max(
+        batches.items(),
+        key=lambda item: (
+            str((item[1] or {}).get("last_run_at") or ""),
+            int((item[1] or {}).get("last_batch_end", 0) or 0),
+            int((item[1] or {}).get("pool_total", 0) or 0),
+        ),
+    )
+    latest = dict(row or {})
+    rolling = latest.get("rolling_top_results") or latest.get("top_results") or []
+    return {
+        "state_key": state_key,
+        "last_run_at": latest.get("last_run_at"),
+        "next_offset": int(latest.get("next_offset", 0) or 0),
+        "total_pool": int(latest.get("pool_total", 0) or 0),
+        "last_batch_start": int(latest.get("last_batch_start", 0) or 0),
+        "last_batch_end": int(latest.get("last_batch_end", 0) or 0),
+        "completed_cycle": bool(latest.get("completed_cycle", False)),
+        "rolling_top_results": [
+            {
+                "rank": index,
+                **dict(item or {}),
+            }
+            for index, item in enumerate(rolling[:5], start=1)
+        ],
+    }
+
 # Legacy shim — used by condition_scanner_scheduler (will be updated separately)
 def _load_strategies() -> List[dict]:
     db = SessionLocal()
@@ -950,12 +1009,17 @@ async def create_strategy(data: StrategyCreate, db: Session = Depends(get_db)):
 
 @router.get("/strategies")
 async def list_strategies(strategy_type: Optional[str] = None, db: Session = Depends(get_db)):
-    """List all user strategies."""
+    """List all user strategies plus the latest rolling discovery leaderboard."""
     q = db.query(ConditionStrategy).order_by(ConditionStrategy.id)
     if strategy_type:
         q = q.filter(ConditionStrategy.strategy_type == strategy_type)
     rows = q.all()
-    return {"strategies": [_strategy_with_backtest(db, r) for r in rows]}
+    discovery_snapshot = _get_discovery_leaderboard_snapshot()
+    return {
+        "strategies": [_strategy_with_backtest(db, r) for r in rows],
+        "discovery_leaderboard": discovery_snapshot.get("rolling_top_results", []),
+        "discovery_snapshot": discovery_snapshot,
+    }
 
 
 @router.get("/strategies/{strategy_id}")

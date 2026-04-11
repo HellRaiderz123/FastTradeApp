@@ -29,6 +29,7 @@ from app.core.market.vix_iv_api import (
     determine_iv_regime,
 )
 from app.core.market.expiry import get_weekly_expiry_for_date
+from app.core.indicators.greeks import GreeksCalculator
 from app.core.indicators.put_call_ratio import OptionChainAnalysis
 from app.core.utils.time import now_ist
 from app.services.market_data import enrich_chain_with_live_oi, get_option_chain, get_spot
@@ -125,6 +126,133 @@ def _build_option_chain_analytics(chain_df: pd.DataFrame, spot: float) -> Dict:
     except Exception as e:
         logger.warning("⚠️ Option chain analytics build failed: %s", e)
         return {}
+
+
+def _estimate_contract_volatility(iv_regime: str, moneyness: float, days_to_expiry: int) -> float:
+    """Estimate a reasonable IV input for delta approximation when live Greeks are absent."""
+    base_iv = {
+        "LOW": 0.15,
+        "NORMAL": 0.19,
+        "HIGH": 0.26,
+    }.get(str(iv_regime or "NORMAL").upper(), 0.19)
+
+    skew = min(abs(float(moneyness) - 1.0) * 0.8, 0.12)
+    front_week_boost = 0.04 if days_to_expiry <= 2 else 0.0
+    return max(0.10, min(0.65, base_iv + skew + front_week_boost))
+
+
+def _target_delta_for_entry(days_to_expiry: int, confidence: float) -> float:
+    """Prefer higher-delta contracts for weekly long buys to reduce theta bleed."""
+    if days_to_expiry <= 1:
+        return 0.55
+    if confidence >= 85:
+        return 0.50
+    if confidence >= 80:
+        return 0.45
+    return 0.40
+
+
+def _select_direct_option_contract(
+    chain_df: Optional[pd.DataFrame],
+    *,
+    spot: float,
+    expiry_date,
+    option_type: str,
+    iv_regime: str,
+    confidence: float,
+    asof_dt: datetime,
+) -> Optional[Dict]:
+    """Pick a liquid weekly option contract near a target delta for direct CE/PE buying."""
+    if chain_df is None or getattr(chain_df, "empty", True) or spot <= 0:
+        return None
+
+    df = chain_df.copy()
+    for col in ["strike", "oi", "volume", "bid", "ask", "ltp"]:
+        if col not in df.columns:
+            df[col] = 0.0
+    if "instrument_type" not in df.columns:
+        df["instrument_type"] = ""
+
+    df["instrument_type"] = df["instrument_type"].astype(str).str.upper()
+    df = df[df["instrument_type"] == str(option_type or "").upper()].copy()
+    if df.empty:
+        return None
+
+    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+    for col in ["oi", "volume", "bid", "ask", "ltp"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    df = df[df["strike"].notna()]
+    if df.empty:
+        return None
+
+    days_to_expiry = max((expiry_date - asof_dt.date()).days, 0)
+    target_delta = _target_delta_for_entry(days_to_expiry, confidence)
+    min_oi = 500.0 if days_to_expiry <= 1 else 1500.0
+    min_volume = 100.0 if days_to_expiry <= 1 else 1000.0
+    max_spread_pct = 2.5 if days_to_expiry <= 1 else 2.0
+
+    candidates = []
+    for _, row in df.iterrows():
+        strike = _safe_float(row.get("strike"), default=0.0)
+        if strike <= 0:
+            continue
+
+        bid = _safe_float(row.get("bid"), default=0.0)
+        ask = _safe_float(row.get("ask"), default=0.0)
+        ltp = _safe_float(row.get("ltp"), default=0.0)
+        mid = (bid + ask) / 2 if bid > 0 and ask > 0 else ltp
+        spread_pct = ((ask - bid) / mid * 100.0) if bid > 0 and ask > 0 and mid > 0 else 999.0
+
+        moneyness = strike / max(spot, 1.0)
+        est_vol = _estimate_contract_volatility(iv_regime, moneyness, days_to_expiry)
+        greeks = GreeksCalculator(
+            spot=spot,
+            strike=strike,
+            expiry=expiry_date,
+            volatility=est_vol,
+            option_type=option_type,
+        ).calculate_all()
+        approx_delta = abs(_safe_float(greeks.get("delta"), default=0.0))
+
+        oi = _safe_float(row.get("oi"), default=0.0)
+        volume = _safe_float(row.get("volume"), default=0.0)
+        spread_ok = spread_pct <= max_spread_pct
+        delta_ok = 0.25 <= approx_delta <= 0.70
+        liquidity_ok = oi >= min_oi and volume >= min_volume and spread_ok and delta_ok
+
+        score = (
+            abs(approx_delta - target_delta) * 100.0
+            + spread_pct * 2.5
+            + (0.0 if liquidity_ok else 25.0)
+            + (0.0 if ltp >= 30 else 8.0)
+        )
+
+        candidates.append(
+            {
+                "tradingsymbol": str(row.get("tradingsymbol") or ""),
+                "strike": int(round(strike)),
+                "option_type": option_type,
+                "ltp": round(ltp or mid, 2),
+                "bid": round(bid, 2),
+                "ask": round(ask, 2),
+                "spread_pct": round(spread_pct, 2),
+                "oi": int(round(oi)),
+                "volume": int(round(volume)),
+                "approx_delta": round(approx_delta, 4),
+                "target_delta": round(target_delta, 4),
+                "delta_ok": delta_ok,
+                "spread_ok": spread_ok,
+                "liquidity_ok": liquidity_ok,
+                "score": round(score, 4),
+            }
+        )
+
+    if not candidates:
+        return None
+
+    liquid_candidates = [c for c in candidates if c["liquidity_ok"]]
+    ranked = liquid_candidates or candidates
+    return min(ranked, key=lambda row: row["score"])
 
 
 def _apply_option_context_to_signal(signal: Dict, analytics: Dict) -> Dict:
@@ -234,14 +362,10 @@ def _apply_weekly_option_entry_filter(
     symbol: str,
     *,
     asof_dt: Optional[datetime] = None,
+    chain_df: Optional[pd.DataFrame] = None,
+    spot: Optional[float] = None,
 ) -> Dict:
-    """Gate direct CE/PE entries using weekly-expiry timing and momentum quality.
-
-    This is intentionally stricter than the base TA bias:
-    - avoids late expiry-day long-option buys
-    - requires clean ADX/RSI/readiness alignment
-    - downgrades to wait/spread-preferred when structure is poor
-    """
+    """Gate direct CE/PE entries using weekly-expiry timing, liquidity, and IV-risk quality."""
     normalized = str(symbol or "").upper().strip()
     if normalized not in _OPTION_CHAIN_UNDERLYINGS:
         return signal
@@ -270,7 +394,42 @@ def _apply_weekly_option_entry_filter(
     adx = _safe_float(indicators.get("adx"), default=0.0)
     rsi = _safe_float(indicators.get("rsi"), default=50.0)
     iv_regime = str(enriched.get("iv_regime") or context.get("iv_regime") or "NORMAL").upper()
+    vix_rank = _safe_float(context.get("vix_rank"), default=0.0)
     oi_confirm = bool(quality_checks.get("oi_bias_confirm", True))
+
+    effective_spot = _safe_float(spot, default=0.0)
+    if effective_spot <= 0:
+        diagnostics = enriched.get("diagnostics") if isinstance(enriched.get("diagnostics"), dict) else {}
+        effective_spot = _safe_float(diagnostics.get("last_close"), default=0.0)
+    if effective_spot <= 0:
+        effective_spot = _safe_float(get_spot(normalized), default=0.0)
+
+    selected_contract = None
+    liquidity_ok = True
+    spread_ok = True
+    delta_contract_ok = True
+
+    if bias in {"BULLISH", "BEARISH"}:
+        option_type = "CE" if bias == "BULLISH" else "PE"
+        if chain_df is None:
+            chain_df = enrich_chain_with_live_oi(get_option_chain(normalized))
+        selected_contract = _select_direct_option_contract(
+            chain_df,
+            spot=effective_spot,
+            expiry_date=expiry_date,
+            option_type=option_type,
+            iv_regime=iv_regime,
+            confidence=confidence,
+            asof_dt=asof_dt,
+        )
+        if selected_contract:
+            liquidity_ok = bool(selected_contract.get("liquidity_ok"))
+            spread_ok = bool(selected_contract.get("spread_ok"))
+            delta_contract_ok = bool(selected_contract.get("delta_ok"))
+        else:
+            liquidity_ok = False
+            spread_ok = False
+            delta_contract_ok = False
 
     entry_window_ok = dt_time(9, 20) <= current_time <= dt_time(14, 45)
     expiry_entry_ok = (not is_expiry_day) or (current_time <= dt_time(12, 15))
@@ -284,16 +443,19 @@ def _apply_weekly_option_entry_filter(
         min_readiness = 55
         min_adx = 22.0
 
-    high_iv_ok = not (iv_regime == "HIGH" and confidence < 82.0)
+    iv_crush_safe = not (iv_regime == "HIGH" and (vix_rank >= 80 or days_to_expiry <= 2) and confidence < 85.0)
     base_gate_ok = all([
         entry_window_ok,
         expiry_entry_ok,
         oi_confirm,
-        high_iv_ok,
+        iv_crush_safe,
         confidence >= min_confidence,
         readiness >= min_readiness,
         quality_score >= 4,
         adx >= min_adx,
+        liquidity_ok,
+        spread_ok,
+        delta_contract_ok,
     ])
 
     bullish_entry_ok = base_gate_ok and bias == "BULLISH" and 52.0 <= rsi <= 68.0
@@ -306,8 +468,12 @@ def _apply_weekly_option_entry_filter(
         blocked_reasons.append("expiry-day theta risk")
     if not oi_confirm:
         blocked_reasons.append("option-chain confirmation missing")
-    if not high_iv_ok:
-        blocked_reasons.append("IV too high for direct option buying")
+    if not iv_crush_safe:
+        blocked_reasons.append("IV too high / crush risk for direct option buying")
+    if not liquidity_ok or not spread_ok:
+        blocked_reasons.append("poor liquidity or wide bid-ask spread")
+    if not delta_contract_ok:
+        blocked_reasons.append("no contract near the target delta")
     if confidence < min_confidence or readiness < min_readiness or adx < min_adx or quality_score < 4:
         blocked_reasons.append("directional momentum not strong enough")
     if bias == "BULLISH" and not (52.0 <= rsi <= 68.0):
@@ -328,6 +494,9 @@ def _apply_weekly_option_entry_filter(
 
     quality_checks["entry_window_ok"] = entry_window_ok
     quality_checks["expiry_entry_ok"] = expiry_entry_ok
+    quality_checks["liquidity_ok"] = liquidity_ok
+    quality_checks["spread_ok"] = spread_ok
+    quality_checks["iv_crush_safe"] = iv_crush_safe
     quality_checks["directional_entry_ok"] = recommendation in {"BUY_CE", "BUY_PE"}
 
     context["options_entry"] = {
@@ -336,6 +505,7 @@ def _apply_weekly_option_entry_filter(
         "days_to_expiry": days_to_expiry,
         "is_expiry_day": is_expiry_day,
         "expiry_date": expiry_date.isoformat() if hasattr(expiry_date, "isoformat") else str(expiry_date),
+        "selected_contract": selected_contract,
         "blocked_reasons": blocked_reasons,
     }
 

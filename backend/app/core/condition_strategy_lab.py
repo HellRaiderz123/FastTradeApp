@@ -1,11 +1,130 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from typing import Any, Dict, List
+
+
+_TIMEFRAME_PROFILES: Dict[str, Dict[str, Any]] = {
+    "Day": {
+        "sl_pct": 3.2,
+        "tp_pct": 9.5,
+        "tsl_pct": 1.8,
+        "require_htf_confirm": False,
+        "htf_timeframe": None,
+        "atr_period": 14,
+        "atr_multiplier": 2.0,
+        "risk_per_trade_pct": 1.0,
+        "apply_slippage": True,
+        "slippage_pct": 0.05,
+        "walk_forward_windows": 4,
+        "walk_forward_train_pct": 70.0,
+        "volume_breakout_floors": (800000, 1500000, 2500000),
+    },
+    "1 Hour": {
+        "sl_pct": 2.2,
+        "tp_pct": 5.8,
+        "tsl_pct": 1.2,
+        "require_htf_confirm": True,
+        "htf_timeframe": "Day",
+        "atr_period": 14,
+        "atr_multiplier": 1.6,
+        "risk_per_trade_pct": 0.8,
+        "apply_slippage": True,
+        "slippage_pct": 0.08,
+        "walk_forward_windows": 4,
+        "walk_forward_train_pct": 67.0,
+        "volume_breakout_floors": (250000, 500000, 900000),
+    },
+    "15 Min": {
+        "sl_pct": 1.2,
+        "tp_pct": 3.2,
+        "tsl_pct": 0.8,
+        "require_htf_confirm": True,
+        "htf_timeframe": "1 Hour",
+        "atr_period": 14,
+        "atr_multiplier": 1.35,
+        "risk_per_trade_pct": 0.6,
+        "apply_slippage": True,
+        "slippage_pct": 0.12,
+        "walk_forward_windows": 3,
+        "walk_forward_train_pct": 65.0,
+        "volume_breakout_floors": (75000, 150000, 300000),
+    },
+    "5 Min": {
+        "sl_pct": 0.9,
+        "tp_pct": 2.4,
+        "tsl_pct": 0.6,
+        "require_htf_confirm": True,
+        "htf_timeframe": "15 Min",
+        "atr_period": 14,
+        "atr_multiplier": 1.2,
+        "risk_per_trade_pct": 0.45,
+        "apply_slippage": True,
+        "slippage_pct": 0.15,
+        "walk_forward_windows": 3,
+        "walk_forward_train_pct": 65.0,
+        "volume_breakout_floors": (30000, 60000, 120000),
+    },
+    "1 Min": {
+        "sl_pct": 0.6,
+        "tp_pct": 1.5,
+        "tsl_pct": 0.4,
+        "require_htf_confirm": True,
+        "htf_timeframe": "5 Min",
+        "atr_period": 14,
+        "atr_multiplier": 1.0,
+        "risk_per_trade_pct": 0.3,
+        "apply_slippage": True,
+        "slippage_pct": 0.2,
+        "walk_forward_windows": 2,
+        "walk_forward_train_pct": 60.0,
+        "volume_breakout_floors": (15000, 30000, 60000),
+    },
+}
 
 
 def _strategy_type_for_timeframe(timeframe: str) -> str:
     return "Equity Swing" if timeframe == "Day" else "Equity Intraday"
+
+
+def _timeframe_profile(timeframe: str) -> Dict[str, Any]:
+    return deepcopy(_TIMEFRAME_PROFILES.get(timeframe, _TIMEFRAME_PROFILES["1 Hour"]))
+
+
+def _default_exit_config(timeframe: str, *, style: str = "trend") -> Dict[str, Any]:
+    profile = _timeframe_profile(timeframe)
+    style_multipliers = {
+        "trend": (1.0, 1.0, 1.0),
+        "mean_reversion": (0.82, 0.82, 0.75),
+        "breakout": (1.1, 1.18, 1.05),
+        "position": (1.25, 1.3, 1.1),
+    }
+    sl_mult, tp_mult, tsl_mult = style_multipliers.get(style, style_multipliers["trend"])
+
+    return {
+        "sl_pct": round(profile["sl_pct"] * sl_mult, 2),
+        "tp_pct": round(profile["tp_pct"] * tp_mult, 2),
+        "tsl_pct": round(profile["tsl_pct"] * tsl_mult, 2),
+        "exit_mode": "percentage",
+        "require_htf_confirm": bool(profile.get("require_htf_confirm")),
+        "htf_timeframe": profile.get("htf_timeframe"),
+        "use_atr_sizing": True,
+        "atr_period": int(profile.get("atr_period", 14) or 14),
+        "atr_multiplier": float(profile.get("atr_multiplier", 1.5) or 1.5),
+        "risk_per_trade_pct": float(profile.get("risk_per_trade_pct", 1.0) or 1.0),
+        "apply_slippage": bool(profile.get("apply_slippage", True)),
+        "slippage_pct": float(profile.get("slippage_pct", 0.1) or 0.0),
+        "walk_forward_enabled": True,
+        "walk_forward_windows": int(profile.get("walk_forward_windows", 3) or 3),
+        "walk_forward_train_pct": float(profile.get("walk_forward_train_pct", 67.0) or 67.0),
+    }
+
+
+def _volume_breakout_floors(timeframe: str) -> tuple[int, ...]:
+    profile = _timeframe_profile(timeframe)
+    floors = profile.get("volume_breakout_floors") or (800000, 1500000, 2500000)
+    return tuple(int(x) for x in floors)
 
 
 def _base_strategy(
@@ -26,8 +145,8 @@ def _base_strategy(
         "timeframe": timeframe,
         "instruments": [],
         "universe": universe,
-        "entry_conditions": entry_conditions,
-        "exit_config": exit_config,
+        "entry_conditions": deepcopy(entry_conditions),
+        "exit_config": deepcopy(exit_config),
         "is_active": False,
         "auto_scan_enabled": False,
         "auto_amount": 10000.0,
@@ -51,8 +170,11 @@ def generate_candidate_strategies(
         seen_names.add(name)
         candidates.append(candidate)
 
-    buy_exit = {"sl_pct": 3.0, "tp_pct": 8.0, "tsl_pct": 1.5, "exit_mode": "percentage"}
-    sell_exit = {"sl_pct": 3.0, "tp_pct": 8.0, "tsl_pct": 1.5, "exit_mode": "percentage"}
+    buy_exit = _default_exit_config(timeframe, style="trend")
+    sell_exit = _default_exit_config(timeframe, style="trend")
+    mean_reversion_exit = _default_exit_config(timeframe, style="mean_reversion")
+    breakout_exit = _default_exit_config(timeframe, style="breakout")
+    position_exit = _default_exit_config(timeframe, style="position")
 
     for fast in (5, 9, 12):
         for slow in (20, 21, 34, 50):
@@ -107,7 +229,7 @@ def generate_candidate_strategies(
                             {"indicator": "RSI", "params": {"period": 14}, "comparator": "crosses_above", "value": str(oversold)},
                             {"indicator": "EMA", "params": {"period": ema_period}, "comparator": "lower_than", "value": "Close(0)"},
                         ],
-                        exit_config={"sl_pct": 2.5, "tp_pct": float(tp), "tsl_pct": 1.0, "exit_mode": "percentage"},
+                        exit_config={**mean_reversion_exit, "tp_pct": float(tp)},
                     )
                 )
                 add_candidate(
@@ -121,7 +243,7 @@ def generate_candidate_strategies(
                             {"indicator": "RSI", "params": {"period": 14}, "comparator": "crosses_below", "value": str(100 - oversold)},
                             {"indicator": "EMA", "params": {"period": ema_period}, "comparator": "higher_than", "value": "Close(0)"},
                         ],
-                        exit_config={"sl_pct": 2.5, "tp_pct": float(tp), "tsl_pct": 1.0, "exit_mode": "percentage"},
+                        exit_config={**mean_reversion_exit, "tp_pct": float(tp)},
                     )
                 )
 
@@ -172,7 +294,7 @@ def generate_candidate_strategies(
                         {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "higher_than", "value": "0"},
                         {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": str(adx_floor)},
                     ],
-                    exit_config={"sl_pct": 2.8, "tp_pct": 9.5, "tsl_pct": 1.8, "exit_mode": "percentage"},
+                    exit_config=breakout_exit,
                 )
             )
             add_candidate(
@@ -187,7 +309,7 @@ def generate_candidate_strategies(
                         {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "lower_than", "value": "0"},
                         {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": str(adx_floor)},
                     ],
-                    exit_config={"sl_pct": 2.8, "tp_pct": 9.5, "tsl_pct": 1.8, "exit_mode": "percentage"},
+                    exit_config=breakout_exit,
                 )
             )
 
@@ -204,7 +326,7 @@ def generate_candidate_strategies(
                         {"indicator": "STOCHASTIC", "params": {"k_period": 14, "d_period": 3, "smoothing": "%k"}, "comparator": "crosses_above", "value": str(stoch)},
                         {"indicator": "EMA", "params": {"period": ema_period}, "comparator": "lower_than", "value": "Close(0)"},
                     ],
-                    exit_config={"sl_pct": 2.5, "tp_pct": 8.5, "tsl_pct": 1.5, "exit_mode": "percentage"},
+                    exit_config=mean_reversion_exit,
                 )
             )
             add_candidate(
@@ -218,7 +340,7 @@ def generate_candidate_strategies(
                         {"indicator": "STOCHASTIC", "params": {"k_period": 14, "d_period": 3, "smoothing": "%k"}, "comparator": "crosses_below", "value": str(100 - stoch)},
                         {"indicator": "EMA", "params": {"period": ema_period}, "comparator": "higher_than", "value": "Close(0)"},
                     ],
-                    exit_config={"sl_pct": 2.5, "tp_pct": 8.5, "tsl_pct": 1.5, "exit_mode": "percentage"},
+                    exit_config=mean_reversion_exit,
                 )
             )
 
@@ -235,7 +357,7 @@ def generate_candidate_strategies(
                         {"indicator": "BB", "params": {"period": 20, "std_dev": 2.0, "band": "percent_b"}, "comparator": "crosses_above", "value": str(pb)},
                         {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": str(adx_floor)},
                     ],
-                    exit_config={"sl_pct": 3.2, "tp_pct": 10.0, "tsl_pct": 2.0, "exit_mode": "percentage"},
+                    exit_config=breakout_exit,
                 )
             )
             add_candidate(
@@ -249,7 +371,7 @@ def generate_candidate_strategies(
                         {"indicator": "BB", "params": {"period": 20, "std_dev": 2.0, "band": "percent_b"}, "comparator": "crosses_below", "value": str(round(1 - pb, 1))},
                         {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": str(adx_floor)},
                     ],
-                    exit_config={"sl_pct": 3.2, "tp_pct": 10.0, "tsl_pct": 2.0, "exit_mode": "percentage"},
+                    exit_config=breakout_exit,
                 )
             )
 
@@ -266,7 +388,7 @@ def generate_candidate_strategies(
                         {"indicator": "SMA", "params": {"period": sma_period}, "comparator": "lower_than", "value": "Close(0)"},
                         {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": str(rsi)},
                     ],
-                    exit_config={"sl_pct": 4.0, "tp_pct": 12.0, "tsl_pct": 2.0, "exit_mode": "percentage"},
+                    exit_config=position_exit,
                 )
             )
             add_candidate(
@@ -280,7 +402,7 @@ def generate_candidate_strategies(
                         {"indicator": "SMA", "params": {"period": sma_period}, "comparator": "higher_than", "value": "Close(0)"},
                         {"indicator": "RSI", "params": {"period": 14}, "comparator": "lower_than", "value": str(100 - rsi)},
                     ],
-                    exit_config={"sl_pct": 4.0, "tp_pct": 12.0, "tsl_pct": 2.0, "exit_mode": "percentage"},
+                    exit_config=position_exit,
                 )
             )
 
@@ -300,7 +422,7 @@ def generate_candidate_strategies(
                         {"indicator": "SMA", "params": {"period": slow}, "comparator": "lower_than", "value": "Close(0)"},
                         {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "higher_than", "value": "0"},
                     ],
-                    exit_config={"sl_pct": 3.5, "tp_pct": 11.0, "tsl_pct": 1.8, "exit_mode": "percentage"},
+                    exit_config=position_exit,
                 )
             )
             add_candidate(
@@ -315,7 +437,7 @@ def generate_candidate_strategies(
                         {"indicator": "SMA", "params": {"period": slow}, "comparator": "higher_than", "value": "Close(0)"},
                         {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "lower_than", "value": "0"},
                     ],
-                    exit_config={"sl_pct": 3.5, "tp_pct": 11.0, "tsl_pct": 1.8, "exit_mode": "percentage"},
+                    exit_config=position_exit,
                 )
             )
 
@@ -335,7 +457,7 @@ def generate_candidate_strategies(
                         {"indicator": "WMA", "params": {"period": slow}, "comparator": "lower_than", "value": "Close(0)"},
                         {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "52"},
                     ],
-                    exit_config={"sl_pct": 3.0, "tp_pct": 9.0, "tsl_pct": 1.5, "exit_mode": "percentage"},
+                    exit_config=buy_exit,
                 )
             )
             add_candidate(
@@ -350,7 +472,7 @@ def generate_candidate_strategies(
                         {"indicator": "WMA", "params": {"period": slow}, "comparator": "higher_than", "value": "Close(0)"},
                         {"indicator": "RSI", "params": {"period": 14}, "comparator": "lower_than", "value": "48"},
                     ],
-                    exit_config={"sl_pct": 3.0, "tp_pct": 9.0, "tsl_pct": 1.5, "exit_mode": "percentage"},
+                    exit_config=sell_exit,
                 )
             )
 
@@ -368,7 +490,7 @@ def generate_candidate_strategies(
                         {"indicator": "TEMA", "params": {"period": tema}, "comparator": "lower_than", "value": "Close(0)"},
                         {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "20"},
                     ],
-                    exit_config={"sl_pct": 3.2, "tp_pct": 10.5, "tsl_pct": 1.7, "exit_mode": "percentage"},
+                    exit_config=buy_exit,
                 )
             )
             add_candidate(
@@ -383,7 +505,7 @@ def generate_candidate_strategies(
                         {"indicator": "TEMA", "params": {"period": tema}, "comparator": "higher_than", "value": "Close(0)"},
                         {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "20"},
                     ],
-                    exit_config={"sl_pct": 3.2, "tp_pct": 10.5, "tsl_pct": 1.7, "exit_mode": "percentage"},
+                    exit_config=sell_exit,
                 )
             )
 
@@ -400,7 +522,7 @@ def generate_candidate_strategies(
                         {"indicator": "BB", "params": {"period": 20, "std_dev": 2.0, "band": "percent_b"}, "comparator": "crosses_above", "value": str(lower_pb)},
                         {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "40"},
                     ],
-                    exit_config={"sl_pct": 2.2, "tp_pct": 7.5, "tsl_pct": 1.2, "exit_mode": "percentage"},
+                    exit_config=mean_reversion_exit,
                 )
             )
             add_candidate(
@@ -414,7 +536,7 @@ def generate_candidate_strategies(
                         {"indicator": "BB", "params": {"period": 20, "std_dev": 2.0, "band": "percent_b"}, "comparator": "crosses_below", "value": str(upper_pb)},
                         {"indicator": "RSI", "params": {"period": 14}, "comparator": "lower_than", "value": "60"},
                     ],
-                    exit_config={"sl_pct": 2.2, "tp_pct": 7.5, "tsl_pct": 1.2, "exit_mode": "percentage"},
+                    exit_config=mean_reversion_exit,
                 )
             )
 
@@ -430,7 +552,7 @@ def generate_candidate_strategies(
                     {"indicator": "STOCHASTIC", "params": {"k_period": 14, "d_period": 3, "smoothing": "%k"}, "comparator": "crosses_above", "value": str(k_level)},
                     {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "higher_than", "value": "0"},
                 ],
-                exit_config={"sl_pct": 2.8, "tp_pct": 8.8, "tsl_pct": 1.4, "exit_mode": "percentage"},
+                exit_config=breakout_exit,
             )
         )
         add_candidate(
@@ -444,11 +566,11 @@ def generate_candidate_strategies(
                     {"indicator": "STOCHASTIC", "params": {"k_period": 14, "d_period": 3, "smoothing": "%k"}, "comparator": "crosses_below", "value": str(100 - k_level)},
                     {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "lower_than", "value": "0"},
                 ],
-                exit_config={"sl_pct": 2.8, "tp_pct": 8.8, "tsl_pct": 1.4, "exit_mode": "percentage"},
+                exit_config=breakout_exit,
             )
         )
 
-    for vol_floor in (800000, 1500000, 2500000):
+    for vol_floor in _volume_breakout_floors(timeframe):
         add_candidate(
             _base_strategy(
                 name=f"LAB Volume Breakout Buy VOL{vol_floor} {timeframe}",
@@ -461,7 +583,7 @@ def generate_candidate_strategies(
                     {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "crosses_above", "value": "0"},
                     {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "52"},
                 ],
-                exit_config={"sl_pct": 3.5, "tp_pct": 11.5, "tsl_pct": 1.8, "exit_mode": "percentage"},
+                exit_config=breakout_exit,
             )
         )
         add_candidate(
@@ -476,7 +598,7 @@ def generate_candidate_strategies(
                     {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "crosses_below", "value": "0"},
                     {"indicator": "RSI", "params": {"period": 14}, "comparator": "lower_than", "value": "48"},
                 ],
-                exit_config={"sl_pct": 3.5, "tp_pct": 11.5, "tsl_pct": 1.8, "exit_mode": "percentage"},
+                exit_config=breakout_exit,
             )
         )
 
@@ -528,7 +650,7 @@ def generate_candidate_strategies(
 
 
 def score_backtest_summary(summary: Dict[str, Any]) -> float:
-    """Score backtest summary with ROI-first, risk-aware weighting."""
+    """Score backtest summary with ROI-first, risk-aware, robustness-aware weighting."""
     total_return = float(summary.get("total_return_pct") or 0.0)
     annual_return = float(summary.get("annual_return_pct") or 0.0)
     sharpe = float(summary.get("sharpe_ratio") or 0.0)
@@ -538,8 +660,11 @@ def score_backtest_summary(summary: Dict[str, Any]) -> float:
     total_trades = int(summary.get("total_trades") or 0)
     avg_win = float(summary.get("avg_win_pct") or 0.0)
     avg_loss = abs(float(summary.get("avg_loss_pct") or 0.0))
+    symbols_traded = int(summary.get("symbols_traded") or 0)
+    walk_forward_pass_rate = float(summary.get("walk_forward_pass_rate_pct") or 0.0)
+    total_slippage_cost = float(summary.get("total_slippage_cost") or 0.0)
 
-    if total_trades <= 0:
+    if total_trades <= 0 or symbols_traded <= 0:
         return -1e9
 
     capped_pf = min(profit_factor, 10.0)
@@ -549,8 +674,12 @@ def score_backtest_summary(summary: Dict[str, Any]) -> float:
         expectancy = (win_rate / 100.0) * avg_win - (1.0 - win_rate / 100.0) * avg_loss
 
     trade_bonus = min(total_trades, 80) * 0.25
+    breadth_bonus = min(symbols_traded, 12) * 1.25
+    walk_forward_bonus = walk_forward_pass_rate * 0.35
     small_sample_penalty = max(0, 25 - total_trades) * 2.0
     high_drawdown_penalty = max(0.0, max_drawdown - 25.0) * 1.3
+    low_win_rate_penalty = max(0.0, 45.0 - win_rate) * 0.4
+    slippage_penalty = min(total_slippage_cost / 250.0, 25.0)
 
     score = (
         total_return * 0.6
@@ -561,8 +690,12 @@ def score_backtest_summary(summary: Dict[str, Any]) -> float:
         + expectancy * 4.0
         + max(0.0, win_rate - 45.0) * 0.15
         + trade_bonus
+        + breadth_bonus
+        + walk_forward_bonus
         - small_sample_penalty
         - high_drawdown_penalty
+        - low_win_rate_penalty
+        - slippage_penalty
     )
     return round(score, 2)
 

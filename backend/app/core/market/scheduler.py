@@ -1,5 +1,8 @@
+import json
 import logging
 import os
+from pathlib import Path
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.db.session import SessionLocal
 from app.core.market.candles import fetch_15m_candles, fetch_daily_candles, fetch_5m_candles, fetch_1h_candles
@@ -14,6 +17,173 @@ logger = logging.getLogger(__name__)
 
 # ✅ ONE global scheduler
 scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+
+_DISCOVERY_DEFAULT_TIMEFRAMES = ("Day", "1 Hour", "15 Min")
+
+
+def _discovery_state_path() -> Path:
+    raw = os.getenv("STRATEGY_DISCOVERY_STATE_FILE", "").strip()
+    if raw:
+        return Path(raw)
+    return Path(__file__).resolve().parents[2] / "data" / "strategy_discovery_progress.json"
+
+
+def _load_discovery_state() -> dict:
+    path = _discovery_state_path()
+    default_state = {"version": 1, "runs": 0, "strategy_batches": {}}
+    if not path.exists():
+        return default_state
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except Exception as exc:
+        logger.warning("⚠️ Could not read strategy discovery state '%s': %s", path, exc)
+        return default_state
+
+    if not isinstance(state, dict):
+        return default_state
+
+    state.setdefault("version", 1)
+    state.setdefault("runs", 0)
+    state.setdefault("strategy_batches", {})
+    return state
+
+
+def _save_discovery_state(state: dict) -> None:
+    path = _discovery_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, default=str)
+
+
+def _discovery_timeframes() -> list[str]:
+    raw = os.getenv("STRATEGY_DISCOVERY_TIMEFRAMES", ", ".join(_DISCOVERY_DEFAULT_TIMEFRAMES)).strip()
+    requested = [item.strip() for item in raw.split(",") if item.strip()]
+    valid_timeframes = {"Day", "1 Hour", "15 Min", "5 Min", "1 Min"}
+
+    resolved: list[str] = []
+    for timeframe in requested:
+        if timeframe in valid_timeframes and timeframe not in resolved:
+            resolved.append(timeframe)
+
+    return resolved or list(_DISCOVERY_DEFAULT_TIMEFRAMES)
+
+
+def _interleave_discovery_candidates(candidates_by_timeframe: dict[str, list[dict]]) -> list[dict]:
+    ordered_timeframes = [tf for tf, items in candidates_by_timeframe.items() if items]
+    if not ordered_timeframes:
+        return []
+
+    combined: list[dict] = []
+    max_len = max(len(candidates_by_timeframe[tf]) for tf in ordered_timeframes)
+    for idx in range(max_len):
+        for timeframe in ordered_timeframes:
+            items = candidates_by_timeframe.get(timeframe) or []
+            if idx >= len(items):
+                continue
+            combined.append(items[idx])
+    return combined
+
+
+def _slice_discovery_batch(items: list, *, start_offset: int = 0, batch_size: int = 50) -> dict:
+    total = len(items)
+    if total <= 0:
+        return {
+            "items": [],
+            "total": 0,
+            "start_offset": 0,
+            "end_offset": 0,
+            "next_offset": 0,
+            "completed_cycle": True,
+        }
+
+    batch_size = max(1, int(batch_size or 1))
+    start_offset = max(0, min(int(start_offset or 0), total - 1))
+    end_offset = min(start_offset + batch_size, total)
+
+    return {
+        "items": list(items[start_offset:end_offset]),
+        "total": total,
+        "start_offset": start_offset,
+        "end_offset": end_offset,
+        "next_offset": 0 if end_offset >= total else end_offset,
+        "completed_cycle": end_offset >= total,
+    }
+
+
+def _qualifies_for_auto_save(
+    item: dict,
+    *,
+    min_score: float,
+    min_annual_return: float,
+    min_trades: int,
+    max_drawdown: float,
+) -> bool:
+    summary = item.get("summary") or {}
+    if item.get("error"):
+        return False
+    if float(item.get("score") or -1e9) < min_score:
+        return False
+    if float(summary.get("annual_return_pct") or 0.0) < min_annual_return:
+        return False
+    if int(summary.get("total_trades") or 0) < min_trades:
+        return False
+    if float(summary.get("max_drawdown_pct") or 0.0) > max_drawdown:
+        return False
+    return True
+
+
+def _leaderboard_sort_key(row: dict) -> tuple:
+    return (
+        float(row.get("score") or -1e9),
+        float(row.get("annual_return_pct") or 0.0),
+        -float(row.get("max_drawdown_pct") or 0.0),
+        float(row.get("sharpe_ratio") or 0.0),
+        float(row.get("total_return_pct") or 0.0),
+    )
+
+
+def _leaderboard_entry_from_ranked_item(item: dict) -> dict | None:
+    strategy = item.get("strategy") or {}
+    summary = item.get("summary") or {}
+    name = str(strategy.get("name") or "").strip()
+    if not name or item.get("error"):
+        return None
+    if int(summary.get("total_trades") or 0) <= 0:
+        return None
+
+    return {
+        "name": name,
+        "timeframe": strategy.get("timeframe"),
+        "universe": strategy.get("universe"),
+        "score": float(item.get("score") or -1e9),
+        "annual_return_pct": float(summary.get("annual_return_pct") or 0.0),
+        "total_return_pct": float(summary.get("total_return_pct") or 0.0),
+        "max_drawdown_pct": float(summary.get("max_drawdown_pct") or 0.0),
+        "sharpe_ratio": float(summary.get("sharpe_ratio") or 0.0),
+        "total_trades": int(summary.get("total_trades") or 0),
+        "final_capital": item.get("final_capital"),
+    }
+
+
+def _merge_discovery_leaderboard(existing_rows: list[dict] | None, ranked_batch: list[dict] | None, *, top_n: int = 5) -> list[dict]:
+    merged: dict[str, dict] = {}
+
+    for row in existing_rows or []:
+        name = str((row or {}).get("name") or "").strip()
+        if name:
+            merged[name] = dict(row)
+
+    for item in ranked_batch or []:
+        row = _leaderboard_entry_from_ranked_item(item)
+        if not row:
+            continue
+        current = merged.get(row["name"])
+        if current is None or _leaderboard_sort_key(row) > _leaderboard_sort_key(current):
+            merged[row["name"]] = row
+
+    return sorted(merged.values(), key=_leaderboard_sort_key, reverse=True)[: max(1, int(top_n or 5))]
 
 
 def _update_twitter_sentiment():
@@ -572,27 +742,51 @@ def start_twitter_sentiment_scheduler():
 
 
 def _strategy_discovery_job():
-    """Run condition strategy discovery daily: 120 candidates, top 5, NIFTY50, Day timeframe."""
-    logger.info("⏱️ Running daily strategy discovery (120 candidates, NIFTY50, Day)")
+    """Run batched multi-timeframe strategy discovery and persist the cursor between runs."""
+    universe = os.getenv("STRATEGY_DISCOVERY_UNIVERSE", "NIFTY50").strip() or "NIFTY50"
+    timeframes = _discovery_timeframes()
+    max_candidates = max(int(os.getenv("STRATEGY_DISCOVERY_MAX_CANDIDATES", "500") or 500), 50)
+    batch_size = max(int(os.getenv("STRATEGY_DISCOVERY_BATCH_SIZE", "50") or 50), 1)
+    top_n = max(int(os.getenv("STRATEGY_DISCOVERY_TOP_N", "5") or 5), 1)
+    min_score = float(os.getenv("STRATEGY_DISCOVERY_MIN_SCORE", "30") or 30)
+    min_annual_return = float(os.getenv("STRATEGY_DISCOVERY_MIN_ANNUAL_RETURN", "8") or 8)
+    min_trades = max(int(os.getenv("STRATEGY_DISCOVERY_MIN_TRADES", "8") or 8), 1)
+    max_drawdown = float(os.getenv("STRATEGY_DISCOVERY_MAX_DRAWDOWN", "25") or 25)
+    progress = _load_discovery_state()
+    state_key = f"{universe}|{'|'.join(timeframes)}"
+    state_row = dict((progress.get("strategy_batches") or {}).get(state_key) or {})
+    cursor = int(state_row.get("next_offset", 0) or 0)
+
+    logger.info(
+        "⏱️ Running batched strategy discovery | universe=%s | timeframes=%s | batch_size=%s | cursor=%s",
+        universe,
+        ", ".join(timeframes),
+        batch_size,
+        cursor,
+    )
+
     db = SessionLocal()
     try:
-        from app.api.routes.condition_scanner import (
-            _run_backtest_for_strategy_payload,
-            BacktestRequest,
-        )
-        from app.core.condition_strategy_lab import (
-            generate_candidate_strategies,
-            score_backtest_summary,
-            select_diverse_top,
-        )
-        from app.db.models_condition_strategy import ConditionStrategy, ConditionStrategyBacktest
+        from app.api.routes.condition_scanner import BacktestRequest, _run_backtest_for_strategy_payload
+        from app.core.condition_strategy_lab import generate_candidate_strategies, score_backtest_summary, select_diverse_top
         from app.core.utils.time import now_ist
+        from app.db.models_condition_strategy import ConditionStrategy, ConditionStrategyBacktest
 
-        candidates = generate_candidate_strategies(
-            timeframe="Day",
-            universe="NIFTY50",
-            max_candidates=120,
-        )
+        candidates_by_timeframe = {
+            timeframe: generate_candidate_strategies(
+                timeframe=timeframe,
+                universe=universe,
+                max_candidates=max_candidates,
+            )
+            for timeframe in timeframes
+        }
+        candidate_pool = _interleave_discovery_candidates(candidates_by_timeframe)[:max_candidates]
+        batch = _slice_discovery_batch(candidate_pool, start_offset=cursor, batch_size=batch_size)
+        batch_candidates = batch["items"]
+
+        if not batch_candidates:
+            logger.info("⏩ Strategy discovery skipped: no candidates available")
+            return
 
         req = BacktestRequest(
             initial_capital=100000.0,
@@ -600,22 +794,75 @@ def _strategy_discovery_job():
             max_open_trades=5,
         )
 
-        ranked = []
-        for candidate in candidates:
+        ranked: list[dict] = []
+        for candidate in batch_candidates:
             try:
                 result = _run_backtest_for_strategy_payload(candidate, req, db)
                 summary = result.get("summary") or {}
-                score = score_backtest_summary(summary)
-                ranked.append({"strategy": candidate, "summary": summary, "score": score, "final_capital": result.get("final_capital")})
-            except Exception:
-                pass
+                ranked.append(
+                    {
+                        "strategy": candidate,
+                        "summary": summary,
+                        "score": score_backtest_summary(summary),
+                        "final_capital": result.get("final_capital"),
+                        "error": result.get("error"),
+                    }
+                )
+            except Exception as exc:
+                ranked.append(
+                    {
+                        "strategy": candidate,
+                        "summary": {},
+                        "score": -1e9,
+                        "final_capital": None,
+                        "error": str(exc),
+                    }
+                )
 
-        ranked.sort(key=lambda x: (x["score"], float((x.get("summary") or {}).get("annual_return_pct") or 0)), reverse=True)
-        top5 = select_diverse_top(ranked, top_n=5, max_per_family=1, fill_remaining=True)
+        ranked.sort(
+            key=lambda item: (
+                item["score"],
+                float((item.get("summary") or {}).get("annual_return_pct") or 0.0),
+                -float((item.get("summary") or {}).get("max_drawdown_pct") or 0.0),
+                float((item.get("summary") or {}).get("sharpe_ratio") or 0.0),
+            ),
+            reverse=True,
+        )
+
+        rolling_top_results = _merge_discovery_leaderboard(
+            state_row.get("rolling_top_results") or [],
+            ranked,
+            top_n=max(top_n, 5),
+        )
+
+        qualified = [
+            item
+            for item in ranked
+            if _qualifies_for_auto_save(
+                item,
+                min_score=min_score,
+                min_annual_return=min_annual_return,
+                min_trades=min_trades,
+                max_drawdown=max_drawdown,
+            )
+        ]
+
+        preview = select_diverse_top(
+            qualified if qualified else ranked,
+            top_n=top_n,
+            max_per_family=1,
+            fill_remaining=True,
+        )
+        to_save = select_diverse_top(
+            qualified,
+            top_n=top_n,
+            max_per_family=1,
+            fill_remaining=False,
+        ) if qualified else []
 
         existing_names = {name for (name,) in db.query(ConditionStrategy.name).all()}
-        saved = []
-        for rank, item in enumerate(top5, start=1):
+        saved: list[str] = []
+        for rank, item in enumerate(to_save, start=1):
             strategy = item["strategy"]
             base_name = f"[Auto] {strategy['name']}"
             save_name = base_name
@@ -624,13 +871,18 @@ def _strategy_discovery_job():
                 save_name = f"{base_name} #{suffix}"
                 suffix += 1
 
+            summary = item.get("summary") or {}
             row = ConditionStrategy(
                 name=save_name,
-                description=f"Auto-discovered #{rank} | Score={item['score']} | Return={item['summary'].get('annual_return_pct', 0):.1f}%",
+                description=(
+                    f"Batched auto-discovery #{rank} | Timeframe={strategy.get('timeframe')} | "
+                    f"Score={item['score']} | AnnualReturn={summary.get('annual_return_pct', 0):.1f}% | "
+                    f"Sharpe={summary.get('sharpe_ratio', 0)}"
+                ),
                 strategy_type=strategy.get("strategy_type", "Equity Swing"),
                 direction=strategy.get("direction", "BUY"),
-                timeframe="Day",
-                universe="NIFTY50",
+                timeframe=strategy.get("timeframe", "Day"),
+                universe=strategy.get("universe", universe),
                 instruments=strategy.get("instruments", []),
                 entry_conditions=strategy.get("entry_conditions", []),
                 exit_config=strategy.get("exit_config", {}),
@@ -648,7 +900,15 @@ def _strategy_discovery_job():
                 end_date="",
                 initial_capital=100000.0,
                 final_capital=item.get("final_capital"),
-                result={**item.get("summary", {}), "strategy": strategy},
+                result={
+                    "summary": summary,
+                    "strategy": strategy,
+                    "discovery_batch": {
+                        "start": batch["start_offset"],
+                        "end": batch["end_offset"],
+                        "total": batch["total"],
+                    },
+                },
             )
             db.add(bt)
             db.flush()
@@ -658,17 +918,77 @@ def _strategy_discovery_job():
             saved.append(save_name)
 
         db.commit()
-        logger.info("✅ Strategy discovery complete: saved %d strategies: %s", len(saved), saved)
 
-        # Telegram alert
+        state_row.update(
+            {
+                "last_run_at": now_ist().isoformat(),
+                "next_offset": batch["next_offset"],
+                "pool_total": batch["total"],
+                "last_batch_start": batch["start_offset"],
+                "last_batch_end": batch["end_offset"],
+                "last_batch_tested": len(batch_candidates),
+                "qualified_count": len(qualified),
+                "saved_count": len(saved),
+                "saved_names": saved,
+                "completed_cycle": bool(batch["completed_cycle"]),
+                "cycle_count": int(state_row.get("cycle_count", 0) or 0) + (1 if batch["completed_cycle"] else 0),
+                "top_results": [
+                    {
+                        "name": item.get("strategy", {}).get("name"),
+                        "timeframe": item.get("strategy", {}).get("timeframe"),
+                        "score": item.get("score"),
+                        "annual_return_pct": (item.get("summary") or {}).get("annual_return_pct"),
+                        "max_drawdown_pct": (item.get("summary") or {}).get("max_drawdown_pct"),
+                    }
+                    for item in preview[:top_n]
+                ],
+                "rolling_top_results": rolling_top_results[: max(top_n, 5)],
+            }
+        )
+        progress.setdefault("strategy_batches", {})[state_key] = state_row
+        progress["runs"] = int(progress.get("runs", 0) or 0) + 1
+        _save_discovery_state(progress)
+
+        logger.info(
+            "✅ Strategy discovery batch complete | tested=%s | qualified=%s | saved=%s | range=%s-%s/%s | next_offset=%s",
+            len(batch_candidates),
+            len(qualified),
+            len(saved),
+            batch["start_offset"] + 1,
+            batch["end_offset"],
+            batch["total"],
+            batch["next_offset"],
+        )
+
         try:
             from app.services.notifications import NotificationService
+
             svc = NotificationService(db)
-            svc._send_telegram(
-                f"🔬 <b>Daily Strategy Discovery</b>\n"
-                f"Tested 120 candidates on NIFTY50 (Daily)\n"
-                + "\n".join(f"{i+1}. {n}" for i, n in enumerate(saved))
-            )
+            lines = [
+                "🔬 <b>Batched Strategy Discovery</b>",
+                f"Universe: {universe}",
+                f"Timeframes: {', '.join(timeframes)}",
+                f"Range: {batch['start_offset'] + 1}-{batch['end_offset']} / {batch['total']}",
+                f"Qualified: {len(qualified)} | Saved: {len(saved)}",
+            ]
+            if rolling_top_results:
+                lines.append("")
+                lines.append("🏆 Rolling Top 5")
+                for idx, row in enumerate(rolling_top_results[:5], start=1):
+                    lines.append(
+                        f"{idx}. {row.get('name')} [{row.get('timeframe')}] | "
+                        f"score={row.get('score')} | annual={row.get('annual_return_pct')}%"
+                    )
+            elif preview:
+                lines.append("")
+                for idx, item in enumerate(preview[:top_n], start=1):
+                    summary = item.get("summary") or {}
+                    strategy = item.get("strategy") or {}
+                    lines.append(
+                        f"{idx}. {strategy.get('name')} [{strategy.get('timeframe')}] | "
+                        f"score={item.get('score')} | return={summary.get('annual_return_pct', 0)}%"
+                    )
+            svc._send_telegram("\n".join(lines))
         except Exception:
             pass
 
@@ -711,7 +1031,7 @@ def start_strategy_decay_scheduler():
 
 
 def start_strategy_discovery_scheduler():
-    """Run strategy discovery daily at 4:15 PM IST (after candles + VIX are updated)."""
+    """Run batched strategy discovery daily at 4:15 PM IST (after candles + VIX are updated)."""
     if not scheduler.running:
         logger.warning("⚠️ Cannot start strategy discovery scheduler: main scheduler not running")
         return

@@ -197,6 +197,30 @@ interface BrokerageConfig {
   stamp_duty_cap: number;
 }
 
+interface DiscoveryLeaderboardEntry {
+  rank: number;
+  name: string;
+  timeframe?: string;
+  universe?: string;
+  score: number;
+  annual_return_pct: number;
+  total_return_pct?: number;
+  max_drawdown_pct: number;
+  sharpe_ratio?: number;
+  total_trades?: number;
+  final_capital?: number | null;
+}
+
+interface DiscoverySnapshot {
+  state_key: string | null;
+  last_run_at?: string | null;
+  next_offset?: number;
+  total_pool?: number;
+  last_batch_start?: number;
+  last_batch_end?: number;
+  completed_cycle?: boolean;
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const COMPARATORS = [
@@ -274,6 +298,8 @@ const CreateScanner: React.FC = () => {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [prebuiltStrategies, setPrebuiltStrategies] = useState<PrebuiltStrategy[]>([]);
   const [indicators, setIndicators] = useState<IndicatorMeta[]>([]);
+  const [discoveryLeaderboard, setDiscoveryLeaderboard] = useState<DiscoveryLeaderboardEntry[]>([]);
+  const [discoverySnapshot, setDiscoverySnapshot] = useState<DiscoverySnapshot | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filterType, setFilterType] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -357,6 +383,8 @@ const CreateScanner: React.FC = () => {
         api.get('/condition-scanner/indicators'),
       ]);
       setStrategies(stratRes.data.strategies || []);
+      setDiscoveryLeaderboard(stratRes.data.discovery_leaderboard || []);
+      setDiscoverySnapshot(stratRes.data.discovery_snapshot || null);
       setPrebuiltStrategies(prebuiltRes.data.strategies || []);
       setIndicators(indRes.data.indicators || []);
     } catch (err) {
@@ -997,6 +1025,70 @@ const CreateScanner: React.FC = () => {
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
             />
+          </div>
+
+          <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <div>
+                <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-emerald-300" />
+                  Rolling Top 5
+                </h2>
+                <p className="text-[10px] text-slate-400">
+                  Best discovered strategies across all scanned batches.
+                </p>
+              </div>
+              <button
+                onClick={() => loadData()}
+                className="text-[10px] px-2 py-1 rounded-md border border-slate-700 bg-slate-900 text-slate-300 hover:text-white"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {discoverySnapshot?.state_key && (
+              <div className="mb-2 flex flex-wrap gap-2 text-[10px] text-slate-400">
+                <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700">
+                  Next: {formatNumber(discoverySnapshot.next_offset ?? 0)}/{formatNumber(discoverySnapshot.total_pool ?? 0)}
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700">
+                  Last batch: {(discoverySnapshot.last_batch_start ?? 0) + 1}-{discoverySnapshot.last_batch_end ?? 0}
+                </span>
+                {discoverySnapshot.last_run_at && (
+                  <span className="text-slate-500">
+                    Updated: {new Date(discoverySnapshot.last_run_at).toLocaleString()}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {discoveryLeaderboard.length > 0 ? (
+              <div className="space-y-2">
+                {discoveryLeaderboard.map(item => (
+                  <div key={`${item.rank}-${item.name}`} className="rounded-lg border border-slate-800 bg-slate-950/70 px-2.5 py-2">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[10px] font-bold text-emerald-300">#{item.rank}</span>
+                        <span className="text-xs font-semibold text-white truncate">{item.name}</span>
+                      </div>
+                      <span className={`text-[10px] font-semibold ${Number(item.annual_return_pct) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {Number(item.annual_return_pct) >= 0 ? '+' : ''}{Number(item.annual_return_pct).toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-400">
+                      <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">{item.timeframe || '—'}</span>
+                      <span>Score: {Number(item.score).toFixed(2)}</span>
+                      <span>DD: {Number(item.max_drawdown_pct).toFixed(2)}%</span>
+                      <span>Trades: {formatNumber(item.total_trades ?? 0)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 px-3 py-3 text-[11px] text-slate-500">
+                No rolling discovery results yet. Run a discovery batch and the top 5 will appear here.
+              </div>
+            )}
           </div>
         </div>
 
