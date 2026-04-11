@@ -129,13 +129,13 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     rsi_bearish = float(last["rsi"]) < 50
     adx_strong = float(last["adx"]) >= 25
 
-    # STRONG SIGNALS: EMA trend + slope + RSI all aligned
-    if ema_trend_bullish and ema_slope_positive and rsi_bullish:
+    # STRONG SIGNALS: EMA trend + slope + RSI all aligned + ADX confirmation
+    if ema_trend_bullish and ema_slope_positive and rsi_bullish and adx_strong:
         signal = "BULLISH"
         bias = "BULLISH"
         confidence = 70 + min(10, quality_score * 2)
         reason = "EMA trend up + RSI > 50 + ADX strong"
-    elif ema_trend_bearish and ema_slope_negative and rsi_bearish:
+    elif ema_trend_bearish and ema_slope_negative and rsi_bearish and adx_strong:
         signal = "BEARISH"
         bias = "BEARISH"
         confidence = 70 + min(10, quality_score * 2)
@@ -405,17 +405,17 @@ def _ta_signal_daily_from_df(df: pd.DataFrame) -> Dict:
     ema_trend_bearish = last["ema_50"] < last["ema_200"]
     ema_slope_positive = last["ema_50_slope"] > 0
     ema_slope_negative = last["ema_50_slope"] < 0
-    rsi_bullish = float(last["rsi"]) > 45  # Slightly lower threshold for swing
-    rsi_bearish = float(last["rsi"]) < 55  # Slightly higher threshold for swing
+    rsi_bullish = float(last["rsi"]) >= 55  # Require clear bullish momentum for swing
+    rsi_bearish = float(last["rsi"]) <= 45  # Require clear bearish momentum for swing
     adx_strong = float(last["adx"]) >= 20  # Daily timeframe threshold
 
-    # STRONG SIGNALS: EMA trend + slope + RSI all aligned
-    if ema_trend_bullish and ema_slope_positive and rsi_bullish:
+    # STRONG SIGNALS: EMA trend + slope + RSI all aligned + ADX confirmation
+    if ema_trend_bullish and ema_slope_positive and rsi_bullish and adx_strong:
         signal = "BULLISH"
         bias = "BULLISH"
         confidence = 65 + min(15, quality_score * 2)
         reason = "Daily EMA 50/200 cross up + RSI favorable + ADX strong"
-    elif ema_trend_bearish and ema_slope_negative and rsi_bearish:
+    elif ema_trend_bearish and ema_slope_negative and rsi_bearish and adx_strong:
         signal = "BEARISH"
         bias = "BEARISH"
         confidence = 65 + min(15, quality_score * 2)
@@ -553,30 +553,30 @@ def ta_signal_daily(db: Session, symbol: str) -> Dict:
 
 
 def compute_rsi(series: pd.Series, period: int = 14):
-    """RSI (Relative Strength Index) - Professional TA-Lib standard"""
+    """RSI (Relative Strength Index) using Wilder-style smoothing.
+
+    Handles one-sided trend runs safely:
+    - no losses -> RSI = 100
+    - no gains -> RSI = 0
+    - flat tape -> RSI = 50
+    """
     delta = series.diff()
-    
-    # Separate gains and losses
-    gains = delta.where(delta > 0, 0)
-    losses = -delta.where(delta < 0, 0)
-    
-    # Wilder's smoothing for RSI (same as ATR)
-    avg_gain = pd.Series(index=series.index, dtype=float)
-    avg_loss = pd.Series(index=series.index, dtype=float)
-    
-    avg_gain.iloc[period] = gains.iloc[1:period+1].mean()
-    avg_loss.iloc[period] = losses.iloc[1:period+1].mean()
-    
-    # Wilder's smoothing for rest
-    for i in range(period + 1, len(series)):
-        avg_gain.iloc[i] = (avg_gain.iloc[i-1] * (period - 1) + gains.iloc[i]) / period
-        avg_loss.iloc[i] = (avg_loss.iloc[i-1] * (period - 1) + losses.iloc[i]) / period
-    
-    # Calculate RS and RSI
+
+    gains = delta.clip(lower=0)
+    losses = -delta.clip(upper=0)
+
+    avg_gain = gains.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = losses.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    
-    return rsi
+
+    rsi = rsi.where(avg_loss != 0, 100.0)
+    rsi = rsi.where(avg_gain != 0, 0.0)
+    flat_mask = (avg_gain == 0) & (avg_loss == 0)
+    rsi = rsi.mask(flat_mask, 50.0)
+
+    return rsi.bfill()
 
 
 def compute_adx(df: pd.DataFrame, period: int = 14):

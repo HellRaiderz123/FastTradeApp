@@ -13,6 +13,7 @@ Merges them into a comprehensive market signal using the new multi-asset Signal 
 from sqlalchemy.orm import Session
 from typing import Dict, Optional, Union
 import logging
+import pandas as pd
 
 from app.core.signals.ta_engine import ta_signal_15m
 from app.core.signals.ml_engine import ml_signal
@@ -25,6 +26,8 @@ from app.core.market.vix_iv_api import (
     get_vix_iv_data_cached,
     determine_iv_regime,
 )
+from app.core.indicators.put_call_ratio import OptionChainAnalysis
+from app.services.market_data import enrich_chain_with_live_oi, get_option_chain, get_spot
 from app.core.signals.base import (
     Signal,
     SignalFactory,
@@ -57,6 +60,169 @@ def _initialize_signal_factory():
 
 # Initialize on module import
 _initialize_signal_factory()
+
+_OPTION_CHAIN_UNDERLYINGS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_option_chain_analytics(chain_df: pd.DataFrame, spot: float) -> Dict:
+    """Build lightweight option-chain analytics from the live chain dataframe."""
+    if chain_df is None or getattr(chain_df, "empty", True):
+        return {}
+
+    try:
+        df = chain_df.copy()
+        df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+        df["oi"] = pd.to_numeric(df["oi"], errors="coerce") if "oi" in df.columns else 0.0
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce") if "volume" in df.columns else 0.0
+        df["oi"] = df["oi"].fillna(0.0)
+        df["volume"] = df["volume"].fillna(0.0)
+
+        df = df[df["instrument_type"].isin(["CE", "PE"]) & df["strike"].notna()]
+        if df.empty or float(df["oi"].sum()) <= 0:
+            return {}
+
+        grouped = (
+            df.groupby(["strike", "instrument_type"], as_index=False)[["oi", "volume"]]
+            .sum()
+            .sort_values("strike")
+        )
+
+        chain_payload = {"data": []}
+        for strike, strike_df in grouped.groupby("strike"):
+            call_row = strike_df[strike_df["instrument_type"] == "CE"]
+            put_row = strike_df[strike_df["instrument_type"] == "PE"]
+            chain_payload["data"].append(
+                {
+                    "strike": float(strike),
+                    "call_oi": _safe_float(call_row["oi"].iloc[0]) if not call_row.empty else 0.0,
+                    "put_oi": _safe_float(put_row["oi"].iloc[0]) if not put_row.empty else 0.0,
+                }
+            )
+
+        analyzer = OptionChainAnalysis()
+        analytics = analyzer.analyze_chain(chain_payload, spot)
+        sentiment = analyzer.get_sentiment_score(
+            pcr=_safe_float(analytics.get("pcr")),
+            spot=spot,
+            support=_safe_float(analytics.get("support_level")),
+            resistance=_safe_float(analytics.get("resistance_level")),
+        )
+        analytics.update(sentiment)
+        return analytics
+    except Exception as e:
+        logger.warning("⚠️ Option chain analytics build failed: %s", e)
+        return {}
+
+
+def _apply_option_context_to_signal(signal: Dict, analytics: Dict) -> Dict:
+    """Adjust directional signal using option-chain OI/PCR confirmation."""
+    if not analytics:
+        return signal
+
+    enriched = signal.copy()
+    indicators = (enriched.get("indicators") or {}).copy()
+    quality_checks = (enriched.get("quality_checks") or {}).copy()
+    existing_ctx = enriched.get("context")
+    context = existing_ctx.copy() if isinstance(existing_ctx, dict) else {}
+
+    pcr = analytics.get("pcr")
+    support = analytics.get("support_level")
+    resistance = analytics.get("resistance_level")
+    spot = analytics.get("spot_price")
+    sentiment = str(analytics.get("sentiment") or "Neutral")
+    total_score = int(_safe_float(analytics.get("total_score")))
+
+    indicators.update({
+        "option_pcr": round(_safe_float(pcr), 4) if pcr is not None else None,
+        "oi_support": support,
+        "oi_resistance": resistance,
+        "oi_sentiment_score": total_score,
+    })
+    context["option_chain"] = {
+        "pcr": pcr,
+        "support": support,
+        "resistance": resistance,
+        "sentiment": sentiment,
+        "sentiment_score": total_score,
+    }
+
+    bias = str(enriched.get("bias") or "NEUTRAL").upper()
+    confidence = _safe_float(enriched.get("confidence"))
+    confirm = True
+    adjustment = 0
+
+    near_support = bool(support and spot and support > 0 and abs(spot - support) / support <= 0.0035)
+    near_resistance = bool(resistance and spot and resistance > 0 and abs(resistance - spot) / resistance <= 0.0035)
+
+    if bias == "BULLISH":
+        if sentiment == "Bullish":
+            adjustment += 4
+        elif sentiment == "Bearish":
+            adjustment -= 8
+            confirm = False
+        if near_resistance:
+            adjustment -= 5
+            confirm = False
+    elif bias == "BEARISH":
+        if sentiment == "Bearish":
+            adjustment += 4
+        elif sentiment == "Bullish":
+            adjustment -= 8
+            confirm = False
+        if near_support:
+            adjustment -= 5
+            confirm = False
+
+    quality_checks["oi_data_ok"] = True
+    quality_checks["oi_bias_confirm"] = confirm
+
+    if adjustment > 0:
+        enriched["reason"] = f"{enriched.get('reason', '')} | OI/PCR confirmation".strip()
+    elif adjustment < 0:
+        enriched["reason"] = f"{enriched.get('reason', '')} | OI/PCR conflict".strip()
+
+    enriched["confidence"] = max(0.0, min(100.0, confidence + adjustment))
+    enriched["indicators"] = indicators
+    enriched["quality_checks"] = quality_checks
+    enriched["quality_score"] = sum(1 for v in quality_checks.values() if v)
+    enriched["context"] = context
+    return enriched
+
+
+def _enrich_signal_with_option_context(signal: Dict, symbol: str) -> Dict:
+    """Add live option-chain confirmation for index underlyings used in options trading."""
+    normalized = str(symbol or "").upper().strip()
+    if normalized not in _OPTION_CHAIN_UNDERLYINGS:
+        return signal
+
+    try:
+        diagnostics = signal.get("diagnostics") if isinstance(signal.get("diagnostics"), dict) else {}
+        spot = _safe_float(diagnostics.get("last_close"), default=0.0)
+        if spot <= 0:
+            spot = _safe_float(get_spot(normalized), default=0.0)
+        if spot <= 0:
+            return signal
+
+        chain = get_option_chain(normalized)
+        chain = enrich_chain_with_live_oi(chain)
+        analytics = _build_option_chain_analytics(chain, spot)
+        if not analytics:
+            return signal
+
+        analytics.setdefault("spot_price", spot)
+        return _apply_option_context_to_signal(signal, analytics)
+    except Exception as e:
+        logger.warning("⚠️ Failed to enrich signal with option chain context for %s: %s", normalized, e)
+        return signal
 
 
 def generate_signal_multi_asset(
@@ -319,6 +485,7 @@ def generate_signal(
         vix_rank=vix_rank,
         iv_regime=iv_regime,
     )
+    ta_sig = _enrich_signal_with_option_context(ta_sig, symbol)
 
     # =====================================================
     # STEP 5: ML Override (optional)

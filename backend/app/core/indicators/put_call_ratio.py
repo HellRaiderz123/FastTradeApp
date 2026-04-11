@@ -269,10 +269,10 @@ class OptionChainAnalysis:
                 pcr_score = -40
             
             # Position component (-30 to +30)
-            if support and resistance:
+            if support and resistance and resistance > support:
                 midpoint = (support + resistance) / 2
                 position_in_range = (spot - support) / (resistance - support)
-                
+
                 if position_in_range > 0.6:
                     position_score = 30
                 elif position_in_range > 0.4:
@@ -281,14 +281,13 @@ class OptionChainAnalysis:
                     position_score = -20
             else:
                 position_score = 0
-            
+
             # Support/Resistance component (-30 to +30)
-            if support and spot < support * 1.02:
-                # Near support
-                bounce_score = -30
-            elif resistance and spot > resistance * 0.98:
-                # Near resistance
+            # Near support is bullish; near resistance is bearish.
+            if support and support > 0 and abs(spot - support) / support <= 0.02:
                 bounce_score = 30
+            elif resistance and resistance > 0 and abs(spot - resistance) / resistance <= 0.02:
+                bounce_score = -30
             else:
                 bounce_score = 0
             

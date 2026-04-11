@@ -14,11 +14,13 @@ import logging
 from app.core.broker.zerodha.instruments import get_index_token, load_instruments
 from app.core.broker.zerodha.client import get_kite_client
 from app.core.market.expiry import get_next_valid_expiry, get_next_weekly_expiry
+from app.services.zerodha import KiteConnectService
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.db.models_candles import Candle15m
 
 logger = logging.getLogger(__name__)
+_kite_service = KiteConnectService()
 
 # ============================
 # SPOT PRICE
@@ -145,29 +147,59 @@ def get_option_ltp(symbols: List[str]) -> Dict[str, float]:
 
 def enrich_chain_with_live_oi(chain_df: pd.DataFrame, *_) -> pd.DataFrame:
     """
-    Enrich option chain with live LTP from Zerodha.
+    Enrich option chain with live quote fields from Zerodha.
+
+    Populates LTP, OI, volume, and best bid/ask metadata when available.
+    Falls back gracefully if live data cannot be fetched.
     """
+    if chain_df is None:
+        return pd.DataFrame()
+
     # Always add these columns
-    if "ltp" not in chain_df.columns:
-        chain_df["ltp"] = 0.0
-    if "oi" not in chain_df.columns:
-        chain_df["oi"] = None
-    
+    for col, default in {
+        "ltp": 0.0,
+        "oi": 0.0,
+        "volume": 0.0,
+        "bid": 0.0,
+        "ask": 0.0,
+        "bid_qty": 0.0,
+        "ask_qty": 0.0,
+    }.items():
+        if col not in chain_df.columns:
+            chain_df[col] = default
+
     if chain_df.empty:
         return chain_df
-    
+
     try:
-        # Get LTP for all symbols
-        symbols = chain_df["tradingsymbol"].tolist()
-        ltp_data = get_option_ltp(symbols)
-        
-        # Update LTP column
-        chain_df["ltp"] = chain_df["tradingsymbol"].map(ltp_data)
-        logger.info(f"✅ Enriched option chain with {len(ltp_data)} LTP values")
-        
+        symbols = [str(sym).strip() for sym in chain_df["tradingsymbol"].tolist() if str(sym).strip()]
+        nfo_symbols = [sym if sym.startswith("NFO:") else f"NFO:{sym}" for sym in symbols]
+        quotes = _kite_service.get_bulk_quotes(nfo_symbols) or {}
+
+        if not quotes:
+            logger.warning("⚠️ Could not fetch live option quotes; leaving chain enrichment at defaults")
+            return chain_df
+
+        def _quote_value(tradingsymbol: str, field: str, default=0.0):
+            raw = quotes.get(f"NFO:{tradingsymbol}") or quotes.get(tradingsymbol) or {}
+            if field == "bid":
+                return float((raw.get("depth") or {}).get("buy", [{}])[0].get("price", default) or default)
+            if field == "ask":
+                return float((raw.get("depth") or {}).get("sell", [{}])[0].get("price", default) or default)
+            return float(raw.get(field, default) or default)
+
+        chain_df["ltp"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "last_price", 0.0))
+        chain_df["oi"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "oi", 0.0))
+        chain_df["volume"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "volume", 0.0))
+        chain_df["bid"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "bid", 0.0))
+        chain_df["ask"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "ask", 0.0))
+        chain_df["bid_qty"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "buy_quantity", 0.0))
+        chain_df["ask_qty"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "sell_quantity", 0.0))
+
+        logger.info("✅ Enriched option chain with %d live quotes including OI/volume", len(quotes))
+
     except Exception as e:
-        logger.warning(f"⚠️  Could not enrich chain ({e}), using 0 for LTP")
-        chain_df["ltp"] = 0.0
-    
+        logger.warning(f"⚠️  Could not enrich chain ({e}), using 0/default values")
+
     return chain_df
 
