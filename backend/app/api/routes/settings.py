@@ -23,6 +23,24 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 ENV_FILE = Path(__file__).resolve().parent.parent.parent.parent / ".env"
 
 
+def _activate_zerodha_token(access_token: str, user_id: str | None = None) -> None:
+    from app.core.broker.zerodha.oauth import activate_access_token
+    from app.core.broker.zerodha import client as kite_client_module
+
+    set_key(str(ENV_FILE), "ZERODHA_ACCESS_TOKEN", access_token)
+    os.environ["ZERODHA_ACCESS_TOKEN"] = access_token
+
+    db = SessionLocal()
+    try:
+        activate_access_token(db, access_token, user_id=user_id)
+    finally:
+        db.close()
+
+    if kite_client_module._kite is not None:
+        kite_client_module._kite.set_access_token(access_token)
+    kite_client_module._kite = None
+
+
 class ZerodhaCredentials(BaseModel):
     """Model for Zerodha API credentials"""
     api_key: str
@@ -253,6 +271,7 @@ def generate_zerodha_token(request_body: ZerodhaRequestToken):
         )
         
         access_token = session_data.get("access_token")
+        user_id = session_data.get("user_id")
         
         
         if not access_token:
@@ -261,9 +280,7 @@ def generate_zerodha_token(request_body: ZerodhaRequestToken):
                 detail="Failed to generate access token"
             )
         
-        # Save the access token to .env
-        set_key(str(ENV_FILE), "ZERODHA_ACCESS_TOKEN", access_token)
-        os.environ["ZERODHA_ACCESS_TOKEN"] = access_token
+        _activate_zerodha_token(access_token, user_id=user_id)
         
         logger.info("Zerodha access token generated successfully")
         return ZerodhaAccessToken(access_token=access_token)
@@ -296,11 +313,7 @@ def save_zerodha_token(token: ZerodhaAccessToken):
                 detail="Access token cannot be empty"
             )
         
-        # Save to .env file
-        set_key(str(ENV_FILE), "ZERODHA_ACCESS_TOKEN", token.access_token)
-        
-        # Update environment variable
-        os.environ["ZERODHA_ACCESS_TOKEN"] = token.access_token
+        _activate_zerodha_token(token.access_token)
         
         logger.info("Zerodha access token updated successfully")
         return {

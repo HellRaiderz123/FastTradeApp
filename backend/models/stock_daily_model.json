@@ -1,0 +1,107 @@
+{
+  "model_type": "GradientBoosting",
+  "timeframe": "daily",
+  "horizon": 5,
+  "return_threshold": 0.01,
+  "train_rows": 31813,
+  "test_rows": 7954,
+  "total_samples": 39767,
+  "accuracy": 0.5592,
+  "precision": 0.5884,
+  "recall": 0.6241,
+  "f1_score": 0.6057,
+  "roc_auc": 0.5831,
+  "confusion_matrix": [
+    [
+      1755,
+      1884
+    ],
+    [
+      1622,
+      2693
+    ]
+  ],
+  "classification_report": {
+    "0": {
+      "precision": 0.5196920343500148,
+      "recall": 0.482275350370981,
+      "f1-score": 0.500285062713797,
+      "support": 3639.0
+    },
+    "1": {
+      "precision": 0.5883766659383876,
+      "recall": 0.6241019698725376,
+      "f1-score": 0.6057130004498426,
+      "support": 4315.0
+    },
+    "accuracy": 0.5592154890621072,
+    "macro avg": {
+      "precision": 0.5540343501442011,
+      "recall": 0.5531886601217593,
+      "f1-score": 0.5529990315818198,
+      "support": 7954.0
+    },
+    "weighted avg": {
+      "precision": 0.5569530584012882,
+      "recall": 0.5592154890621072,
+      "f1-score": 0.5574791224737966,
+      "support": 7954.0
+    }
+  },
+  "feature_importance": {
+    "ret_1": 0.021900670123649185,
+    "ret_short": 0.02928484237418279,
+    "ret_long": 0.031086437328761873,
+    "volatility": 0.06124677385312832,
+    "atr_norm": 0.04827911882680326,
+    "rsi": 0.03796128144090416,
+    "macd_hist": 0.04437308207638797,
+    "adx": 0.06603252893098507,
+    "ema_fast": 0.07403346894468035,
+    "ema_slow": 0.07692593794684252,
+    "ema_long": 0.0867480126491787,
+    "ema_fast_slope": 0.038740319874814334,
+    "ema_slow_slope": 0.04175342237838928,
+    "price_vs_ema_fast": 0.028634012171048797,
+    "price_vs_ema_slow": 0.03805088275706019,
+    "ema_cross": 0.057110987679686864,
+    "bb_width": 0.05074791949968949,
+    "bb_position": 0.035208943485485096,
+    "volume_ratio": 0.03149121347983277,
+    "obv_slope": 0.04714621045393775,
+    "body_ratio": 0.0182700538459752,
+    "upper_shadow": 0.01684868456859944,
+    "lower_shadow": 0.01812519530997642
+  },
+  "feature_columns": [
+    "ret_1",
+    "ret_short",
+    "ret_long",
+    "volatility",
+    "atr_norm",
+    "rsi",
+    "macd_hist",
+    "adx",
+    "ema_fast",
+    "ema_slow",
+    "ema_long",
+    "ema_fast_slope",
+    "ema_slow_slope",
+    "price_vs_ema_fast",
+    "price_vs_ema_slow",
+    "ema_cross",
+    "bb_width",
+    "bb_position",
+    "volume_ratio",
+    "obv_slope",
+    "body_ratio",
+    "upper_shadow",
+    "lower_shadow"
+  ],
+  "symbols_count": 90,
+  "class_distribution": {
+    "1": 20968,
+    "0": 18799
+  },
+  "training_date": "2026-04-24T05:12:39.506176"
+}

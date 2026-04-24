@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart,
   Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock,
-  GitCompare, DollarSign, Star, Filter, RefreshCw, PieChart, ShoppingBag,
+  GitCompare, DollarSign, Star, Filter, RefreshCw, PieChart, ShoppingBag, Database,
   ChevronDown,
 } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
@@ -46,6 +46,7 @@ const SECTIONS: Section[] = [
       { path: '/strategies', icon: Zap, label: 'Strategies' },
       { path: '/marketplace', icon: ShoppingBag, label: 'Marketplace' },
       { path: '/create-scanner', icon: Filter, label: 'Create Scanner' },
+      { path: '/backfill-candles', icon: Database, label: 'Backfill Candles' },
       { path: '/auto-trader', icon: Bot, label: 'Auto Trader' },
       { path: '/positions', icon: Briefcase, label: 'Positions' },
       { path: '/reconciliation', icon: RefreshCw, label: 'Reconciliation' },

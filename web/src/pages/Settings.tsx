@@ -1098,17 +1098,14 @@ const Settings: React.FC = () => {
 
           <button
             onClick={handleGenerateAccessToken}
-            disabled={zerodhaLoading || !zerodhaStatus.api_key_set}
+            disabled={zerodhaLoading}
             className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
           >
             <Save className="w-4 h-4" />
             {zerodhaLoading ? 'Generating & Saving...' : 'Generate & Save Access Token'}
           </button>
-          {!zerodhaStatus.api_key_set && (
-            <p className="text-xs text-red-400">⚠️ Save API credentials first</p>
-          )}
           <p className="text-xs text-slate-400 bg-slate-800 p-2 rounded">
-            ✓ Access token will be automatically saved to .env when generated
+            ✓ Access token will be automatically saved to .env when generated. If backend credentials are missing, the API will return the error.
           </p>
         </div>
 

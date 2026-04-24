@@ -756,3 +756,12 @@ export const marketplaceAPI = {
   deploy: (templateId: string, name?: string, lots?: number, capital?: number) =>
     api.post('/marketplace/deploy', { template_id: templateId, name, lots, capital }),
 };
+
+// Candle Backfill APIs
+export const candleBackfillAPI = {
+  runManual: (params: {
+    timeframe: '1 Min' | '5 Min' | '15 Min' | '1 Hour' | 'Day';
+    symbols?: string;
+    days?: number;
+  }) => api.post('/condition-scanner/backfill-candles', null, { params }),
+};

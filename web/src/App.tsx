@@ -30,6 +30,7 @@ import BrokerReconciliation from './pages/BrokerReconciliation';
 import StrategyPnL from './pages/StrategyPnL';
 import StrategyMarketplace from './pages/StrategyMarketplace';
 import AIAssistant from './pages/AIAssistant';
+import CandleBackfill from './pages/CandleBackfill';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import TwitterAlertsMonitor from './components/TwitterAlerts';
@@ -108,6 +109,7 @@ function AppInner() {
                   <Route path="/strategies/builder" element={<StrategyBuilder />} />
                   <Route path="/marketplace" element={<StrategyMarketplace />} />
                   <Route path="/create-scanner" element={<CreateScanner />} />
+                  <Route path="/backfill-candles" element={<CandleBackfill />} />
                   <Route path="/backtest" element={<Backtest />} />
                   <Route path="/backtest-comparison" element={<BacktestComparison />} />
                   <Route path="/positions" element={<Positions />} />

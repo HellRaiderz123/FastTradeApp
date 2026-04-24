@@ -21,6 +21,7 @@ const COMMANDS: CommandItem[] = [
   { label: 'Strategies', path: '/strategies', keywords: 'strategies manage' },
   { label: 'Marketplace', path: '/marketplace', keywords: 'marketplace templates' },
   { label: 'Create Scanner', path: '/create-scanner', keywords: 'scanner condition' },
+  { label: 'Backfill Candles', path: '/backfill-candles', keywords: 'candles backfill 1m 5m 15m 1h daily' },
   { label: 'Auto Trader', path: '/auto-trader', keywords: 'auto trader bot' },
   { label: 'Positions', path: '/positions', keywords: 'positions open' },
   { label: 'Reconciliation', path: '/reconciliation', keywords: 'reconcile broker' },

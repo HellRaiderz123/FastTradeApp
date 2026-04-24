@@ -25,6 +25,42 @@ from app.core.utils.time import now_ist
 logger = logging.getLogger(__name__)
 
 
+def activate_access_token(
+    db: Session,
+    access_token: str,
+    user_id: Optional[str] = None,
+    ttl: Optional[timedelta] = None,
+) -> Optional[ZerodhaSession]:
+    """Mark a Zerodha access token as the active DB session."""
+    if not access_token:
+        return None
+
+    session_ttl = ttl or timedelta(days=1)
+    expires_at = now_ist() + session_ttl
+
+    db.query(ZerodhaSession).filter(ZerodhaSession.is_active == 1).update({"is_active": 0})
+
+    existing = db.query(ZerodhaSession).filter(ZerodhaSession.access_token == access_token).first()
+    if existing:
+        existing.is_active = 1
+        existing.expires_at = expires_at
+        if user_id:
+            existing.user_id = user_id
+        session = existing
+    else:
+        session = ZerodhaSession(
+            access_token=access_token,
+            user_id=user_id,
+            expires_at=expires_at,
+            is_active=1,
+        )
+        db.add(session)
+
+    db.commit()
+    db.refresh(session)
+    return session
+
+
 def get_login_url(callback_url: str) -> str:
     """Generate Zerodha OAuth login URL."""
     api_key = os.getenv("ZERODHA_API_KEY")
@@ -64,22 +100,12 @@ def exchange_request_token_for_access_token(
             logger.error("Failed to generate access token from request token")
             return None
         
-        # Deactivate previous sessions
-        db.query(ZerodhaSession).filter(ZerodhaSession.is_active == 1).update({"is_active": 0})
-
-        # Upsert new session (token may already exist if Zerodha reused it)
-        existing = db.query(ZerodhaSession).filter(ZerodhaSession.access_token == access_token).first()
-        if existing:
-            existing.is_active = 1
-            existing.expires_at = now_ist() + timedelta(days=60)
-        else:
-            db.add(ZerodhaSession(
-                access_token=access_token,
-                user_id=user_id,
-                expires_at=now_ist() + timedelta(days=60),
-                is_active=1,
-            ))
-        db.commit()
+        activate_access_token(
+            db,
+            access_token,
+            user_id=user_id,
+            ttl=timedelta(days=60),
+        )
         
         logger.info(f"✅ Zerodha session created for user {user_id}")
         return access_token
