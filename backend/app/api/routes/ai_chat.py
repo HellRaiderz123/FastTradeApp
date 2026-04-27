@@ -96,6 +96,29 @@ def _extract_direct_ai_action(message: str):
     if not normalized:
         return None
 
+    geopolitical_match = re.search(
+        r"\b(iran|israel|gaza|ukraine|russia|china|taiwan|middle\s+east|war|conflict|missile|ceasefire|sanctions?)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if geopolitical_match and re.search(r"\b(news|update|updates|latest|today|happening|status|brief|summary|war|conflict)\b", normalized, flags=re.IGNORECASE):
+        return "get_market_news_summary", {"limit": 12, "keyword": geopolitical_match.group(1)}
+
+    if re.search(r"\b(today'?s?|latest|market)\s+news\b|\bnews\s+(today|now)\b|\b(headlines?|updates?)\b", normalized, flags=re.IGNORECASE):
+        topic_match = re.search(r"(?:news|update|headlines?)\s+(?:on|about)\s+([a-z0-9\s\-]{2,40})", normalized, flags=re.IGNORECASE)
+        args = {"limit": 8}
+        if topic_match:
+            args["keyword"] = topic_match.group(1).strip()
+        return "get_market_news_summary", args
+
+    if re.search(r"\b(scanner|signals?)\b.*\b(this week|weekly|last 7 days|past week)\b", normalized, flags=re.IGNORECASE):
+        return "get_recent_scanner_signals", {"days": 7}
+
+    if re.search(r"\b(brokerage|charges|stt|costs?)\b", normalized, flags=re.IGNORECASE):
+        days_match = re.search(r"\b(last|past)\s+(\d{1,3})\s+days\b", normalized)
+        days = int(days_match.group(2)) if days_match else 30
+        return "get_trade_cost_summary", {"days": max(1, min(days, 365))}
+
     generic_close_match = re.search(
         r"(?:close|exit|square\s*off)(?:\s+my|\s+the)?\s+(?:(current|latest|open|active)\s+)?(?:position|postion|trade)\b",
         normalized,
@@ -115,15 +138,53 @@ def _extract_direct_ai_action(message: str):
             return "close_position", {"reference": "current"}
         return "close_position", {"underlying": candidate}
 
+    number_words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+        "twenty": 20,
+    }
+
+    # Prefer explicit quantity + share/qty phrasing so text like
+    # "buy one share of TCS" does not mis-detect "ONE" as symbol.
     trade_match = re.search(
-        r"\b(buy|sell)\b\s*(?:(\d+)\s*(?:share|shares|qty|quantity|lot|lots)?)?\s*(?:of\s+)?([A-Za-z][A-Za-z0-9&.-]+)",
+        r"\b(buy|sell)\b\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s*(?:share|shares|qty|quantity|lot|lots)\s*(?:of\s+)?([A-Za-z][A-Za-z0-9&.-]+)",
         text,
         flags=re.IGNORECASE,
     )
+    if not trade_match:
+        # Fallback for compact forms like "buy TCS" or "sell 2 TCS"
+        trade_match = re.search(
+            r"\b(buy|sell)\b\s*(?:(\d+)\s*)?(?:of\s+)?([A-Za-z][A-Za-z0-9&.-]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
     if trade_match:
         action = trade_match.group(1).upper()
-        quantity = int(trade_match.group(2) or 1)
+        qty_raw = str(trade_match.group(2) or "1").strip().lower()
+        quantity = int(qty_raw) if qty_raw.isdigit() else int(number_words.get(qty_raw, 1))
         symbol = trade_match.group(3).upper()
+
+        # Ignore accidental symbol captures from confirmation words.
+        if symbol in {"YES", "NO", "CONFIRM", "PLACE", "NOW", "EXECUTE"}:
+            return None
+
         product = "MIS" if re.search(r"\bmis\b", normalized) else "NRML" if re.search(r"\bnrml\b", normalized) else "CNC"
         price_match = re.search(r"(?:limit(?:\s+price)?|at)\s*₹?\s*(\d+(?:\.\d+)?)", normalized)
         use_market = "market" in normalized or not price_match
@@ -149,6 +210,25 @@ def _extract_direct_ai_action(message: str):
 def _summarize_direct_action(tool_name: str, result: dict, voice_mode: bool = False) -> str:
     if not result.get("success"):
         text = result.get("error") or "Action failed."
+        return _normalize_voice_answer(text) if voice_mode else text
+
+    if tool_name == "get_market_news_summary":
+        headlines = result.get("headlines") or []
+        topic = (result.get("query_topic") or "").strip()
+        if not headlines:
+            if topic:
+                text = f"I could not find fresh headlines matching '{topic}' in current feeds."
+            else:
+                text = "No fresh market headlines are available right now."
+            return _normalize_voice_answer(text) if voice_mode else text
+
+        top_titles = [str(h.get("title") or "").strip() for h in headlines[:3] if isinstance(h, dict)]
+        top_titles = [t for t in top_titles if t]
+        if topic:
+            prefix = f"Latest headlines related to {topic}: "
+        else:
+            prefix = "Latest market headlines: "
+        text = prefix + " | ".join(top_titles)
         return _normalize_voice_answer(text) if voice_mode else text
 
     if result.get("requires_confirmation"):
@@ -469,6 +549,8 @@ DATA ACCESS:
 - Condition Scanner strategies and backtest results
 - Scanner signals generated in last 7 days
 - Trade costs and brokerage charges
+- Market news feeds, trending topics, and sentiment-tagged headlines
+- Major global macro and geopolitical headlines present in the fetched news feeds (e.g., wars, sanctions, oil shocks)
 - Personal finance (transactions, budgets, savings goals, bills)
 
 ACTIONS YOU CAN PERFORM (use your tools — do not say you cannot do these):
@@ -485,6 +567,9 @@ ACTIONS YOU CAN PERFORM (use your tools — do not say you cannot do these):
 ✅ place_trade — "Buy 10 shares of SBI at market price CNC" / "Sell 5 RELIANCE shares MIS"
 ✅ place_trade dry run — "Dry run: buy 10 shares of SBI at market CNC"
 ✅ get_market_sentiment — "What is NIFTY prediction today?" / "Is market bullish or bearish now?"
+✅ get_market_news_summary — "Today's market news" / "Top headlines right now"
+✅ get_recent_scanner_signals — "What scanner signals fired this week?"
+✅ get_trade_cost_summary — "How much am I spending on brokerage?"
 ✅ get_strategy_metrics — "How many trades did strategy X take and over what period?"
 ✅ get_watchlist_gameplan — "Build my pre-market game plan" / "Rank my watchlist for today"
 ✅ review_trade_journal — "Review my last 30 days of trades" / "What patterns are hurting my performance?"
@@ -504,6 +589,8 @@ ANALYSIS YOU CAN DO:
 ✅ Risk management — position sizing, drawdown, diversification advice
 ✅ Indian market specifics — NIFTY, BANKNIFTY, F&O, NSE/BSE rules
 ✅ NIFTY outlook — sentiment score, fear-greed, momentum, and directional bias
+✅ News intelligence — today's market headlines, sentiment tilt, and top themes
+✅ Geopolitical briefings — summarize wars/conflicts/headlines from available feeds and explain market impact (oil, risk sentiment, sectors)
 
 CRITICAL RULES:
 - NEVER say you cannot perform actions — you have tools for all the above
@@ -523,6 +610,8 @@ CRITICAL RULES:
 - If a field is missing, explicitly say "data not available" instead of estimating
 - If numbers conflict, say they conflict and show both values with source labels
 - Do not infer strategy style (intraday/swing/positional) unless explicitly present in returned fields; for timeframe, quote the exact timeframe value from tool output
+- Do not say geopolitical requests are out of scope; use get_market_news_summary and provide a factual update from current feeds
+- If a requested topic is not present in current feeds, say so explicitly and then provide the closest relevant headlines
 
 === LIVE DATA FROM FASTTRADE ===
 {context}
@@ -668,6 +757,50 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_market_news_summary",
+            "description": "Fetch today's market news headlines with sentiment summary and trending topics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Number of headlines to fetch. Default 8, max 20."},
+                    "keyword": {"type": "string", "description": "Optional topic filter keyword, e.g., iran, war, oil, rbi, banking."}
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_scanner_signals",
+            "description": "Fetch scanner signals generated in recent days without rerunning scanner strategies.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Lookback in days. Default 7, max 90."},
+                    "strategy_name": {"type": "string", "description": "Optional strategy name filter (partial match)."}
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_trade_cost_summary",
+            "description": "Summarize brokerage and trading charges over a recent lookback window.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Lookback in days. Default 30, max 365."}
+                },
                 "required": [],
             },
         },
@@ -931,6 +1064,164 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                 }
             except Exception as e:
                 return {"success": False, "error": f"Failed to fetch market sentiment: {str(e)}"}
+
+        elif name == "get_market_news_summary":
+            limit = max(1, min(int(args.get("limit", 8)), 20))
+            keyword = str(args.get("keyword") or "").strip().lower()
+            try:
+                feed_resp = httpx.get(
+                    f"http://localhost:8000/news/feed?limit={limit}",
+                    timeout=20.0,
+                )
+                if feed_resp.status_code != 200:
+                    return {"success": False, "error": f"News API returned HTTP {feed_resp.status_code}"}
+
+                feed_data = feed_resp.json() if isinstance(feed_resp.json(), dict) else {}
+                items = feed_data.get("news", []) if isinstance(feed_data.get("news"), list) else []
+                topic_match_count = None
+                if keyword:
+                    filtered_items = []
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        haystack = " ".join(
+                            str(item.get(k, ""))
+                            for k in ("title", "description", "category", "source")
+                        ).lower()
+                        if keyword in haystack:
+                            filtered_items.append(item)
+                    topic_match_count = len(filtered_items)
+                    if filtered_items:
+                        items = filtered_items
+
+                headlines = []
+                for item in items[:limit]:
+                    if not isinstance(item, dict):
+                        continue
+                    headlines.append({
+                        "title": item.get("title"),
+                        "description": item.get("description"),
+                        "source": item.get("source"),
+                        "sentiment": item.get("sentiment"),
+                        "category": item.get("category"),
+                        "published": item.get("published"),
+                        "link": item.get("link"),
+                    })
+
+                trending_topics = []
+                try:
+                    trending_resp = httpx.get("http://localhost:8000/news/trending", timeout=10.0)
+                    if trending_resp.status_code == 200 and isinstance(trending_resp.json(), dict):
+                        trending_topics = (trending_resp.json().get("topics") or [])[:5]
+                except Exception:
+                    trending_topics = []
+
+                sentiment_summary = feed_data.get("sentiment_summary") if isinstance(feed_data.get("sentiment_summary"), dict) else {}
+                return {
+                    "success": True,
+                    "action": "market_news_summary",
+                    "headline_count": len(headlines),
+                    "headlines": headlines,
+                    "query_topic": keyword or None,
+                    "topic_match_count": topic_match_count,
+                    "sentiment_summary": sentiment_summary,
+                    "trending_topics": trending_topics,
+                    "data_source": feed_data.get("data_source"),
+                    "timestamp": feed_data.get("timestamp"),
+                }
+            except Exception as e:
+                return {"success": False, "error": f"Failed to fetch market news: {str(e)}"}
+
+        elif name == "get_recent_scanner_signals":
+            days = max(1, min(int(args.get("days", 7)), 90))
+            cutoff = datetime.utcnow() - timedelta(days=days)
+
+            query = db.query(ScannerSignalHistory).filter(ScannerSignalHistory.first_seen_at >= cutoff)
+            strategy_name = str(args.get("strategy_name") or "").strip()
+            if strategy_name:
+                query = query.filter(ScannerSignalHistory.strategy_name.ilike(f"%{strategy_name}%"))
+
+            signals = query.order_by(ScannerSignalHistory.first_seen_at.desc()).limit(500).all()
+            if not signals:
+                scope = f" for strategy '{strategy_name}'" if strategy_name else ""
+                return {
+                    "success": True,
+                    "action": "recent_scanner_signals",
+                    "days": days,
+                    "signal_count": 0,
+                    "message": f"No scanner signals fired in the last {days} days{scope}.",
+                    "signals": [],
+                }
+
+            symbol_counts = defaultdict(int)
+            strategy_counts = defaultdict(int)
+            recent_rows = []
+            for sig in signals:
+                sym = (sig.symbol or "").upper().strip()
+                st_name = sig.strategy_name or "Unknown"
+                if sym:
+                    symbol_counts[sym] += 1
+                strategy_counts[st_name] += 1
+                if len(recent_rows) < 12:
+                    recent_rows.append({
+                        "symbol": sig.symbol,
+                        "strategy": sig.strategy_name,
+                        "direction": sig.direction,
+                        "ltp": sig.ltp,
+                        "change_percent": sig.change_percent,
+                        "first_seen_at": sig.first_seen_at.isoformat() if sig.first_seen_at else None,
+                    })
+
+            top_symbols = sorted(symbol_counts.items(), key=lambda item: item[1], reverse=True)[:8]
+            top_strategies = sorted(strategy_counts.items(), key=lambda item: item[1], reverse=True)[:8]
+            return {
+                "success": True,
+                "action": "recent_scanner_signals",
+                "days": days,
+                "signal_count": len(signals),
+                "top_symbols": [{"symbol": sym, "count": count} for sym, count in top_symbols],
+                "top_strategies": [{"strategy": st, "count": count} for st, count in top_strategies],
+                "signals": recent_rows,
+            }
+
+        elif name == "get_trade_cost_summary":
+            from sqlalchemy import func
+
+            days = max(1, min(int(args.get("days", 30)), 365))
+            cutoff = datetime.utcnow() - timedelta(days=days)
+            summary = (
+                db.query(
+                    func.sum(TradeCost.total_cost).label("total_costs"),
+                    func.sum(TradeCost.brokerage).label("total_brokerage"),
+                    func.sum(TradeCost.stt_ctt).label("total_stt"),
+                    func.sum(TradeCost.gst).label("total_gst"),
+                    func.sum(TradeCost.exchange_txn_charge).label("total_exchange"),
+                    func.count(TradeCost.id).label("total_trades"),
+                )
+                .filter(TradeCost.trade_date >= cutoff)
+                .first()
+            )
+
+            total_trades = int(summary.total_trades or 0)
+            total_costs = round(float(summary.total_costs or 0.0), 2)
+            total_brokerage = round(float(summary.total_brokerage or 0.0), 2)
+            total_stt = round(float(summary.total_stt or 0.0), 2)
+            total_gst = round(float(summary.total_gst or 0.0), 2)
+            total_exchange = round(float(summary.total_exchange or 0.0), 2)
+
+            return {
+                "success": True,
+                "action": "trade_cost_summary",
+                "days": days,
+                "total_trades": total_trades,
+                "total_costs": total_costs,
+                "total_brokerage": total_brokerage,
+                "total_stt": total_stt,
+                "total_gst": total_gst,
+                "total_exchange": total_exchange,
+                "avg_cost_per_trade": round((total_costs / total_trades), 2) if total_trades else 0.0,
+                "message": "No trade cost records found in this period." if total_trades == 0 else None,
+            }
 
         elif name == "get_strategy_metrics":
             strategy = (

@@ -3,10 +3,13 @@ Market News Feed with Sentiment Analysis
 Fetches real news from NSE RSS feeds (MoneyControl, Economic Times, Business Standard)
 """
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from typing import Dict, List, Any
 from datetime import datetime
 from collections import Counter
 import logging
+import asyncio
+import json
 
 from app.services.rss_feed_service import get_rss_service
 
@@ -167,6 +170,98 @@ _ALERT_KEYWORDS = {
     'earnings': ['result', 'earning', 'quarterly', 'q1 result', 'q2 result', 'q3 result', 'q4 result', 'profit', 'revenue beat', 'revenue miss'],
     'regulatory': ['rbi', 'sebi', 'regulation', 'policy', 'ban', 'restriction', 'penalty', 'fine'],
 }
+
+
+@router.get("/stream")
+async def stream_news(
+    limit: int = Query(default=12, ge=1, le=50),
+    interval_seconds: int = Query(default=20, ge=5, le=120),
+):
+    """
+    Server-Sent Events stream for live headline updates.
+
+    Emits event: `news` with payload:
+      { news: [...], alerts: [...], timestamp: ... }
+    """
+
+    async def event_generator():
+        last_fingerprint: str | None = None
+        while True:
+            try:
+                rss_service = get_rss_service()
+                items = rss_service.fetch_all_feeds()
+                items = items[:limit]
+
+                news_items = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    news_items.append({
+                        "title": item.get("title"),
+                        "description": item.get("description"),
+                        "source": item.get("source"),
+                        "sentiment": item.get("sentiment"),
+                        "category": item.get("category"),
+                        "published": item.get("published"),
+                        "link": item.get("link"),
+                    })
+
+                alerts = []
+                seen_titles = set()
+                for item in items:
+                    title = str(item.get("title") or "")
+                    if not title or title in seen_titles:
+                        continue
+                    text_lower = title.lower()
+                    for alert_type, keywords in _ALERT_KEYWORDS.items():
+                        if any(kw in text_lower for kw in keywords):
+                            sentiment = str(item.get("sentiment") or "neutral")
+                            if alert_type == "breaking" or sentiment in ("bullish", "bearish"):
+                                priority = "high"
+                            elif alert_type in ("volatility", "regulatory"):
+                                priority = "high"
+                            else:
+                                priority = "medium"
+                            alerts.append({
+                                "type": alert_type,
+                                "message": title,
+                                "timestamp": item.get("published", datetime.now().isoformat()),
+                                "priority": priority,
+                                "source": item.get("source", "RSS"),
+                                "link": item.get("link", ""),
+                            })
+                            seen_titles.add(title)
+                            break
+
+                payload = {
+                    "news": news_items,
+                    "alerts": alerts[:10],
+                    "timestamp": datetime.now().isoformat(),
+                }
+                payload_json = json.dumps(payload, ensure_ascii=False)
+                fingerprint = str(hash(payload_json))
+
+                if fingerprint != last_fingerprint:
+                    yield f"event: news\ndata: {payload_json}\n\n"
+                    last_fingerprint = fingerprint
+                else:
+                    yield "event: ping\ndata: {}\n\n"
+
+            except Exception as e:
+                err = json.dumps({"error": str(e), "timestamp": datetime.now().isoformat()})
+                yield f"event: error\ndata: {err}\n\n"
+
+            await asyncio.sleep(interval_seconds)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/alerts")

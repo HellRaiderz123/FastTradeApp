@@ -346,20 +346,20 @@ Zerodha `MODE_FULL` WebSocket — volume per tick, buy/sell qty, large order det
 
 ```
 IMMEDIATE (highest ROI):
-  1. Zerodha GTT orders          → protect positions when app is offline
-  2. Multi-timeframe confirmation → reduce false signals from scanner
-  3. ATR-based position sizing   → normalize risk per trade
+  1. Idempotent execution persistence → prevent duplicate live orders on retries
+  2. Manual-exit cooldown + override lock → stop immediate re-entry after manual close
+  3. Quantity-aware broker reconciliation → catch partial-fill and state drift early
 
 NEXT SPRINT:
-  4. Slippage modeling           → more realistic backtest returns
-  5. Walk-forward validation     → catch overfit strategies before going live
-  6. Auto-execute scanner signals → close the loop between scanner and execution
-  7. Audit trail / tax export    → ITR filing support
+  4. Multi-timeframe confirmation → reduce false signals from scanner
+  5. ATR-based position sizing    → normalize risk per trade
+  6. Slippage + spread modeling   → more realistic backtest returns
+  7. Walk-forward promotion gate  → catch overfit strategies before auto-deploy
 
 LATER:
-  8. Options Greeks portfolio    → net Delta/Theta/Vega across all positions
-  9. Idempotent execution + audit trail → safer retries and clearer compliance history
- 10. More indicator families     → Supertrend, Ichimoku, CCI, SAR
+  8. Portfolio Greeks dashboard    → net Delta/Theta/Vega across all positions
+  9. Agentic hedge/recovery layer  → approval-gated autonomous workflows
+ 10. Metrics + structured telemetry → Prometheus, trace IDs, SRE-grade observability
 ```
 
 ---
@@ -383,3 +383,110 @@ FastTradeApp
 │   └── llama3.2:3b — trading assistant with real data context
 └── Docker Compose: db + backend + frontend + ollama
 ```
+
+---
+
+## Fresh Audit Additions - 2026-04-27
+
+### Reality Check (Important Corrections)
+
+1. Zerodha broker-side protection (GTT) is already implemented in live execution paths.
+  - Evidence: `backend/app/core/execution/zerodha.py` (`sync_protection`, `place_gtt`, `delete_gtt` flow)
+2. AI chat is already agentic with tool calling loops and direct action paths.
+  - Evidence: `backend/app/api/routes/ai_chat.py` (`TOOLS`, `_execute_tool`, multi-round tool execution)
+3. Biggest remaining execution safety gap is idempotency persistence and dedupe in order execution.
+  - Evidence: `backend/app/api/routes/execute.py` accepts `idempotency_key` but does not persist/reuse prior result.
+
+### Priority Roadmap (Updated)
+
+#### P0 - Safety and Correctness (Do First)
+
+1. Persisted idempotency for all execution and exit paths
+  - Add idempotency table keyed by `(idempotency_key, endpoint, user/session)`.
+  - On retry, return prior execution result and skip duplicate broker order placement.
+  - Files: `backend/app/api/routes/execute.py`, `backend/app/api/routes/exit.py`, `backend/app/db/models_intent.py`
+
+2. Manual override cooldown to prevent immediate re-entry
+  - After manual close, block re-entry on same underlying/strategy for configurable cooldown (e.g., 15-30 min).
+  - Files: `backend/app/api/routes/exit.py`, `backend/app/core/auto_trader.py`
+
+3. Continuous broker/local state reconciliation with quantity-aware drift handling
+  - Reconcile on schedule and handle partial fills and quantity mismatch robustly.
+  - Files: `backend/app/core/exit/broker_reconcile.py`, `backend/app/services/order_monitor.py`, `backend/app/core/market/scheduler.py`
+
+4. Trade state-machine audit trail
+  - Append-only trade lifecycle log: CREATED -> CONFIRMED -> EXECUTING -> EXECUTED -> CLOSED/FAILED.
+  - Files: `backend/app/api/routes/execute.py`, `backend/app/api/routes/exit.py`, new `backend/app/api/routes/audit.py`
+
+#### P1 - Strategy Quality and Scale
+
+5. Multi-timeframe confirmation for scanner and auto-trader
+  - Add optional higher-timeframe confirmation before execution.
+  - Files: `backend/app/api/routes/condition_scanner.py`, `backend/app/core/auto_trader.py`
+
+6. ATR/volatility-adjusted position sizing
+  - Replace fixed sizing with risk-per-trade sizing using ATR stop distance.
+  - Files: `backend/app/core/backtest/engine.py`, `backend/app/api/routes/condition_scanner.py`
+
+7. Walk-forward promotion gate for discovered strategies
+  - Auto-discovery strategy must pass out-of-sample gate before auto-deploy.
+  - Files: `backend/app/core/strategy_decay.py`, `backend/app/core/market/scheduler.py`
+
+8. Backtest realism upgrades (slippage + spread + latency)
+  - Add configurable friction model to reduce optimistic backtest bias.
+  - Files: `backend/app/core/backtest/engine.py`, `web/src/pages/Backtest.tsx`
+
+9. Candle data lifecycle management
+  - Add retention/partition/archival policy for high-frequency candle tables.
+  - Files: `backend/app/db/models_candles.py`, scheduled maintenance job in `backend/app/core/market/scheduler.py`
+
+#### P2 - Observability and Operations
+
+10. Prometheus metrics + dashboard
+   - Add `/metrics` and track execution latency, fill success, rejects, drawdown, circuit-break events.
+   - Files: `backend/app/main.py`, new `backend/app/api/routes/metrics.py`
+
+11. Structured JSON logging with trace and intent correlation IDs
+   - Ensure every trade/scan event carries intent_id and trace_id.
+   - Files: `backend/app/core/logging_config.py`, `backend/app/core/auto_trader.py`, `backend/app/api/routes/execute.py`
+
+12. Mobile real-time parity for critical workflows
+   - Add WebSocket-driven position and execution updates to mobile.
+   - Files: `mobile/lib/api.ts`, `mobile/lib/store.ts`, `mobile/app/positions.tsx`
+
+### Futuristic / Advanced Features (3-6 Month Horizon)
+
+#### Agentic features
+
+1. Hedge Copilot Agent
+  - Watches live positions, proposes hedge structure, simulates impact, requests approval, then executes.
+
+2. Recovery Agent
+  - Detects rejected/partial/stale orders and autonomously runs recovery playbooks (retry, convert order type, reconcile, alert).
+
+3. Strategy Governor Agent
+  - Continuously evaluates strategy health (decay, drawdown, regime mismatch) and auto-throttles/enables strategies under guardrails.
+
+4. Backtest-to-Live Promotion Agent
+  - Orchestrates discovery -> walk-forward -> paper validation -> tiny-capital live canary -> full deploy.
+
+5. Portfolio Exposure Agent
+  - Monitors net delta/theta/vega and correlation clusters, then recommends/executes rebalance hedges with approvals.
+
+#### Non-agentic advanced features
+
+6. Portfolio Greeks dashboard (net and scenario shock view)
+7. Event-aware risk mode (economic calendar, earnings, RBI/FOMC auto-tightening)
+8. Tax and compliance export suite (FIFO/STCG/LTCG + broker-wise reconciliation)
+9. Market microstructure layer (MODE_FULL enrichment, imbalance and momentum burst features)
+10. Model Ops for ML (model registry, shadow mode, drift monitors, rollback)
+
+### 30/60/90 Day Execution Plan
+
+1. First 30 days
+  - Idempotency persistence, manual-exit cooldown, quantity-aware reconcile, audit trail.
+2. Days 31-60
+  - Multi-timeframe confirmation, ATR sizing, slippage model, walk-forward promotion gate.
+3. Days 61-90
+  - Hedge Copilot Agent MVP, Recovery Agent MVP, Prometheus + structured logging rollout.
+
