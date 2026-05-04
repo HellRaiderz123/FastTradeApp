@@ -28,6 +28,19 @@ interface Quote {
   error?: string;
 }
 
+interface Suggestion {
+  symbol: string;
+  score: number;
+  recent_signal_count: number;
+  bullish_count: number;
+  bearish_count: number;
+  latest_signal_at: string | null;
+  latest_direction: string | null;
+  latest_strategy: string | null;
+  avg_change_pct: number | null;
+  rationale: string[];
+}
+
 const CustomWatchlists: React.FC = () => {
   const { showToast } = useToast();
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
@@ -37,6 +50,9 @@ const CustomWatchlists: React.FC = () => {
   const [loadingQuotes, setLoadingQuotes] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showAddSymbolModal, setShowAddSymbolModal] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [applyingSuggestion, setApplyingSuggestion] = useState<string | null>(null);
   
   // Create modal state
   const [newName, setNewName] = useState('');
@@ -53,6 +69,7 @@ const CustomWatchlists: React.FC = () => {
   useEffect(() => {
     if (selectedWatchlist) {
       loadQuotes(selectedWatchlist.id);
+      loadSuggestions(selectedWatchlist.id);
     }
   }, [selectedWatchlist]);
 
@@ -84,6 +101,18 @@ const CustomWatchlists: React.FC = () => {
       console.error('Failed to load quotes:', err);
     } finally {
       setLoadingQuotes(false);
+    }
+  };
+
+  const loadSuggestions = async (watchlistId: number) => {
+    setLoadingSuggestions(true);
+    try {
+      const response = await watchlistAPI.getSuggestions(watchlistId, 10, 14);
+      setSuggestions(response.data?.suggestions || []);
+    } catch {
+      setSuggestions([]);
+    } finally {
+      setLoadingSuggestions(false);
     }
   };
 
@@ -134,6 +163,7 @@ const CustomWatchlists: React.FC = () => {
       setNewSymbol('');
       loadWatchlists();
       loadQuotes(selectedWatchlist.id);
+      loadSuggestions(selectedWatchlist.id);
     } catch (err: any) {
       showToast('error', 'Add Failed', err.response?.data?.detail || 'Failed to add symbol');
     }
@@ -148,8 +178,42 @@ const CustomWatchlists: React.FC = () => {
       await watchlistAPI.removeSymbol(selectedWatchlist.id, symbol);
       loadWatchlists();
       loadQuotes(selectedWatchlist.id);
+      loadSuggestions(selectedWatchlist.id);
     } catch (err: any) {
       showToast('error', 'Remove Failed', err.response?.data?.detail || 'Failed to remove symbol');
+    }
+  };
+
+  const applySuggestion = async (symbol: string) => {
+    if (!selectedWatchlist) return;
+    setApplyingSuggestion(symbol);
+    try {
+      await watchlistAPI.applySuggestions(selectedWatchlist.id, [symbol]);
+      showToast('success', 'Applied', `${symbol} added to ${selectedWatchlist.name}`);
+      await loadWatchlists();
+      await loadQuotes(selectedWatchlist.id);
+      await loadSuggestions(selectedWatchlist.id);
+    } catch (err: any) {
+      showToast('error', 'Apply Failed', err.response?.data?.detail || 'Failed to apply suggestion');
+    } finally {
+      setApplyingSuggestion(null);
+    }
+  };
+
+  const applyTopSuggestions = async () => {
+    if (!selectedWatchlist || suggestions.length === 0) return;
+    const symbols = suggestions.slice(0, 5).map((s) => s.symbol);
+    setApplyingSuggestion('__BULK__');
+    try {
+      await watchlistAPI.applySuggestions(selectedWatchlist.id, symbols);
+      showToast('success', 'Applied', `Added up to ${symbols.length} suggestions to ${selectedWatchlist.name}`);
+      await loadWatchlists();
+      await loadQuotes(selectedWatchlist.id);
+      await loadSuggestions(selectedWatchlist.id);
+    } catch (err: any) {
+      showToast('error', 'Apply Failed', err.response?.data?.detail || 'Failed to apply suggestions');
+    } finally {
+      setApplyingSuggestion(null);
     }
   };
 
@@ -266,6 +330,14 @@ const CustomWatchlists: React.FC = () => {
                   
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => loadSuggestions(selectedWatchlist.id)}
+                      disabled={loadingSuggestions}
+                      className="flex items-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-700 disabled:bg-violet-800/60 text-white rounded-lg text-sm transition-colors"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${loadingSuggestions ? 'animate-spin' : ''}`} />
+                      ML Suggestions
+                    </button>
+                    <button
                       onClick={() => loadQuotes(selectedWatchlist.id)}
                       disabled={loadingQuotes}
                       className="p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-white"
@@ -280,6 +352,46 @@ const CustomWatchlists: React.FC = () => {
                       Add Symbol
                     </button>
                   </div>
+                </div>
+
+                {/* Suggestions Panel */}
+                <div className="p-4 border-b border-gray-800 bg-gray-900/60">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-violet-300">ML Suggestions (from recent scanner signals)</h3>
+                    <button
+                      onClick={applyTopSuggestions}
+                      disabled={suggestions.length === 0 || applyingSuggestion === '__BULK__'}
+                      className="text-xs px-3 py-1.5 rounded-md bg-violet-600 hover:bg-violet-700 disabled:bg-violet-800/50 text-white transition-colors"
+                    >
+                      {applyingSuggestion === '__BULK__' ? 'Applying...' : 'Apply Top 5'}
+                    </button>
+                  </div>
+
+                  {loadingSuggestions ? (
+                    <div className="text-xs text-gray-400">Generating suggestions...</div>
+                  ) : suggestions.length === 0 ? (
+                    <div className="text-xs text-gray-500">No fresh suggestions yet. Click ML Suggestions to refresh.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {suggestions.slice(0, 8).map((s) => (
+                        <div key={s.symbol} className="flex items-center justify-between p-2 rounded-md bg-gray-800/70 border border-gray-700">
+                          <div>
+                            <div className="text-sm font-semibold text-white">{s.symbol}</div>
+                            <div className="text-[11px] text-gray-400">
+                              score {s.score.toFixed(1)} • {s.recent_signal_count} signals • {s.latest_strategy || 'strategy n/a'}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => applySuggestion(s.symbol)}
+                            disabled={applyingSuggestion === s.symbol}
+                            className="text-xs px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800/50 text-white transition-colors"
+                          >
+                            {applyingSuggestion === s.symbol ? 'Adding...' : 'Add'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Quotes Table */}

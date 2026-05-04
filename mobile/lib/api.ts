@@ -468,6 +468,20 @@ export const mlAPI = {
   predictBulk: (symbols: string[]) => api.post('/ml/predict-bulk', { symbols }),
 };
 
+// ── AI Agents (Multi-Agent Analysis Pipeline) ────────────────────────
+export const aiAgentsAPI = {
+  health: () =>
+    api.get('/ai-analysis/health'),
+  analyze: (symbol: string, exchange = 'NSE') =>
+    api.post('/ai-analysis/analyze', { symbol, exchange }, { timeout: 10000 }),
+  status: (jobId: string) =>
+    api.get(`/ai-analysis/status/${jobId}`),
+  history: (symbol: string, limit = 10) =>
+    api.get(`/ai-analysis/history/${symbol}`, { params: { limit } }),
+  evaluateOutcomes: () =>
+    api.post('/ai-analysis/evaluate-outcomes'),
+};
+
 export const settingsAPI = {
   getZerodhaSettings: () => api.get('/settings/zerodha').then((res) => res.data),
   saveZerodhaCredentials: (credentials: { api_key: string; api_secret: string }) =>

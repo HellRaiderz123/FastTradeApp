@@ -1,3 +1,4 @@
+import AIAnalysis from './AIAnalysis';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Bot, User, Loader2, CheckCircle, XCircle, Zap, BarChart3, ClipboardList, Target, ArrowRight, Mic, MicOff, Volume2, VolumeX, ShieldAlert, Newspaper, TrendingUp, ChevronDown, ChevronUp, RefreshCw, Radio, Activity, Cpu, Gauge, Sparkles } from 'lucide-react';
 import axios from 'axios';
@@ -47,10 +48,14 @@ const ACTION_LABELS: Record<string, string> = {
   close_position: 'Position Closed',
   place_trade: 'Trade Placed',
   trade_confirmation_required: 'Confirmation Required',
+  created_watchlist: 'Watchlist Created',
+  watchlist_symbol_added: 'Symbol Added',
+  watchlist_symbol_removed: 'Symbol Removed',
+  watchlist_remove_confirmation_required: 'Confirmation Required',
 };
 
 const OMIT_ACTION_KEYS = [
-  'success', 'action', 'id', 'requires_confirmation', 'order_preview', 'message', 'priorities', 'summary', 'trade',
+  'success', 'action', 'id', 'requires_confirmation', 'order_preview', 'confirmation_preview', 'message', 'priorities', 'summary', 'trade',
   'coaching_flags', 'notes', 'watchlist', 'market_sentiment', 'by_strategy', 'by_time_block', 'by_day_of_week',
   'strengths', 'top_exit_reasons', 'best_trade', 'worst_trade', 'headlines', 'signals', 'top_symbols', 'top_strategies',
   'sentiment_summary', 'trending_topics',
@@ -313,9 +318,23 @@ function PlaybookResultCard({ action }: { action: ActionResult }) {
 }
 
 const buildTradeConfirmationPrompt = (action: ActionResult) => {
-  const preview = (action.result.order_preview as Record<string, unknown> | undefined) ?? {};
-  const parts = [preview.trade_action, preview.quantity, preview.symbol, preview.order_type, preview.product].filter(Boolean);
-  return `Confirm and place that live order now: ${parts.join(' ')}.`;
+  const orderPreview = (action.result.order_preview as Record<string, unknown> | undefined) ?? {};
+  const genericPreview = (action.result.confirmation_preview as Record<string, unknown> | undefined) ?? {};
+
+  if (orderPreview.trade_action) {
+    const parts = [orderPreview.trade_action, orderPreview.quantity, orderPreview.symbol, orderPreview.order_type, orderPreview.product].filter(Boolean);
+    return `Confirm and place that live order now: ${parts.join(' ')}.`;
+  }
+
+  const op = String(genericPreview.operation || action.result.action || '').toLowerCase();
+  const symbol = String(genericPreview.symbol || '').toUpperCase();
+  const wl = String(genericPreview.watchlist || '').trim();
+  if (op.includes('remove_watchlist_symbol') && symbol) {
+    return wl
+      ? `Yes, confirm remove ${symbol} from watchlist ${wl}.`
+      : `Yes, confirm remove ${symbol} from the watchlist.`;
+  }
+  return 'Yes, confirmed. Please proceed.';
 };
 
 function TradeConfirmationCard({
@@ -330,12 +349,15 @@ function TradeConfirmationCard({
   disabled: boolean;
 }) {
   const requiresConfirmation = Boolean(action.result?.requires_confirmation);
-  const preview = (action.result.order_preview as Record<string, unknown> | undefined) ?? {};
+  const preview = ((action.result.order_preview as Record<string, unknown> | undefined)
+    ?? (action.result.confirmation_preview as Record<string, unknown> | undefined)
+    ?? {});
   if (!requiresConfirmation) return null;
 
-  const summary = [preview.trade_action, preview.quantity, preview.symbol, preview.order_type, preview.product]
-    .filter(Boolean)
-    .join(' · ');
+  const isTrade = Boolean(preview.trade_action);
+  const summary = isTrade
+    ? [preview.trade_action, preview.quantity, preview.symbol, preview.order_type, preview.product].filter(Boolean).join(' · ')
+    : [preview.operation, preview.symbol, preview.watchlist].filter(Boolean).join(' · ');
 
   return (
     <motion.div
@@ -350,10 +372,12 @@ function TradeConfirmationCard({
         >
           <ShieldAlert className="w-5 h-5 text-amber-400" />
         </motion.div>
-        <span className="text-amber-300 text-sm font-bold">Live Order — Awaiting Your Confirmation</span>
+        <span className="text-amber-300 text-sm font-bold">Confirmation Required</span>
       </div>
       <p className="text-xs text-amber-200/80 mb-3">
-        This order has NOT been placed yet. Click <span className="font-bold text-white">Confirm &amp; Place Live</span> below to execute on Zerodha. Make sure Zerodha is connected in Settings.
+        {isTrade
+          ? 'This order has NOT been placed yet. Click Confirm & Place Live below to execute on Zerodha. Make sure Zerodha is connected in Settings.'
+          : 'This action has not been applied yet. Click Confirm to proceed.'}
       </p>
       {summary && (
         <div className="rounded-xl border border-amber-700/60 bg-black/30 px-3 py-2 text-sm font-mono text-amber-100 mb-3">
@@ -368,7 +392,7 @@ function TradeConfirmationCard({
           whileTap={{ scale: 0.97 }}
           className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 text-sm font-bold hover:bg-amber-400 disabled:opacity-50 shadow-lg"
         >
-          ✓ Confirm &amp; Place Live
+          {isTrade ? '✓ Confirm & Place Live' : '✓ Confirm'}
         </motion.button>
         <button
           onClick={onCancel}
@@ -868,6 +892,7 @@ function FutureOpsPanel({
 }
 
 export default function AIAssistant() {
+  const [activeTab, setActiveTab] = useState<'chat' | 'agents'>('chat');
   const readPref = (key: string, fallback: boolean): boolean => {
     if (typeof window === 'undefined') return fallback;
     const raw = window.localStorage.getItem(key);
@@ -1223,6 +1248,24 @@ export default function AIAssistant() {
             {isListening ? 'Stop Jarvis' : 'Engage Jarvis'}
           </button>
 
+          {/* Tab switcher */}
+          <div className="flex-shrink-0 flex items-center rounded-xl border border-slate-700 bg-slate-900 overflow-hidden">
+            <button
+              onClick={() => setActiveTab('chat')}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold transition ${activeTab === 'chat' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <Bot className="w-3.5 h-3.5" />
+              Jarvis
+            </button>
+            <button
+              onClick={() => setActiveTab('agents')}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold transition ${activeTab === 'agents' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              AI Agents
+            </button>
+          </div>
+
           {/* Panel toggle */}
           <button
             onClick={() => setPanelOpen((v) => !v)}
@@ -1234,7 +1277,16 @@ export default function AIAssistant() {
         </div>
       </motion.div>
 
-      {/* ── Collapsible tabbed panel ── */}
+      {/* ── AI Agents tab ── */}
+      {activeTab === 'agents' && (
+        <div className="flex-1 overflow-y-auto pr-1">
+          <AIAnalysis />
+        </div>
+      )}
+
+      {/* ── Chat tab content ── */}
+      {activeTab === 'chat' && (
+      <>
       <AnimatePresence initial={false}>
         {panelOpen && (
           <motion.div
@@ -1422,7 +1474,7 @@ export default function AIAssistant() {
                           <TradeConfirmationCard
                             action={a}
                             onConfirm={(action) => send(buildTradeConfirmationPrompt(action))}
-                            onCancel={() => send('Cancel that pending trade. Do not place the live order.')}
+                            onCancel={() => send('Cancel that pending action. Do not execute it.')}
                             disabled={loading}
                           />
                           <PlaybookResultCard action={a} />
@@ -1530,7 +1582,10 @@ export default function AIAssistant() {
         </div>
       </div>
 
-      {/* ── Floating mic FAB ── */}
+      </>
+      )}
+
+      {/* ── Floating mic FAB (always visible) ── */}
       <motion.button
         onClick={engageJarvis}
         disabled={loading}

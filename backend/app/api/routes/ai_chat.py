@@ -293,12 +293,16 @@ def _summarize_direct_action(tool_name: str, result: dict, voice_mode: bool = Fa
         return _normalize_voice_answer(text) if voice_mode else text
 
     if result.get("requires_confirmation"):
-        preview = result.get("order_preview") or {}
-        text = (
-            f"Order ready: {preview.get('trade_action')} {preview.get('quantity')} {preview.get('symbol')} "
-            f"as a {preview.get('order_type')} {preview.get('product')} order on {preview.get('exchange')}. "
-            "Please confirm to execute."
-        )
+        preview = result.get("order_preview") or result.get("confirmation_preview") or {}
+        if preview.get("trade_action"):
+            text = (
+                f"Order ready: {preview.get('trade_action')} {preview.get('quantity')} {preview.get('symbol')} "
+                f"as a {preview.get('order_type')} {preview.get('product')} order on {preview.get('exchange')}. "
+                "Please confirm to execute."
+            )
+        else:
+            target = preview.get("symbol") or preview.get("name") or "item"
+            text = f"Confirmation needed for {result.get('action', 'action').replace('_', ' ')} on {target}."
         return _normalize_voice_answer(text) if voice_mode else text
 
     if result.get("action") == "placed_trade":
@@ -898,6 +902,58 @@ TOOLS = [
                     "top_n": {"type": "integer", "description": "How many symbols to prioritize. Default 8, max 25."}
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_watchlist",
+            "description": "Create a new watchlist. Use when user asks to create a watchlist with a specific name and optional starter symbols.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Watchlist name, e.g. Swing Picks"},
+                    "description": {"type": "string", "description": "Optional description"},
+                    "symbols": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional initial symbols, e.g. [\"RELIANCE\", \"INFY\"]"
+                    },
+                    "is_default": {"type": "boolean", "description": "Set true to make this the default watchlist."}
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_watchlist_symbol",
+            "description": "Add a symbol to a watchlist by name (or default watchlist if not provided).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Symbol to add, e.g. RELIANCE"},
+                    "watchlist_name": {"type": "string", "description": "Optional watchlist name. If omitted, uses default/most recent active watchlist."}
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_watchlist_symbol",
+            "description": "Remove a symbol from a watchlist. This is destructive and requires explicit confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Symbol to remove, e.g. RELIANCE"},
+                    "watchlist_name": {"type": "string", "description": "Optional watchlist name. If omitted, uses default/most recent active watchlist."},
+                    "confirmed": {"type": "boolean", "description": "Set true only after user explicitly confirms deletion."}
+                },
+                "required": ["symbol"],
             },
         },
     },
@@ -1577,6 +1633,120 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                 "market_sentiment": market_sentiment,
                 "priorities": ranked,
                 "notes": notes,
+            }
+
+        elif name == "create_watchlist":
+            wl_name = str(args.get("name") or "").strip()
+            if not wl_name:
+                return {"success": False, "error": "Watchlist name is required."}
+
+            existing = db.query(Watchlist).filter(Watchlist.name.ilike(wl_name)).first()
+            if existing:
+                return {"success": False, "error": f"Watchlist '{existing.name}' already exists."}
+
+            raw_symbols = args.get("symbols") or []
+            symbols = sorted({str(s).strip().upper() for s in raw_symbols if str(s).strip()})
+            is_default = bool(args.get("is_default", False))
+            if is_default:
+                db.query(Watchlist).filter(Watchlist.is_active == True).update({"is_default": False})  # noqa: E712
+
+            wl = Watchlist(
+                name=wl_name,
+                description=(args.get("description") or None),
+                symbols=symbols,
+                is_default=is_default,
+                is_active=True,
+            )
+            db.add(wl)
+            db.commit()
+            db.refresh(wl)
+            return {
+                "success": True,
+                "action": "created_watchlist",
+                "id": wl.id,
+                "name": wl.name,
+                "symbol_count": len(symbols),
+                "symbols": symbols,
+                "message": f"Created watchlist '{wl.name}' with {len(symbols)} symbols.",
+            }
+
+        elif name in {"add_watchlist_symbol", "remove_watchlist_symbol"}:
+            symbol = str(args.get("symbol") or "").strip().upper()
+            if not symbol:
+                return {"success": False, "error": "Symbol is required."}
+
+            watchlist = None
+            wl_name = (args.get("watchlist_name") or "").strip()
+            if wl_name:
+                watchlist = (
+                    db.query(Watchlist)
+                    .filter(
+                        Watchlist.name.ilike(f"%{wl_name}%"),
+                        Watchlist.is_active == True,
+                    )
+                    .order_by(Watchlist.is_default.desc(), Watchlist.updated_at.desc())
+                    .first()
+                )
+            if not watchlist:
+                watchlist = (
+                    db.query(Watchlist)
+                    .filter(Watchlist.is_active == True)
+                    .order_by(Watchlist.is_default.desc(), Watchlist.updated_at.desc())
+                    .first()
+                )
+            if not watchlist:
+                return {"success": False, "error": "No active watchlist found. Create one first."}
+
+            symbols = list(watchlist.symbols or [])
+            if name == "add_watchlist_symbol":
+                if symbol in symbols:
+                    return {
+                        "success": True,
+                        "action": "watchlist_symbol_exists",
+                        "watchlist": watchlist.name,
+                        "symbol": symbol,
+                        "message": f"{symbol} is already in {watchlist.name}.",
+                    }
+                symbols.append(symbol)
+                watchlist.symbols = sorted(set(symbols))
+                db.commit()
+                db.refresh(watchlist)
+                return {
+                    "success": True,
+                    "action": "watchlist_symbol_added",
+                    "watchlist": watchlist.name,
+                    "symbol": symbol,
+                    "symbol_count": len(watchlist.symbols or []),
+                    "message": f"Added {symbol} to {watchlist.name}.",
+                }
+
+            confirmed = bool(args.get("confirmed", False))
+            if not confirmed:
+                return {
+                    "success": True,
+                    "action": "watchlist_remove_confirmation_required",
+                    "requires_confirmation": True,
+                    "message": f"Please confirm removal of {symbol} from {watchlist.name}.",
+                    "confirmation_preview": {
+                        "watchlist": watchlist.name,
+                        "symbol": symbol,
+                        "operation": "remove_watchlist_symbol",
+                    },
+                }
+
+            if symbol not in symbols:
+                return {"success": False, "error": f"{symbol} is not present in {watchlist.name}."}
+            symbols.remove(symbol)
+            watchlist.symbols = symbols
+            db.commit()
+            db.refresh(watchlist)
+            return {
+                "success": True,
+                "action": "watchlist_symbol_removed",
+                "watchlist": watchlist.name,
+                "symbol": symbol,
+                "symbol_count": len(watchlist.symbols or []),
+                "message": f"Removed {symbol} from {watchlist.name}.",
             }
 
         elif name == "review_trade_journal":

@@ -7,9 +7,11 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from collections import defaultdict
 
 from app.db.session import SessionLocal
 from app.db.models_watchlist import Watchlist, WatchlistAlert
+from app.db.models_scanner_signal import ScannerSignalHistory
 
 router = APIRouter(prefix="/watchlists", tags=["Watchlists"])
 
@@ -38,6 +40,10 @@ class WatchlistUpdate(BaseModel):
     color: Optional[str] = None
     icon: Optional[str] = None
     is_default: Optional[bool] = None
+
+
+class SuggestionApplyRequest(BaseModel):
+    symbols: List[str]
 
 
 @router.get("")
@@ -296,4 +302,171 @@ async def get_watchlist_quotes(watchlist_id: int, db: Session = Depends(get_db))
             "color": watchlist.color,
         },
         "quotes": quotes
+    }
+
+
+@router.get("/{watchlist_id}/suggestions")
+def get_watchlist_suggestions(
+    watchlist_id: int,
+    top_n: int = 10,
+    days: int = 14,
+    db: Session = Depends(get_db),
+):
+    """Generate ML-style watchlist suggestions from recent scanner signals."""
+    watchlist = db.query(Watchlist).filter(Watchlist.id == watchlist_id).first()
+    if not watchlist:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    top_n = max(1, min(int(top_n), 30))
+    days = max(3, min(int(days), 60))
+
+    existing = {
+        str(s).strip().upper()
+        for s in (watchlist.symbols or [])
+        if str(s).strip()
+    }
+
+    cutoff = datetime.utcnow().replace(tzinfo=None)
+    from datetime import timedelta
+    cutoff = cutoff - timedelta(days=days)
+
+    rows = (
+        db.query(ScannerSignalHistory)
+        .filter(ScannerSignalHistory.first_seen_at >= cutoff)
+        .order_by(ScannerSignalHistory.first_seen_at.desc())
+        .limit(1200)
+        .all()
+    )
+
+    by_symbol = defaultdict(lambda: {
+        "count": 0,
+        "bullish": 0,
+        "bearish": 0,
+        "latest_at": None,
+        "latest_direction": None,
+        "latest_strategy": None,
+        "avg_change_pct": 0.0,
+        "change_samples": 0,
+        "strategies": set(),
+    })
+
+    for r in rows:
+        sym = (r.symbol or "").strip().upper()
+        if not sym or sym in existing:
+            continue
+
+        rec = by_symbol[sym]
+        rec["count"] += 1
+        direction = (r.direction or "").upper()
+        if direction in {"LONG", "BUY", "BULLISH"}:
+            rec["bullish"] += 1
+        elif direction in {"SHORT", "SELL", "BEARISH"}:
+            rec["bearish"] += 1
+
+        if r.strategy_name:
+            rec["strategies"].add(r.strategy_name)
+
+        if rec["latest_at"] is None or (r.first_seen_at and r.first_seen_at > rec["latest_at"]):
+            rec["latest_at"] = r.first_seen_at
+            rec["latest_direction"] = r.direction
+            rec["latest_strategy"] = r.strategy_name
+
+        if r.change_percent is not None:
+            rec["avg_change_pct"] += float(r.change_percent)
+            rec["change_samples"] += 1
+
+    suggestions = []
+    for sym, rec in by_symbol.items():
+        avg_change = (rec["avg_change_pct"] / rec["change_samples"]) if rec["change_samples"] else 0.0
+        recency_bonus = 0
+        if rec["latest_at"]:
+            age_hrs = max(0.0, (datetime.utcnow().replace(tzinfo=None) - rec["latest_at"].replace(tzinfo=None)).total_seconds() / 3600.0)
+            if age_hrs <= 24:
+                recency_bonus = 3
+            elif age_hrs <= 72:
+                recency_bonus = 2
+            elif age_hrs <= 120:
+                recency_bonus = 1
+
+        direction_bias = rec["bullish"] - rec["bearish"]
+        score = (rec["count"] * 3) + recency_bonus + (direction_bias * 1.5)
+        if abs(avg_change) >= 1.0:
+            score += 1
+
+        rationale = []
+        rationale.append(f"{rec['count']} scanner signals in last {days} days")
+        if rec["bullish"] > rec["bearish"]:
+            rationale.append("Bullish directional bias")
+        elif rec["bearish"] > rec["bullish"]:
+            rationale.append("Bearish directional bias")
+        if rec["latest_strategy"]:
+            rationale.append(f"Latest strategy: {rec['latest_strategy']}")
+
+        suggestions.append({
+            "symbol": sym,
+            "score": round(float(score), 2),
+            "recent_signal_count": rec["count"],
+            "bullish_count": rec["bullish"],
+            "bearish_count": rec["bearish"],
+            "latest_signal_at": rec["latest_at"].isoformat() if rec["latest_at"] else None,
+            "latest_direction": rec["latest_direction"],
+            "latest_strategy": rec["latest_strategy"],
+            "avg_change_pct": round(avg_change, 2) if rec["change_samples"] else None,
+            "rationale": rationale,
+        })
+
+    suggestions.sort(key=lambda x: (x["score"], x["recent_signal_count"]), reverse=True)
+    suggestions = suggestions[:top_n]
+
+    return {
+        "watchlist": {
+            "id": watchlist.id,
+            "name": watchlist.name,
+            "current_symbol_count": len(existing),
+        },
+        "window_days": days,
+        "suggestions": suggestions,
+    }
+
+
+@router.post("/{watchlist_id}/apply-suggestions")
+def apply_watchlist_suggestions(
+    watchlist_id: int,
+    payload: SuggestionApplyRequest,
+    db: Session = Depends(get_db),
+):
+    """Apply one or more suggested symbols into a watchlist."""
+    watchlist = db.query(Watchlist).filter(Watchlist.id == watchlist_id).first()
+    if not watchlist:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    symbols = [str(s).strip().upper() for s in (payload.symbols or []) if str(s).strip()]
+    if not symbols:
+        raise HTTPException(status_code=400, detail="No symbols provided")
+
+    current = list(watchlist.symbols or [])
+    existing = set(str(s).strip().upper() for s in current if str(s).strip())
+    added = []
+    skipped = []
+    for sym in symbols:
+        if sym in existing:
+            skipped.append(sym)
+            continue
+        current.append(sym)
+        existing.add(sym)
+        added.append(sym)
+
+    watchlist.symbols = sorted(existing)
+    db.commit()
+    db.refresh(watchlist)
+
+    return {
+        "success": True,
+        "watchlist": {
+            "id": watchlist.id,
+            "name": watchlist.name,
+            "symbol_count": len(watchlist.symbols or []),
+        },
+        "added": added,
+        "skipped": skipped,
     }

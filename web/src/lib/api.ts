@@ -692,6 +692,12 @@ export const watchlistAPI = {
   
   getQuotes: (id: number) =>
     api.get(`/watchlists/${id}/quotes`),
+
+  getSuggestions: (id: number, topN: number = 10, days: number = 14) =>
+    api.get(`/watchlists/${id}/suggestions`, { params: { top_n: topN, days } }),
+
+  applySuggestions: (id: number, symbols: string[]) =>
+    api.post(`/watchlists/${id}/apply-suggestions`, { symbols }),
 };
 
 // Twitter Sentiment APIs

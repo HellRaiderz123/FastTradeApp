@@ -31,6 +31,7 @@ const COMMANDS: CommandItem[] = [
   { label: 'Compare Backtests', path: '/backtest-comparison', keywords: 'compare backtest' },
   { label: 'Trade Costs', path: '/trade-costs', keywords: 'costs brokerage charges' },
   { label: 'ML Center', path: '/ml', keywords: 'ml machine learning signals' },
+  { label: 'AI Analysis', path: '/ai-analysis', keywords: 'ai analysis agents signals decision' },
   { label: 'Finance', path: '/finance', keywords: 'finance budget goals' },
   { label: 'Settings', path: '/settings', keywords: 'settings zerodha api' },
 ];

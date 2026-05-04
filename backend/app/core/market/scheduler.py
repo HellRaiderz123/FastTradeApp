@@ -1120,3 +1120,34 @@ def start_zerodha_auto_login_scheduler():
 
     logger.info("🟢 Zerodha auto-login scheduler started (Mon-Fri at 8:00 AM IST)")
 
+
+def start_watchlist_analysis_scheduler():
+    """
+    Schedule daily AI agent analysis for all watchlist symbols at 8:45 AM IST (Mon-Fri).
+    Runs before market open (9:15 AM) so decisions are ready when trading starts.
+    """
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start watchlist analysis scheduler: main scheduler not running")
+        return
+
+    def _watchlist_analysis_job():
+        try:
+            from app.services.trading_agents import run_watchlist_analysis
+            count = run_watchlist_analysis()
+            logger.info("🤖 Watchlist AI analysis: started %d jobs", count)
+        except Exception as e:
+            logger.warning("⚠️ Watchlist AI analysis job failed: %s", e)
+
+    scheduler.add_job(
+        func=_watchlist_analysis_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=45,
+        id="watchlist_ai_analysis_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("🟢 Watchlist AI analysis scheduler started (Mon-Fri at 8:45 AM IST)")
+

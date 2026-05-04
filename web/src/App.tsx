@@ -30,6 +30,7 @@ import BrokerReconciliation from './pages/BrokerReconciliation';
 import StrategyPnL from './pages/StrategyPnL';
 import StrategyMarketplace from './pages/StrategyMarketplace';
 import AIAssistant from './pages/AIAssistant';
+import AIAnalysis from './pages/AIAnalysis';
 import CandleBackfill from './pages/CandleBackfill';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
@@ -124,6 +125,7 @@ function AppInner() {
                   <Route path="/finance" element={<FinanceTracker />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/ai-assistant" element={<AIAssistant />} />
+                  <Route path="/ai-analysis" element={<AIAnalysis />} />
                 </Routes>
               </main>
             </div>

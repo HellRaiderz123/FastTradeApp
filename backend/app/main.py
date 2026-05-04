@@ -66,6 +66,7 @@ from app.api.routes import marketplace
 from app.api.routes import ai_chat
 from app.api.routes import alexa
 from app.api.routes import simple_ai
+from app.api.routes import ai_analysis
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -80,6 +81,7 @@ from app.core.market.scheduler import (
     start_zerodha_auto_login_scheduler,
     start_strategy_discovery_scheduler,
     start_strategy_decay_scheduler,
+    start_watchlist_analysis_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -118,6 +120,7 @@ async def lifespan(app: FastAPI):
         from app.db.models_signal_outcome import SignalOutcome  # noqa: F401
         from app.db.models_scanner_signal import ScannerSignalHistory  # noqa: F401
         from app.db.models_zerodha import ZerodhaSession  # noqa: F401
+        from app.db.models_ai_decisions import AIDecision  # noqa: F401 — trading agents memory
         Base.metadata.create_all(bind=engine)
         ensure_auto_trader_schema(engine)
         logger.info("✅ Database tables initialized")
@@ -142,6 +145,7 @@ async def lifespan(app: FastAPI):
         start_zerodha_auto_login_scheduler()    # Daily auto-login at 8 AM IST
         start_strategy_discovery_scheduler()    # Daily strategy discovery at 4:15 PM IST
         start_strategy_decay_scheduler()         # Daily decay check at 4:30 PM IST
+        start_watchlist_analysis_scheduler()     # Daily AI agents analysis at 8:45 AM IST
         logger.info("✅ Schedulers started")
     except Exception as e:
         logger.warning(f"⚠️ Schedulers failed to start: {e}")
@@ -177,6 +181,36 @@ async def lifespan(app: FastAPI):
         resume_scanner_on_startup()
     except Exception as e:
         logger.warning(f"⚠️ Condition scanner resume failed: {e}")
+
+    # Wire event loop into trading_agents so background threads can broadcast WS events
+    try:
+        import asyncio as _asyncio
+        from app.services.trading_agents import set_event_loop as _set_ta_loop
+        _set_ta_loop(_asyncio.get_event_loop())
+        logger.info("✅ TradingAgents event loop wired")
+    except Exception as e:
+        logger.warning(f"⚠️ TradingAgents event loop wiring failed: {e}")
+
+    # Schedule daily AI outcome evaluation (runs every 24h, skips if already done)
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+        from app.core.market.scheduler import _scheduler
+        from app.services.trading_agents import evaluate_pending_outcomes
+
+        def _run_outcome_evaluation():
+            updated = evaluate_pending_outcomes(evaluation_days=3)
+            if updated:
+                logger.info(f"🤖 AI outcome evaluation: {updated} decisions evaluated")
+
+        _scheduler.add_job(
+            _run_outcome_evaluation,
+            trigger=IntervalTrigger(hours=24),
+            id="ai_outcome_evaluator",
+            replace_existing=True,
+        )
+        logger.info("✅ AI outcome evaluator scheduled (daily)")
+    except Exception as e:
+        logger.warning(f"⚠️ AI outcome evaluator scheduler failed: {e}")
     
     # Start WebSocket background tasks
     # FIX: Initialize to None before try block — prevents NameError on shutdown
@@ -357,5 +391,6 @@ app.include_router(marketplace.router, dependencies=[Depends(require_authenticat
 app.include_router(ai_chat.router)
 app.include_router(alexa.router)
 app.include_router(simple_ai.router)
+app.include_router(ai_analysis.router)
 
 logger.info(" All routers registered (including Phase 5 features)")
