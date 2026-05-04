@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 240" role="img" aria-label="FastTrade logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="dot" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="240" rx="28" fill="url(#bg)"/>
+
+  <g transform="translate(34,34)">
+    <rect width="172" height="172" rx="30" fill="#020617" stroke="#1e293b" stroke-width="2"/>
+    <path d="M28 126 L58 72 L92 96 L126 46" stroke="url(#line)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="126" cy="46" r="11" fill="url(#dot)"/>
+  </g>
+
+  <g transform="translate(236,68)">
+    <text x="0" y="56" font-family="Segoe UI, Inter, Roboto, Arial, sans-serif" font-weight="700" font-size="68" fill="#e2e8f0">FastTrade</text>
+    <text x="4" y="102" font-family="Segoe UI, Inter, Roboto, Arial, sans-serif" font-weight="500" font-size="24" fill="#94a3b8">AI-powered trading platform for Indian markets</text>
+  </g>
+</svg>
