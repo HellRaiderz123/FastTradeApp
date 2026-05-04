@@ -7,6 +7,15 @@
 </p>
 
 <p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" />
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white" />
+  <img alt="React" src="https://img.shields.io/badge/React-Web-61DAFB?logo=react&logoColor=111827" />
+  <img alt="React Native" src="https://img.shields.io/badge/React%20Native-Mobile-20232A?logo=react&logoColor=61DAFB" />
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-Data-336791?logo=postgresql&logoColor=white" />
+  <img alt="Docker" src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" />
+</p>
+
+<p align="center">
   <a href="docs/README.md">Documentation</a> •
   <a href="docs/QUICK_START.md">Quick Start</a> •
   <a href="docs/API.md">API</a> •
@@ -57,6 +66,23 @@ FastTrade is designed as a unified platform for analysis, execution, risk contro
 High-level flow:
 
 Web and Mobile clients -> FastAPI backend -> Database + schedulers + external market providers
+
+## Important Flow Diagram
+
+```mermaid
+flowchart LR
+  A[Web App and Mobile App] --> B[FastAPI Gateway]
+  B --> C[Market Data Layer\nCandles, News, Sentiment, Broker Quotes]
+  C --> D[AI Agent Pipeline\nTechnical, News, Sentiment, Fundamentals]
+  D --> E[Bull and Bear Research]
+  E --> F[Trader Decision]
+  F --> G[Risk and Portfolio Guards]
+  G --> H[Execution Engine\nPaper or Live]
+  H --> I[Broker API]
+  F --> J[Decision Memory and Reflection]
+  J --> D
+  K[Watchlist Scheduler] --> D
+```
 
 ## Repository Layout
 
