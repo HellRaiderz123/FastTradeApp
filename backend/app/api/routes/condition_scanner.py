@@ -411,7 +411,7 @@ def _resolve_value(
 ) -> Optional[float]:
     """
     Resolve the right-hand side value.
-    Could be a plain number ("20") or an indicator ref ("Close(0)").
+    Could be a plain number ("20"), indicator ref ("Close(0)"), or indicator ("DEMA(26)", "EMA(50)").
     """
     v = value_str.strip()
 
@@ -420,6 +420,20 @@ def _resolve_value(
         return float(v)
     except ValueError:
         pass
+
+    # Check if it's an indicator reference (e.g., "DEMA(26)", "EMA(50)", "TEMA(20)")
+    if any(v.upper().startswith(ind) for ind in ("DEMA", "TEMA", "EMA", "SMA", "WMA", "RSI", "ADX", "MACD", "STOCH", "BB")):
+        # Parse indicator name and period
+        if "(" in v:
+            parts = v.split("(")
+            indicator_name = parts[0].strip().upper()
+            period_str = parts[1].rstrip(")")
+            try:
+                period = int(period_str)
+                # Recursively compute the indicator value
+                return _compute_indicator(indicator_name, {"period": period}, closes, highs, lows, volumes)
+            except (ValueError, IndexError):
+                pass
 
     # Close(offset)
     if v.upper().startswith("CLOSE"):
@@ -808,6 +822,62 @@ PREBUILT_STRATEGIES: Dict[str, dict] = {
             }
         ],
         "exit_config": {"sl_pct": 4, "tp_pct": 8, "tsl_pct": 2, "exit_mode": "percentage"},
+    },
+    "dema_crossover_trend": {
+        "name": "DEMA 12/26 Crossover",
+        "description": "Double Exponential Moving Average (DEMA) trend-following strategy with reduced lag. Enters long when the fast DEMA(12) crosses above the slow DEMA(26), confirming a bullish trend shift. ADX above 20 confirms sufficient trend strength for reliable signals.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "1 Hour",
+        "entry_conditions": [
+            {
+                "indicator": "DEMA",
+                "params": {"period": 12},
+                "comparator": "crosses_above",
+                "value": "DEMA(26)"
+            },
+            {
+                "indicator": "ADX",
+                "params": {"period": 14},
+                "comparator": "higher_than",
+                "value": "20"
+            },
+            {
+                "indicator": "RSI",
+                "params": {"period": 14},
+                "comparator": "lower_than",
+                "value": "70"
+            }
+        ],
+        "exit_config": {"sl_pct": 3.5, "tp_pct": 9, "tsl_pct": 1.5, "exit_mode": "percentage"},
+    },
+    "dema_short_trend": {
+        "name": "DEMA 12/26 Short",
+        "description": "Short counterpart to DEMA crossover: enters short when fast DEMA(12) crosses below slow DEMA(26). Confirms with ADX above 20 and RSI below 30 for oversold signals.",
+        "strategy_type": "Equity Swing",
+        "direction": "SELL",
+        "timeframe": "1 Hour",
+        "entry_conditions": [
+            {
+                "indicator": "DEMA",
+                "params": {"period": 12},
+                "comparator": "crosses_below",
+                "value": "DEMA(26)"
+            },
+            {
+                "indicator": "ADX",
+                "params": {"period": 14},
+                "comparator": "higher_than",
+                "value": "20"
+            },
+            {
+                "indicator": "RSI",
+                "params": {"period": 14},
+                "comparator": "higher_than",
+                "value": "30"
+            }
+        ],
+        "exit_config": {"sl_pct": 3.5, "tp_pct": 9, "tsl_pct": 1.5, "exit_mode": "percentage"},
     },
 }
 

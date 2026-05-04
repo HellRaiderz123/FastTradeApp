@@ -79,6 +79,55 @@ def _as_bool(val, default: bool = False) -> bool:
 
 
 def _preferred_tool_choice(message: str, history: list | None = None):
+    """Return the tool_choice value for the first LLM round.
+
+    Forcing a specific tool for clearly-intent messages reduces round trips
+    and avoids the LLM stalling without a tool call on unambiguous requests.
+    """
+    normalized = " ".join(str(message or "").lower().split())
+
+    # Market data / price lookup
+    if re.search(
+        r"\b(price|ltp|quote|trading at|current price|what is .{0,20} at|how much is)\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "get_stock_quote"}}
+
+    # Portfolio overview
+    if re.search(
+        r"\b(portfolio|my positions|open trades|total p&?l|how much (am i|have i) (up|down|made|lost))\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "get_portfolio_summary"}}
+
+    # Market sentiment
+    if re.search(
+        r"\b(market (sentiment|outlook|mood|bias)|nifty (prediction|direction|today)|bullish|bearish|vix|pcr)\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "get_market_sentiment"}}
+
+    # News
+    if re.search(
+        r"\b(news|headlines|latest|today.*news|market update|geopolit)\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "get_market_news_summary"}}
+
+    # Orders placed today
+    if re.search(
+        r"\b(orders? today|what did i (buy|sell|order) today|today.*orders?|my orders?)\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "get_orders_today"}}
+
+    # Trade journal / review
+    if re.search(
+        r"\b(journal|review.*trades?|trade.*review|win rate|performance|coaching)\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "review_trade_journal"}}
+
     return "auto"
 
 
@@ -88,6 +137,15 @@ def _normalize_voice_answer(text: str) -> str:
     cleaned = re.sub(r"\n\s*[-•]\s*", "; ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+def _normalize_trade_symbol(raw_symbol: str) -> str:
+    symbol = str(raw_symbol or "").upper().strip()
+    symbol = re.sub(r"^(?:NSE|BSE)\s*[:\-]\s*", "", symbol)
+    symbol = re.sub(r"\s+", "", symbol)
+    symbol = re.sub(r"^[^A-Z0-9]+", "", symbol)
+    symbol = re.sub(r"[^A-Z0-9&-]+$", "", symbol)
+    return symbol
 
 
 def _extract_direct_ai_action(message: str):
@@ -179,7 +237,10 @@ def _extract_direct_ai_action(message: str):
         action = trade_match.group(1).upper()
         qty_raw = str(trade_match.group(2) or "1").strip().lower()
         quantity = int(qty_raw) if qty_raw.isdigit() else int(number_words.get(qty_raw, 1))
-        symbol = trade_match.group(3).upper()
+        symbol = _normalize_trade_symbol(trade_match.group(3))
+
+        if not symbol:
+            return None
 
         # Ignore accidental symbol captures from confirmation words.
         if symbol in {"YES", "NO", "CONFIRM", "PLACE", "NOW", "EXECUTE"}:
@@ -268,6 +329,8 @@ AI_REQUIRE_TRADE_CONFIRMATION = _env_bool("AI_REQUIRE_TRADE_CONFIRMATION", True)
 AI_MAX_ORDER_QTY = _env_int("AI_MAX_ORDER_QTY", 500)
 AI_MAX_OPEN_POSITIONS = _env_int("AI_MAX_OPEN_POSITIONS", 10)
 AI_MAX_DAILY_LOSS_INR = _env_float("AI_MAX_DAILY_LOSS_INR", 0.0)  # 0 disables daily loss guard
+_AI_MARKET_PROTECTION_RAW = _env_int("AI_MARKET_PROTECTION_PCT", 2)
+AI_MARKET_PROTECTION_PCT = max(0, min(_AI_MARKET_PROTECTION_RAW, 100))
 
 
 def get_db():
@@ -566,6 +629,10 @@ ACTIONS YOU CAN PERFORM (use your tools — do not say you cannot do these):
 ✅ close_position — "Close my NIFTY position" / "Exit the BANKNIFTY trade"
 ✅ place_trade — "Buy 10 shares of SBI at market price CNC" / "Sell 5 RELIANCE shares MIS"
 ✅ place_trade dry run — "Dry run: buy 10 shares of SBI at market CNC"
+✅ get_stock_quote — "What is WIPRO trading at?" / "Price of RELIANCE" / "HDFC Bank LTP"
+✅ get_portfolio_summary — "What's my portfolio?" / "How much am I up today?" / "Show my open positions"
+✅ set_position_sl_tp — "Set SL on my WIPRO at 280" / "Put a 2% trailing stop on RELIANCE" / "Set TP at 1500"
+✅ get_orders_today — "What orders did I place today?" / "Show today's order book"
 ✅ get_market_sentiment — "What is NIFTY prediction today?" / "Is market bullish or bearish now?"
 ✅ get_market_news_summary — "Today's market news" / "Top headlines right now"
 ✅ get_recent_scanner_signals — "What scanner signals fired this week?"
@@ -912,6 +979,64 @@ TOOLS = [
                     "confirmed": {"type": "boolean", "description": "Set true only after user explicitly confirms the exact order details for live placement."},
                 },
                 "required": ["symbol", "action", "quantity"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stock_quote",
+            "description": "Fetch the current live price (LTP), OHLC, volume, and circuit limits for any NSE/BSE stock or index. Use whenever the user asks for a price, quote, or 'what is X trading at'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "NSE tradingsymbol or index name, e.g. WIPRO, RELIANCE, NIFTY, BANKNIFTY"},
+                    "exchange": {"type": "string", "enum": ["NSE", "BSE", "NFO"], "description": "Exchange. Default NSE for stocks, use NFO for F&O instruments."},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_portfolio_summary",
+            "description": "Return a live summary of all open positions including total unrealized P&L, individual position details, margin used, and risk concentration. Use when user asks about their portfolio, total P&L, or overall position status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_closed_today": {"type": "boolean", "description": "If true, also include trades closed today. Default false."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_position_sl_tp",
+            "description": "Set or update stop-loss (SL), take-profit (TP), or trailing SL on an open position in FastTrade. Use when user says 'set SL at X', 'put a stop at X', 'set target at X', or 'add trailing stop'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "underlying": {"type": "string", "description": "Symbol of the open position to update, e.g. WIPRO, NIFTY"},
+                    "sl": {"type": "number", "description": "Stop-loss price in INR. Set to null to leave unchanged."},
+                    "tp": {"type": "number", "description": "Take-profit price in INR. Set to null to leave unchanged."},
+                    "trailing_sl_pct": {"type": "number", "description": "Trailing stop-loss as a percentage of price, e.g. 2.0 for 2%. Set to null to leave unchanged."},
+                },
+                "required": ["underlying"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_orders_today",
+            "description": "Fetch all orders placed on Zerodha today. Use when user asks what orders they placed today, order status, or to see today's order book.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
             },
         },
     },
@@ -1701,7 +1826,7 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                 return {"success": False, "error": f"Exit call failed: {str(e)}"}
 
         elif name == "place_trade":
-            symbol = args["symbol"].upper().strip()
+            symbol = _normalize_trade_symbol(args["symbol"])
             action = args["action"].upper()
             quantity = int(args["quantity"])
             product = args.get("product", "CNC").upper()
@@ -1710,6 +1835,9 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
             price = args.get("price")
             dry_run = _as_bool(args.get("dry_run", False))
             confirmed = _as_bool(args.get("confirmed", False))
+
+            if not symbol:
+                return {"success": False, "error": "Invalid or empty trading symbol."}
 
             if order_type == "LIMIT" and price is None:
                 return {"success": False, "error": "price is required for LIMIT orders"}
@@ -1804,31 +1932,117 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                 return {"success": False, "error": f"Zerodha not connected: {str(e)}"}
 
             try:
-                order_id = kite.place_order(
-                    variety=kite.VARIETY_REGULAR,
-                    exchange=exchange,
-                    tradingsymbol=symbol,
-                    transaction_type=(
+                # KiteConnect does not accept a market_protection kwarg.
+                # Zerodha requires MARKET orders on NSE/BSE to have a price
+                # tolerance buffer.  We implement this by converting MARKET
+                # orders to LIMIT orders priced at LTP ± AI_MARKET_PROTECTION_PCT%.
+                # This is identical to what Zerodha's own web UI does internally.
+                effective_order_type = order_type
+                effective_price = price
+
+                if order_type == "MARKET" and AI_MARKET_PROTECTION_PCT > 0:
+                    try:
+                        from app.services.zerodha import KiteConnectService
+                        _svc = KiteConnectService()
+                        ltp = _svc.get_ltp(symbol)
+                        if ltp and ltp > 0:
+                            pct = AI_MARKET_PROTECTION_PCT / 100.0
+                            if action == "BUY":
+                                effective_price = round(ltp * (1 + pct), 2)
+                            else:
+                                effective_price = round(ltp * (1 - pct), 2)
+                            effective_order_type = "LIMIT"
+                            logger.info(
+                                "Market protection: converting MARKET→LIMIT for %s %s "
+                                "ltp=%.2f protection=%s%% effective_price=%.2f",
+                                action, symbol, ltp, AI_MARKET_PROTECTION_PCT, effective_price,
+                            )
+                        else:
+                            logger.warning(
+                                "Could not fetch LTP for %s; falling back to plain MARKET order", symbol
+                            )
+                    except Exception as mp_err:
+                        logger.warning(
+                            "Market protection LTP fetch failed (%s); falling back to plain MARKET order", mp_err
+                        )
+
+                order_payload = {
+                    "variety": kite.VARIETY_REGULAR,
+                    "exchange": exchange,
+                    "tradingsymbol": symbol,
+                    "transaction_type": (
                         kite.TRANSACTION_TYPE_BUY if action == "BUY"
                         else kite.TRANSACTION_TYPE_SELL
                     ),
-                    quantity=quantity,
-                    order_type=(
-                        kite.ORDER_TYPE_MARKET if order_type == "MARKET"
-                        else kite.ORDER_TYPE_LIMIT
+                    "quantity": quantity,
+                    "order_type": (
+                        kite.ORDER_TYPE_LIMIT if effective_order_type == "LIMIT"
+                        else kite.ORDER_TYPE_MARKET
                     ),
-                    product={
+                    "product": {
                         "CNC": kite.PRODUCT_CNC,
                         "MIS": kite.PRODUCT_MIS,
                         "NRML": kite.PRODUCT_NRML,
                     }.get(product, kite.PRODUCT_CNC),
-                    validity=kite.VALIDITY_DAY,
-                    price=price if order_type == "LIMIT" else None,
-                )
+                    "validity": kite.VALIDITY_DAY,
+                    "price": effective_price if effective_order_type == "LIMIT" else None,
+                }
+
+                order_id = kite.place_order(**order_payload)
                 logger.info(
-                    "AI placed trade: %s %s x%s %s %s order_id=%s",
-                    action, symbol, quantity, product, order_type, order_id,
+                    "AI placed trade: %s %s x%s %s effective_type=%s price=%s order_id=%s",
+                    action, symbol, quantity, product,
+                    effective_order_type, effective_price, order_id,
                 )
+
+                # ── Write to trade journal ─────────────────────────────────
+                try:
+                    import uuid as _uuid
+                    from app.core.utils.time import now_ist as _now_ist
+                    _intent_id = f"AI-{_uuid.uuid4().hex[:12].upper()}"
+                    _ticket = {
+                        "legs": [
+                            {
+                                "symbol": symbol,
+                                "action": action,
+                                "quantity": quantity,
+                                "product": product,
+                                "order_type": effective_order_type,
+                                "exchange": exchange,
+                                "price": effective_price,
+                                "order_id": str(order_id),
+                            }
+                        ]
+                    }
+                    _intent = ExecutionIntent(
+                        run_id=0,
+                        intent_id=_intent_id,
+                        strategy="AI_TRADE",
+                        underlying=symbol,
+                        ticket=_ticket,
+                        status="EXECUTED",
+                        executed=True,
+                        expires_at=_now_ist(),
+                        avg_price=effective_price,
+                        entry_credit=effective_price if action == "SELL" else None,
+                        execution_result={
+                            "order_id": str(order_id),
+                            "action": action,
+                            "quantity": quantity,
+                            "product": product,
+                            "exchange": exchange,
+                            "order_type": effective_order_type,
+                            "price": effective_price,
+                            "placed_via": "AI_CHAT",
+                        },
+                    )
+                    db.add(_intent)
+                    db.commit()
+                    logger.info("AI trade journal entry created: %s", _intent_id)
+                except Exception as _journal_err:
+                    logger.warning("Could not write AI trade to journal: %s", _journal_err)
+                # ─────────────────────────────────────────────────────────────
+
                 return {
                     "success": True,
                     "action": "placed_trade",
@@ -1838,12 +2052,167 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                     "quantity": quantity,
                     "product": product,
                     "order_type": order_type,
+                    "effective_order_type": effective_order_type,
                     "exchange": exchange,
-                    "price": price,
+                    "price": effective_price,
                 }
             except Exception as e:
                 logger.error("AI place_trade error: %s", e)
                 return {"success": False, "error": str(e)}
+
+        elif name == "get_stock_quote":
+            raw_symbol = _normalize_trade_symbol(str(args.get("symbol") or ""))
+            if not raw_symbol:
+                return {"success": False, "error": "symbol is required"}
+            exchange = str(args.get("exchange") or "NSE").upper()
+            try:
+                from app.services.zerodha import KiteConnectService
+                svc = KiteConnectService()
+                # Try full quote first (OHLC + volume)
+                data = svc.get_full_quote(raw_symbol)
+                if data is None:
+                    return {"success": False, "error": f"Could not fetch quote for {raw_symbol}. Check Zerodha connection and symbol."}
+                return {
+                    "success": True,
+                    "symbol": raw_symbol,
+                    "exchange": exchange,
+                    "ltp": data.get("last_price"),
+                    "open": (data.get("ohlc") or {}).get("open"),
+                    "high": (data.get("ohlc") or {}).get("high"),
+                    "low": (data.get("ohlc") or {}).get("low"),
+                    "close": (data.get("ohlc") or {}).get("close"),
+                    "volume": data.get("volume"),
+                    "buy_quantity": data.get("buy_quantity"),
+                    "sell_quantity": data.get("sell_quantity"),
+                    "lower_circuit": data.get("lower_circuit_limit"),
+                    "upper_circuit": data.get("upper_circuit_limit"),
+                    "oi": data.get("oi"),
+                }
+            except Exception as e:
+                return {"success": False, "error": f"Quote fetch failed: {e}"}
+
+        elif name == "get_portfolio_summary":
+            include_closed_today = _as_bool(args.get("include_closed_today", False))
+            open_pos = (
+                db.query(ExecutionIntent)
+                .filter(ExecutionIntent.status == "EXECUTED", ExecutionIntent.closed_at.is_(None))
+                .order_by(ExecutionIntent.created_at.desc())
+                .all()
+            )
+            total_unrealized = sum(t.unrealized_pnl or 0 for t in open_pos)
+            positions = []
+            for t in open_pos:
+                positions.append({
+                    "symbol": t.underlying,
+                    "strategy": t.strategy,
+                    "entry_price": t.avg_price,
+                    "unrealized_pnl": t.unrealized_pnl,
+                    "sl": t.sl,
+                    "tp": t.tp,
+                    "trailing_sl_pct": t.trailing_sl_pct,
+                    "opened_at": t.created_at.isoformat() if t.created_at else None,
+                })
+
+            result = {
+                "success": True,
+                "open_count": len(open_pos),
+                "total_unrealized_pnl": round(total_unrealized, 2),
+                "positions": positions,
+            }
+
+            if include_closed_today:
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                closed_today = (
+                    db.query(ExecutionIntent)
+                    .filter(
+                        ExecutionIntent.closed_at.isnot(None),
+                        ExecutionIntent.closed_at >= today_start,
+                    )
+                    .all()
+                )
+                realized_pnl_today = sum(t.pnl or 0 for t in closed_today)
+                result["closed_today"] = len(closed_today)
+                result["realized_pnl_today"] = round(realized_pnl_today, 2)
+                result["total_pnl_today"] = round(total_unrealized + realized_pnl_today, 2)
+
+            return result
+
+        elif name == "set_position_sl_tp":
+            underlying = _normalize_trade_symbol(str(args.get("underlying") or ""))
+            if not underlying:
+                return {"success": False, "error": "underlying symbol is required"}
+            intent = (
+                db.query(ExecutionIntent)
+                .filter(
+                    ExecutionIntent.status == "EXECUTED",
+                    ExecutionIntent.closed_at.is_(None),
+                    ExecutionIntent.underlying.ilike(f"%{underlying}%"),
+                )
+                .order_by(ExecutionIntent.created_at.desc())
+                .first()
+            )
+            if not intent:
+                return {"success": False, "error": f"No open position found for '{underlying}'"}
+
+            updated = []
+            if "sl" in args and args["sl"] is not None:
+                intent.sl = float(args["sl"])
+                updated.append(f"SL=₹{args['sl']}")
+            if "tp" in args and args["tp"] is not None:
+                intent.tp = float(args["tp"])
+                updated.append(f"TP=₹{args['tp']}")
+            if "trailing_sl_pct" in args and args["trailing_sl_pct"] is not None:
+                intent.trailing_sl_pct = float(args["trailing_sl_pct"])
+                updated.append(f"Trailing SL={args['trailing_sl_pct']}%")
+
+            if not updated:
+                return {"success": False, "error": "Provide at least one of: sl, tp, trailing_sl_pct"}
+
+            db.commit()
+            return {
+                "success": True,
+                "action": "updated_sl_tp",
+                "symbol": intent.underlying,
+                "intent_id": intent.intent_id,
+                "updated": updated,
+                "sl": intent.sl,
+                "tp": intent.tp,
+                "trailing_sl_pct": intent.trailing_sl_pct,
+            }
+
+        elif name == "get_orders_today":
+            try:
+                from app.core.broker.zerodha.client import get_kite_client
+                kite = get_kite_client()
+            except Exception as e:
+                return {"success": False, "error": f"Zerodha not connected: {e}"}
+            try:
+                orders = kite.orders() or []
+                today_str = datetime.utcnow().strftime("%Y-%m-%d")
+                today_orders = []
+                for o in orders:
+                    order_ts = str(o.get("order_timestamp") or o.get("exchange_timestamp") or "")
+                    if today_str in order_ts or not order_ts:
+                        today_orders.append({
+                            "order_id": o.get("order_id"),
+                            "symbol": o.get("tradingsymbol"),
+                            "exchange": o.get("exchange"),
+                            "action": o.get("transaction_type"),
+                            "quantity": o.get("quantity"),
+                            "filled_quantity": o.get("filled_quantity"),
+                            "price": o.get("price") or o.get("average_price"),
+                            "order_type": o.get("order_type"),
+                            "product": o.get("product"),
+                            "status": o.get("status"),
+                            "timestamp": order_ts,
+                        })
+                return {
+                    "success": True,
+                    "total_orders": len(today_orders),
+                    "orders": today_orders,
+                }
+            except Exception as e:
+                return {"success": False, "error": f"Could not fetch orders: {e}"}
 
         else:
             return {"success": False, "error": f"Unknown tool: {name}"}
@@ -1891,12 +2260,16 @@ JARVIS VOICE MODE:
 """
 
     messages = [{"role": "system", "content": system}]
-    for h in history[-10:]:
+    for h in history[-20:]:
+        # Skip malformed history entries (e.g. empty assistant messages from
+        # previous failed turns) — Groq 400s if content='' with no tool_calls.
+        if not h.get("content") and h.get("role") == "assistant":
+            continue
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": message})
 
     actions_taken: list[dict] = []
-    max_tool_rounds = 5  # prevent infinite loops
+    max_tool_rounds = 8  # prevent infinite loops
     tool_choice = _preferred_tool_choice(message, history)
 
     for _round in range(max_tool_rounds):
@@ -1920,38 +2293,95 @@ JARVIS VOICE MODE:
         assistant_message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")
 
-        # Add assistant's response (with or without tool calls) to message history
-        messages.append(assistant_message)
+        # Groq (and some providers) return content=None or content='' on tool-call
+        # rounds.  An assistant message with empty content AND no tool_calls is
+        # invalid and causes a 400 on the very next request.  Sanitise before
+        # appending: omit content when tool_calls are present (Groq rejects
+        # content="" alongside tool_calls), keep it as a string otherwise.
+        safe_message: dict = {"role": "assistant"}
+        if assistant_message.get("tool_calls"):
+            safe_message["tool_calls"] = assistant_message["tool_calls"]
+            # Only add content if it is a non-empty string
+            raw_content = assistant_message.get("content")
+            if raw_content:
+                safe_message["content"] = raw_content
+        else:
+            content_str = assistant_message.get("content") or ""
+            safe_message["content"] = content_str
 
-        if finish_reason != "tool_calls" or not assistant_message.get("tool_calls"):
-            # No tool call — return the final text answer
-            final_text = assistant_message.get("content") or ""
+        has_tool_calls = bool(assistant_message.get("tool_calls"))
+
+        # Decide whether to execute tools.  Use has_tool_calls as the source of
+        # truth — Groq sometimes returns finish_reason="stop" WITH tool_calls,
+        # which the old code handled incorrectly (appended assistant msg then
+        # continued, leaving assistant msg as the last message → 400).
+        if has_tool_calls:
+            # Always append before executing so the tool results are anchored
+            # to this specific assistant message.
+            messages.append(safe_message)
+
+            for tc in assistant_message["tool_calls"]:
+                tool_name = tc["function"]["name"]
+                try:
+                    tool_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    tool_args = {}
+
+                logger.info("AI tool call: %s(%s)", tool_name, tool_args)
+                result = _execute_tool(tool_name, tool_args, db)
+                actions_taken.append({"tool": tool_name, "args": tool_args, "result": result})
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(result),
+                })
+                tool_choice = "auto"
+
+            continue  # next round — let LLM summarise tool results
+
+        # No tool calls — this is (or should be) the final text answer.
+        final_text = assistant_message.get("content") or ""
+
+        if final_text:
+            # Only append meaningful assistant messages to history
+            messages.append(safe_message)
             if voice_mode or requested_style == "jarvis":
                 final_text = _normalize_voice_answer(final_text)
             return final_text, actions_taken
 
-        # Execute each tool call
-        for tc in assistant_message["tool_calls"]:
-            tool_name = tc["function"]["name"]
-            try:
-                tool_args = json.loads(tc["function"]["arguments"])
-            except json.JSONDecodeError:
-                tool_args = {}
-
-            logger.info("AI tool call: %s(%s)", tool_name, tool_args)
-            result = _execute_tool(tool_name, tool_args, db)
-            actions_taken.append({"tool": tool_name, "args": tool_args, "result": result})
-
-            # Feed tool result back to LLM
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": json.dumps(result),
-            })
+        # Empty content + no tool calls: provider ignored forced tool_choice.
+        # Retry with tool_choice="auto" so the LLM picks freely.
+        # Do NOT append the empty message — it would become "last from assistant".
+        if tool_choice != "auto":
             tool_choice = "auto"
+            continue
 
-    # Exhausted rounds — ask LLM to summarize with what we have
-    return "I completed the requested actions. Please review the action details above.", actions_taken
+        # Already auto and still empty — give up gracefully
+        return "Sorry, I could not get a response. Please try again.", actions_taken
+
+    # Exhausted tool rounds — ask LLM one final time without tool access to summarise
+    messages.append({
+        "role": "user",
+        "content": (
+            "Please summarise what you found and what actions were completed based on the tool results above. "
+            "Keep it concise and do not call any more tools."
+        ),
+    })
+    try:
+        resp = httpx.post(
+            f"{LLM_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
+            json={"model": LLM_MODEL, "messages": messages},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        final_text = resp.json()["choices"][0]["message"].get("content") or ""
+        if voice_mode or requested_style == "jarvis":
+            final_text = _normalize_voice_answer(final_text)
+        return final_text, actions_taken
+    except Exception:
+        return "I completed the requested actions. Please review the results above.", actions_taken
 
 
 @router.post("/query")
