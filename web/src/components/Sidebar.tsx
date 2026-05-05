@@ -70,6 +70,7 @@ const SECTIONS: Section[] = [
       { path: '/ml', icon: Brain, label: 'ML Center' },
       { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
       { path: '/ai-analysis', icon: BarChart3, label: 'AI Analysis' },
+      { path: '/signal-reconciliation', icon: RefreshCw, label: 'Signal Reconciliation' },
     ],
   },
   {

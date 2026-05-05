@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.services.trading_agents import (
     cleanup_expired_jobs,
+    clear_analysis_checkpoint,
     evaluate_pending_outcomes,
     get_job,
     start_analysis,
@@ -50,6 +51,16 @@ class AnalyzeRequest(BaseModel):
         default="NSE",
         examples=["NSE", "BSE"],
         description="Exchange: NSE or BSE",
+    )
+    clear_checkpoint: bool = Field(
+        default=False,
+        description="If true, clears any pending checkpoint before starting a new run.",
+    )
+    debate_rounds: int = Field(
+        default=1,
+        ge=1,
+        le=3,
+        description="Number of structured bull/bear debate rounds (1-3).",
     )
 
     @field_validator("symbol")
@@ -96,9 +107,11 @@ def ai_analysis_health() -> dict:
             "BearResearcher",
             "FundamentalsAnalyst",
             "TraderDecision",
+            "RiskManager",
+            "PortfolioManager",
         ],
-        "pipeline_steps": 8,
-        "estimated_duration_sec": "90-180",
+        "pipeline_steps": 10,
+        "estimated_duration_sec": "120-220",
     }
 
 
@@ -122,9 +135,17 @@ def start_ai_analysis(req: AnalyzeRequest) -> dict:
         )
 
     try:
-        job_id = start_analysis(symbol=req.symbol, exchange=req.exchange)
+        if req.clear_checkpoint:
+            clear_analysis_checkpoint(req.symbol, req.exchange)
+        job_id = start_analysis(
+            symbol=req.symbol,
+            exchange=req.exchange,
+            debate_rounds=req.debate_rounds,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    job = get_job(job_id) or {}
 
     return {
         "ok": True,
@@ -132,6 +153,8 @@ def start_ai_analysis(req: AnalyzeRequest) -> dict:
         "symbol": req.symbol,
         "exchange": req.exchange,
         "status": "QUEUED",
+        "debate_rounds": req.debate_rounds,
+        "resumed_from_checkpoint": bool(job.get("resumed_from_checkpoint", False)),
         "message": "Analysis started. Poll /ai-analysis/status/{job_id} for progress.",
         "poll_url": f"/ai-analysis/status/{job_id}",
     }
@@ -180,8 +203,23 @@ def get_analysis_status(job_id: str) -> dict:
         response["error"] = job["error"]
     if job.get("result"):
         response["result"] = job["result"]
+    if job.get("resumed_from_checkpoint"):
+        response["resumed_from_checkpoint"] = True
 
     return response
+
+
+@router.delete("/checkpoint/{symbol}")
+def clear_symbol_checkpoint(symbol: str, exchange: str = Query(default="NSE")) -> dict:
+    """Clear persisted checkpoint for a symbol/exchange pair."""
+    if not re.match(r"^[A-Z0-9&\-\.]{1,30}$", symbol.strip().upper()):
+        raise HTTPException(status_code=400, detail="Invalid symbol.")
+    clean_exchange = exchange.strip().upper()
+    if clean_exchange not in _ALLOWED_EXCHANGES:
+        raise HTTPException(status_code=400, detail=f"Exchange must be one of: {', '.join(sorted(_ALLOWED_EXCHANGES))}")
+
+    removed = clear_analysis_checkpoint(symbol.strip().upper(), clean_exchange)
+    return {"ok": True, "symbol": symbol.strip().upper(), "exchange": clean_exchange, "checkpoint_cleared": removed}
 
 
 @router.delete("/jobs/cleanup")
@@ -233,6 +271,8 @@ def get_symbol_history(
                     "time_horizon": r.time_horizon,
                     "risk_level": r.risk_level,
                     "rationale": r.rationale,
+                    "execution_allowed": r.execution_allowed,
+                    "manager_block_reason": r.manager_block_reason,
                     "suggested_stop_loss_pct": r.suggested_stop_loss_pct,
                     "suggested_target_pct": r.suggested_target_pct,
                     "price_at_decision": r.price_at_decision,

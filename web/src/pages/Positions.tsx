@@ -1,17 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle } from 'lucide-react';
-import { exitAPI, journalAPI, smartSuggestionsAPI } from '../lib/api';
+import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 import { useToast } from '../components/Toast';
 import SpreadGrouping from '../components/SpreadGrouping';
+
+const WS_RECONNECT_BASE_MS = 3000;
+const WS_RECONNECT_MAX_MS = 30000;
 
 const Positions: React.FC = () => {
   const { showToast } = useToast();
   const { trades, setTrades } = useTradeStore();
   const [loading, setLoading] = useState(false);
   const [localTrades, setLocalTrades] = useState<any[]>([]);
+  const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const pollRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const unmountedRef = useRef(false);
 
   const [spreadData, setSpreadData] = useState<any>(null);
   // Smart suggestions state (keyed by intent_id)
@@ -30,27 +37,32 @@ const Positions: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    fetchPositions();
-    // Fetch smart suggestions on mount and every 60s
-    fetchSmartSuggestions();
-    const smartPoll = window.setInterval(fetchSmartSuggestions, 60000);
+  const connectWebSocket = useCallback(() => {
+    if (unmountedRef.current) return;
 
-    // Poll as a fallback (e.g., if WS is blocked)
-    pollRef.current = window.setInterval(fetchPositions, 30000);
+    // Close any existing connection before reconnecting
+    if (wsRef.current) {
+      wsRef.current.onclose = null; // prevent re-triggering reconnect
+      wsRef.current.close();
+      wsRef.current = null;
+    }
 
-    // Live updates via WebSocket
     try {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const wsUrl = `${proto}://${window.location.host}/api/ws/positions`;
-      console.log('[Positions] Connecting to WebSocket:', wsUrl);
-      
+      const token = authTokenStore.get();
+      const wsBase = `${proto}://${window.location.host}/api/ws/positions`;
+      const wsUrl = token ? `${wsBase}?token=${encodeURIComponent(token)}` : wsBase;
+      console.log('[Positions] Connecting to WebSocket:', wsBase);
+
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (unmountedRef.current) return;
         console.log('[Positions] ✅ WebSocket connected');
-        // Once live is connected, polling is less important.
+        reconnectAttemptRef.current = 0;
+        setWsConnected(true);
+        // Stop fallback polling while live stream is active
         if (pollRef.current) {
           window.clearInterval(pollRef.current);
           pollRef.current = null;
@@ -58,13 +70,14 @@ const Positions: React.FC = () => {
       };
 
       ws.onmessage = (event) => {
+        if (unmountedRef.current) return;
         try {
           const msg = JSON.parse(event.data);
           if (msg?.type !== 'positions_update') {
             console.debug('[Positions] Ignoring non-position message:', msg?.type);
             return;
           }
-          const updates = Array.isArray(msg?.intents) ? msg.intents : [];
+          const updates: any[] = Array.isArray(msg?.intents) ? msg.intents : [];
           console.log('[Positions] 📊 Received update with', updates.length, 'intents');
 
           // Merge WS smart suggestions into state
@@ -78,16 +91,25 @@ const Positions: React.FC = () => {
             setSmartSuggestions((prev) => ({ ...prev, ...wsSuggestions }));
           }
 
+          // Build set of open intent IDs from the server snapshot so we can
+          // remove positions that were closed since the last message.
+          const openIds = new Set(updates.map((u) => String(u?.intent_id ?? '')).filter(Boolean));
+
           setLocalTrades((prev) => {
             const byId = new Map<string, any>();
             for (const t of Array.isArray(prev) ? prev : []) {
               const id = String(t?.intent_id ?? '');
               if (id) byId.set(id, t);
             }
+            // Update / add positions from WS
             for (const u of updates) {
               const id = String(u?.intent_id ?? '');
               if (!id) continue;
               byId.set(id, { ...(byId.get(id) || {}), ...u });
+            }
+            // Remove any position the server no longer reports as open
+            for (const id of Array.from(byId.keys())) {
+              if (!openIds.has(id)) byId.delete(id);
             }
             return Array.from(byId.values());
           });
@@ -96,33 +118,76 @@ const Positions: React.FC = () => {
         }
       };
 
-      ws.onclose = () => {
-        console.log('[Positions] ⚠️  WebSocket disconnected');
-        wsRef.current = null;
-        // Restore polling if live stream drops
-        if (!pollRef.current) {
-          console.log('[Positions] Falling back to polling (30s interval)');
-          pollRef.current = window.setInterval(fetchPositions, 30000);
-        }
-      };
-
       ws.onerror = (error) => {
         console.error('[Positions] ❌ WebSocket error:', error);
-        // Let onclose restore polling
+        // onclose will handle cleanup and reconnect
+      };
+
+      ws.onclose = (event) => {
+        if (unmountedRef.current) return;
+        console.log('[Positions] ⚠️  WebSocket disconnected (code:', event.code, ')');
+        wsRef.current = null;
+        setWsConnected(false);
+
+        // auth rejection — don't spam reconnects
+        if (event.code === 1008) {
+          console.warn('[Positions] Auth rejected by server. Falling back to polling.');
+          if (!pollRef.current) {
+            pollRef.current = window.setInterval(fetchPositions, 30000);
+          }
+          return;
+        }
+
+        // Restore polling so data isn't stale during reconnect window
+        if (!pollRef.current) {
+          pollRef.current = window.setInterval(fetchPositions, 30000);
+        }
+
+        // Exponential backoff reconnect: 3 s → 6 s → 12 s … capped at 30 s
+        reconnectAttemptRef.current += 1;
+        const delay = Math.min(
+          WS_RECONNECT_BASE_MS * Math.pow(2, reconnectAttemptRef.current - 1),
+          WS_RECONNECT_MAX_MS
+        );
+        console.log(`[Positions] Reconnecting in ${delay / 1000}s (attempt ${reconnectAttemptRef.current})`);
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = setTimeout(() => connectWebSocket(), delay);
       };
     } catch (e) {
       console.error('[Positions] Failed to create WebSocket:', e);
       // Keep polling only
+      if (!pollRef.current) {
+        pollRef.current = window.setInterval(fetchPositions, 30000);
+      }
     }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    unmountedRef.current = false;
+    fetchPositions();
+    // Fetch smart suggestions on mount and every 60s
+    fetchSmartSuggestions();
+    const smartPoll = window.setInterval(fetchSmartSuggestions, 60000);
+
+    // Poll as a fallback (e.g., if WS is blocked)
+    pollRef.current = window.setInterval(fetchPositions, 30000);
+
+    // Live updates via WebSocket
+    connectWebSocket();
 
     return () => {
+      unmountedRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
-      if (wsRef.current) wsRef.current.close();
-      wsRef.current = null;
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
       window.clearInterval(smartPoll);
     };
-  }, []);
+  }, [connectWebSocket]);
 
   const fetchPositions = async () => {
     try {

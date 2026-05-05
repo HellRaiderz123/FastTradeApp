@@ -173,12 +173,11 @@ def add_symbol(watchlist_id: int, symbol: str, db: Session = Depends(get_db)):
     if not watchlist:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     
-    symbols = watchlist.symbols or []
-    symbol_upper = symbol.upper()
-    
-    if symbol_upper not in symbols:
-        symbols.append(symbol_upper)
-        watchlist.symbols = symbols
+    current_symbols = [str(s).strip().upper() for s in (watchlist.symbols or []) if str(s).strip()]
+    symbol_upper = symbol.upper().strip()
+
+    if symbol_upper and symbol_upper not in current_symbols:
+        watchlist.symbols = [*current_symbols, symbol_upper]
         db.commit()
         db.refresh(watchlist)
     
@@ -193,12 +192,11 @@ def remove_symbol(watchlist_id: int, symbol: str, db: Session = Depends(get_db))
     if not watchlist:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     
-    symbols = watchlist.symbols or []
-    symbol_upper = symbol.upper()
-    
-    if symbol_upper in symbols:
-        symbols.remove(symbol_upper)
-        watchlist.symbols = symbols
+    current_symbols = [str(s).strip().upper() for s in (watchlist.symbols or []) if str(s).strip()]
+    symbol_upper = symbol.upper().strip()
+
+    if symbol_upper in current_symbols:
+        watchlist.symbols = [s for s in current_symbols if s != symbol_upper]
         db.commit()
         db.refresh(watchlist)
     

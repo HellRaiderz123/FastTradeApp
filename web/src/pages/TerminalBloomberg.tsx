@@ -17,6 +17,7 @@ import {
   Info,
   Bell,
   List,
+  SlidersHorizontal,
 } from 'lucide-react';
 import CandleChart from '../components/CandleChart';
 import NewsFeed from '../components/NewsFeed';
@@ -27,7 +28,7 @@ import AlertList from '../components/AlertList';
 import ComparisonChart from '../components/ComparisonChart';
 import MarketDepthViewer from '../components/MarketDepthViewer';
 import { useRealtimeQuotes } from '../hooks/useRealtimeQuotes';
-import { marketAPI, alertsAPI, mlAPI } from '../lib/api';
+import { alertsAPI, mlAPI } from '../lib/api';
 import { 
   marketDashboardAPI,
   swingScannerAPI,
@@ -45,6 +46,7 @@ const Terminal: React.FC = () => {
   const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '30m' | '1h' | '1d'>('15m');
   const [universe, setUniverse] = useState<string>('NIFTY50');
   const [detailModalSymbol, setDetailModalSymbol] = useState<string | null>(null);
+  const [showAdvancedPanels, setShowAdvancedPanels] = useState(false);
   
   // Market data
   const [topMovers, setTopMovers] = useState<{
@@ -61,11 +63,6 @@ const Terminal: React.FC = () => {
   const [todayEvents, setTodayEvents] = useState<CalendarEvent[]>([]);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandInput, setCommandInput] = useState('');
-  const [alertOperator, setAlertOperator] = useState<'above' | 'below' | 'above_or_equal' | 'below_or_equal'>('above');
-  const [alertPriceInput, setAlertPriceInput] = useState('');
-  const [alertTouched, setAlertTouched] = useState(false);
-  const [alertSubmitting, setAlertSubmitting] = useState(false);
-  const [alertMessage, setAlertMessage] = useState<string | null>(null);
   
   // Alert modals
   const [showAlertManager, setShowAlertManager] = useState(false);
@@ -84,7 +81,7 @@ const Terminal: React.FC = () => {
     'NIFTY50': [
       'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
       'HINDUNILVR', 'ITC', 'SBIN', 'BHARTIARTL', 'BAJFINANCE',
-      'KOTAKBANK', 'LT', 'AXISBANK', 'TITAN', 'SUNPHARMA',
+      'KOTAKBANK', 'LT',
     ],
     'BANKNIFTY': [
       'HDFCBANK', 'ICICIBANK', 'SBIN', 'KOTAKBANK', 'AXISBANK',
@@ -107,87 +104,97 @@ const Terminal: React.FC = () => {
     () => universeWatchlist[universe] || ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN'],
     [universe]
   );
-  const { quotes, loading: quotesLoading, connected: quotesConnected } = useRealtimeQuotes(watchlistSymbols, true);
 
-  useEffect(() => {
-    const currentQuote = quotes[selectedSymbol];
-    if (!alertTouched && currentQuote?.ltp) {
-      setAlertPriceInput(String(currentQuote.ltp));
-    }
-  }, [quotes, selectedSymbol, alertTouched]);
+  const allSymbols = useMemo(() => {
+    const joined = Object.values(universeWatchlist).flat();
+    return [...new Set(joined)].sort();
+  }, []);
+
+  const filteredSymbols = useMemo(() => {
+    if (!commandInput.trim()) return allSymbols.slice(0, 10);
+    const input = commandInput.toUpperCase().trim();
+    return allSymbols.filter((s) => s.includes(input)).slice(0, 10);
+  }, [allSymbols, commandInput]);
+
+  const { quotes, loading: quotesLoading, connected: quotesConnected } = useRealtimeQuotes(watchlistSymbols, true);
 
   // Fetch market data
   useEffect(() => {
     const fetchMarketData = async () => {
-      try {
-        // Top movers
-        const movers = await marketDashboardAPI.getTopMovers(5, universe);
+      if (document.visibilityState === 'hidden') return;
+
+      const [moversRes, sectorsRes, sentimentRes, breadthRes] = await Promise.allSettled([
+        marketDashboardAPI.getTopMovers(5, universe),
+        marketDashboardAPI.getSectorPerformance(),
+        sentimentAPI.getOverallSentiment(),
+        marketDashboardAPI.getMarketBreadth(universe),
+      ]);
+
+      if (moversRes.status === 'fulfilled') {
+        const movers = moversRes.value;
         setTopMovers({
           gainers: Array.isArray(movers?.gainers) ? movers.gainers : [],
           losers: Array.isArray(movers?.losers) ? movers.losers : [],
           most_active: Array.isArray(movers?.most_active) ? movers.most_active : [],
         });
-
-        // Sector performance
-        const sectorData = await marketDashboardAPI.getSectorPerformance();
-        setSectors((sectorData?.sectors ?? []).slice(0, 6));
-
-        // Overall sentiment
-        const sentimentData = await sentimentAPI.getOverallSentiment();
-        setSentiment(sentimentData);
-
-        // Market breadth
-        const breadth = await marketDashboardAPI.getMarketBreadth(universe);
-        setMarketBreadth(breadth);
-      } catch (error) {
-        console.error('❌ Failed to fetch core market data:', error);
       }
 
-      // Swing opportunities — isolated so failure doesn't block other fetches
-      try {
-        const opportunities = await swingScannerAPI.scan('all', 50, universe);
-        setSwingOpportunities((opportunities?.opportunities ?? []).slice(0, 5));
-        setSwingDataSource(opportunities?.data_source || 'unknown');
-      } catch (swingErr) {
-        console.warn('Swing scanner unavailable:', swingErr);
-        setSwingOpportunities([]);
-        setSwingDataSource('error');
+      if (sectorsRes.status === 'fulfilled') {
+        setSectors((sectorsRes.value?.sectors ?? []).slice(0, 6));
       }
 
-      // Today's calendar events (high-impact only)
-      try {
-        const calendarData = await getTodayEvents();
-        console.log('📅 Calendar API response:', calendarData);
-        const highImpactEvents = (calendarData?.events ?? []).filter(e => e.impact === 'high').slice(0, 4);
-        console.log('📅 High-impact events for today:', highImpactEvents);
-        setTodayEvents(highImpactEvents);
-      } catch (calErr) {
-        console.warn('Calendar events unavailable:', calErr);
+      if (sentimentRes.status === 'fulfilled') {
+        setSentiment(sentimentRes.value);
       }
 
-      // ML predictions for watchlist symbols
-      try {
-        const mlMetrics = await mlAPI.getMetrics();
-        setMlModelStatus(mlMetrics.data?.model_status || 'not_trained');
-        setMlModelType(mlMetrics.data?.model_type || 'none');
-        
-        if (mlMetrics.data?.model_status === 'ready') {
-          const wlSymbols = universeWatchlist[universe] || [];
-          const mlRes = await mlAPI.predictBulk(wlSymbols);
-          if (mlRes.data?.predictions) {
-            setMlPredictions(mlRes.data.predictions);
-          }
+      if (breadthRes.status === 'fulfilled') {
+        setMarketBreadth(breadthRes.value);
+      }
+
+      if (showAdvancedPanels) {
+        const [swingRes, calendarRes] = await Promise.allSettled([
+          swingScannerAPI.scan('all', 50, universe),
+          getTodayEvents(),
+        ]);
+
+        if (swingRes.status === 'fulfilled') {
+          setSwingOpportunities((swingRes.value?.opportunities ?? []).slice(0, 5));
+          setSwingDataSource(swingRes.value?.data_source || 'unknown');
+        } else {
+          setSwingOpportunities([]);
+          setSwingDataSource('error');
         }
-      } catch (mlErr) {
-        console.warn('ML predictions unavailable:', mlErr);
+
+        if (calendarRes.status === 'fulfilled') {
+          const highImpactEvents = (calendarRes.value?.events ?? [])
+            .filter((e) => e.impact === 'high')
+            .slice(0, 4);
+          setTodayEvents(highImpactEvents);
+        }
+      } else {
+        setSwingOpportunities([]);
+        setTodayEvents([]);
+      }
+
+      const metricsRes = await mlAPI.getMetrics().catch(() => null);
+      const status = metricsRes?.data?.model_status || 'not_trained';
+      setMlModelStatus(status);
+      setMlModelType(metricsRes?.data?.model_type || 'none');
+      if (status === 'ready') {
+        const mlRes = await mlAPI.predictBulk(watchlistSymbols).catch(() => null);
+        if (mlRes?.data?.predictions) {
+          setMlPredictions(mlRes.data.predictions);
+        }
+      } else {
+        setMlPredictions({});
       }
     };
 
     fetchMarketData();
-    const interval = setInterval(fetchMarketData, 30000); // Refresh every 30s
+    const interval = setInterval(fetchMarketData, 60000);
 
     return () => clearInterval(interval);
-  }, [universe]);
+  }, [showAdvancedPanels, universe, watchlistSymbols]);
 
   // Keyboard shortcuts handler
   useEffect(() => {
@@ -251,49 +258,6 @@ const Terminal: React.FC = () => {
   const candleTimeframe: '1m' | '5m' | '15m' | '1h' | 'daily' =
     timeframe === '1d' ? 'daily' : timeframe === '30m' ? '15m' : timeframe;
   
-  // Get all available symbols for command palette
-  const getAllSymbols = (): string[] => {
-    const allSymbols = Object.values(universeWatchlist).flat();
-    return [...new Set(allSymbols)].sort();
-  };
-  
-  // Filter symbols based on command input
-  const getFilteredSymbols = (): string[] => {
-    if (!commandInput.trim()) return getAllSymbols().slice(0, 10);
-    
-    const input = commandInput.toUpperCase().trim();
-    return getAllSymbols()
-      .filter(s => s.includes(input))
-      .slice(0, 10);
-  };
-
-  const handleCreateAlert = async () => {
-    const price = Number(alertPriceInput);
-    if (!selectedSymbol || Number.isNaN(price) || price <= 0) {
-      setAlertMessage('Enter a valid price for the alert.');
-      return;
-    }
-
-    setAlertSubmitting(true);
-    setAlertMessage(null);
-    try {
-      await alertsAPI.createAlert({
-        ticker: selectedSymbol,
-        alert_type: 'PRICE',
-        condition: { operator: alertOperator, price },
-        is_enabled: true,
-        is_recurring: true,
-        notify_via: { in_app: true, email: false },
-      });
-      setAlertMessage(`Alert created for ${selectedSymbol}.`);
-      setAlertTouched(false);
-    } catch (error) {
-      setAlertMessage('Failed to create alert.');
-    } finally {
-      setAlertSubmitting(false);
-    }
-  };
-
   return (
     <div className="h-full flex flex-col gap-4 terminal-pattern overflow-y-auto pb-6">
       {/* Command Palette Overlay */}
@@ -308,8 +272,8 @@ const Terminal: React.FC = () => {
                   value={commandInput}
                   onChange={(e) => setCommandInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && getFilteredSymbols().length > 0) {
-                      handleCommandPaletteSubmit(getFilteredSymbols()[0]);
+                    if (e.key === 'Enter' && filteredSymbols.length > 0) {
+                      handleCommandPaletteSubmit(filteredSymbols[0]);
                     }
                   }}
                   className="w-full bg-transparent text-lg text-white focus:outline-none"
@@ -319,8 +283,8 @@ const Terminal: React.FC = () => {
 
               {/* Command Palette Results */}
               <div className="max-h-96 overflow-y-auto">
-                {getFilteredSymbols().length > 0 ? (
-                  getFilteredSymbols().map((symbol, idx) => (
+                {filteredSymbols.length > 0 ? (
+                  filteredSymbols.map((symbol, idx) => (
                     <button
                       key={symbol}
                       onClick={() => handleCommandPaletteSubmit(symbol)}
@@ -420,6 +384,18 @@ const Terminal: React.FC = () => {
               <span className="text-slate-600">•</span>
               <span>ESC</span>
             </div>
+
+            <button
+              onClick={() => setShowAdvancedPanels((v) => !v)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-full border text-xs transition ${
+                showAdvancedPanels
+                  ? 'bg-blue-500/20 border-blue-400/50 text-blue-200'
+                  : 'bg-slate-900/70 border-slate-700/50 text-slate-300 hover:border-slate-500/70'
+              }`}
+            >
+              <SlidersHorizontal size={14} />
+              {showAdvancedPanels ? 'Advanced ON' : 'Advanced OFF'}
+            </button>
           </div>
         </div>
 
@@ -527,16 +503,17 @@ const Terminal: React.FC = () => {
             </ErrorBoundary>
           </div>
 
-          {/* Market Depth for selected symbol */}
-          <ErrorBoundary>
-            <div className="terminal-panel rounded-2xl p-5">
-              <MarketDepthViewer symbol={selectedSymbol} />
-            </div>
-          </ErrorBoundary>
+          {showAdvancedPanels && (
+            <ErrorBoundary>
+              <div className="terminal-panel rounded-2xl p-5">
+                <MarketDepthViewer symbol={selectedSymbol} />
+              </div>
+            </ErrorBoundary>
+          )}
 
-          {/* Swing Trade Opportunities */}
-          <ErrorBoundary>
-            <div className="terminal-panel rounded-2xl p-5">
+          {showAdvancedPanels && (
+            <ErrorBoundary>
+              <div className="terminal-panel rounded-2xl p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Swing Scanner</p>
@@ -635,8 +612,9 @@ const Terminal: React.FC = () => {
                   </div>
                 )}
               </div>
-            </div>
-          </ErrorBoundary>
+              </div>
+            </ErrorBoundary>
+          )}
 
           {/* Top Movers Tabs */}
           <ErrorBoundary>
@@ -757,8 +735,7 @@ const Terminal: React.FC = () => {
               </div>
             </div>
           </ErrorBoundary>
-          {/* Today's Key Events */}
-          {todayEvents.length > 0 && (
+          {showAdvancedPanels && todayEvents.length > 0 && (
             <div className="terminal-panel rounded-2xl p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -1193,20 +1170,21 @@ const Terminal: React.FC = () => {
                 <h2 className="terminal-title text-xl text-white">Live Feed</h2>
               </div>
             </div>
-            <NewsFeed height={800} />
+            <NewsFeed height={480} />
           </div>
         </div>
       </section>
 
-      {/* Multi-Symbol Comparison Chart */}
-      <section className="w-full">
-        <ErrorBoundary>
-          <ComparisonChart 
-            initialSymbols={[selectedSymbol, 'TCS', 'INFY']}
-            timeframe="3M"
-          />
-        </ErrorBoundary>
-      </section>
+      {showAdvancedPanels && (
+        <section className="w-full">
+          <ErrorBoundary>
+            <ComparisonChart
+              initialSymbols={[selectedSymbol, 'TCS', 'INFY']}
+              timeframe="3M"
+            />
+          </ErrorBoundary>
+        </section>
+      )}
 
       {/* Stock Detail Modal */}
       {detailModalSymbol && (

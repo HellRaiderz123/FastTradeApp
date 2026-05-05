@@ -11,7 +11,9 @@ real trading-firm structure, adapted for Indian equity markets (NSE/BSE):
   4. Bull Researcher        — makes the bullish case
   5. Bear Researcher        — makes the bearish case
   6. Fundamentals Analyst   — valuation, growth, financial health
-  7. Trader Agent           — synthesises all reports → BUY / SELL / HOLD
+    7. Trader Agent           — synthesises all reports → BUY / SELL / HOLD
+    8. Risk Manager           — enforces volatility/liquidity/event constraints
+    9. Portfolio Manager      — enforces portfolio-level exposure constraints
 
 All data comes from existing FastTradeApp infrastructure:
   - Candles DB (SQLAlchemy)
@@ -28,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 import re
 import threading
 import uuid
@@ -68,6 +71,74 @@ def _ws_broadcast(payload: dict) -> None:
 RESULT_TTL_MINUTES = 60
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
+_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "data_cache" / "ai_checkpoints"
+
+
+def _checkpoint_file(symbol: str, exchange: str) -> Path:
+    key = f"{exchange.strip().upper()}_{symbol.strip().upper()}"
+    safe_key = re.sub(r"[^A-Z0-9_.-]", "_", key)
+    return _CHECKPOINT_DIR / f"{safe_key}.json"
+
+
+def _load_checkpoint(symbol: str, exchange: str) -> Optional[dict]:
+    path = _checkpoint_file(symbol, exchange)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        return payload
+    except Exception as e:
+        logger.warning("trading_agents: failed to load checkpoint %s: %s", path, e)
+        return None
+
+
+def _save_checkpoint(
+    symbol: str,
+    exchange: str,
+    *,
+    step: str,
+    steps_done: list[str],
+    context: dict,
+    error: Optional[str] = None,
+) -> None:
+    try:
+        _CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        path = _checkpoint_file(symbol, exchange)
+        payload = {
+            "version": 1,
+            "symbol": symbol,
+            "exchange": exchange,
+            "step": step,
+            "steps_done": list(steps_done),
+            "context": context,
+            "status": "FAILED" if error else "RUNNING",
+            "error": error,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        logger.warning("trading_agents: failed to save checkpoint for %s:%s: %s", exchange, symbol, e)
+
+
+def _clear_checkpoint(symbol: str, exchange: str) -> None:
+    path = _checkpoint_file(symbol, exchange)
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception as e:
+        logger.warning("trading_agents: failed to clear checkpoint %s: %s", path, e)
+
+
+def clear_analysis_checkpoint(symbol: str, exchange: str = "NSE") -> bool:
+    path = _checkpoint_file(symbol, exchange)
+    if not path.exists():
+        return False
+    _clear_checkpoint(symbol, exchange)
+    return True
 
 
 def _new_job(symbol: str, exchange: str) -> str:
@@ -82,6 +153,7 @@ def _new_job(symbol: str, exchange: str) -> str:
             "steps_done": [],          # ordered list of completed steps
             "result": None,
             "error": None,
+            "resumed_from_checkpoint": False,
             "created_at": datetime.utcnow().isoformat(),
             "completed_at": None,
         }
@@ -175,6 +247,12 @@ def _save_decision_to_db(job_id: str, symbol: str, exchange: str, result: dict) 
                 time_horizon=decision.get("time_horizon"),
                 risk_level=decision.get("risk_level"),
                 rationale=decision.get("rationale"),
+                execution_allowed=decision.get("execution_allowed"),
+                manager_block_reason=(
+                    "; ".join(decision.get("manager_enforcement", {}).get("reasons", []))
+                    if isinstance(decision.get("manager_enforcement", {}).get("reasons", []), list)
+                    else None
+                ),
                 suggested_stop_loss_pct=decision.get("suggested_stop_loss_pct"),
                 suggested_target_pct=decision.get("suggested_target_pct"),
                 price_at_decision=_get_price_at_decision(symbol, result),
@@ -184,6 +262,8 @@ def _save_decision_to_db(job_id: str, symbol: str, exchange: str, result: dict) 
                 bull_report=result.get("reports", {}).get("bull_researcher"),
                 bear_report=result.get("reports", {}).get("bear_researcher"),
                 fundamentals_report=result.get("reports", {}).get("fundamentals"),
+                risk_manager_report=result.get("reports", {}).get("risk_manager"),
+                portfolio_manager_report=result.get("reports", {}).get("portfolio_manager"),
             )
             db.add(row)
             db.commit()
@@ -220,6 +300,8 @@ def _load_decision_history(symbol: str, limit: int = 5) -> list[dict]:
                     "confidence": r.confidence,
                     "conviction": r.conviction,
                     "rationale": r.rationale,
+                    "execution_allowed": r.execution_allowed,
+                    "manager_block_reason": r.manager_block_reason,
                     "outcome_correct": r.outcome_correct,
                     "actual_return_pct": r.actual_return_pct,
                     "reflection": r.reflection,
@@ -347,7 +429,13 @@ def _safe_symbol(symbol: str) -> str:
 # Data collection helpers
 # ---------------------------------------------------------------------------
 
-def _get_candle_data(symbol: str, timeframe: str = "1h", limit: int = 60) -> list[dict]:
+def _get_candle_data(
+    symbol: str,
+    timeframe: str = "1h",
+    limit: int = 60,
+    min_required: int = 1,
+    allow_backfill: bool = True,
+) -> list[dict]:
     """
     Fetch OHLCV candles from the FastTradeApp DB.
     Returns a list of dicts ordered oldest-first.
@@ -356,6 +444,7 @@ def _get_candle_data(symbol: str, timeframe: str = "1h", limit: int = 60) -> lis
     try:
         from app.db.session import SessionLocal
         from app.db.models_candles import Candle1h, CandleDaily, Candle5m, Candle15m
+        from app.core.market.candles import fetch_5m_candles, fetch_15m_candles, fetch_1h_candles, fetch_daily_candles
 
         model_map = {
             "5m": Candle5m,
@@ -367,8 +456,7 @@ def _get_candle_data(symbol: str, timeframe: str = "1h", limit: int = 60) -> lis
         if model is None:
             return []
 
-        db = SessionLocal()
-        try:
+        def _query_rows(db) -> list[dict]:
             if timeframe == "daily":
                 rows = (
                     db.query(model)
@@ -388,25 +476,71 @@ def _get_candle_data(symbol: str, timeframe: str = "1h", limit: int = 60) -> lis
                     }
                     for r in reversed(rows)
                 ]
-            else:
-                rows = (
-                    db.query(model)
-                    .filter(model.symbol == symbol)
-                    .order_by(model.timestamp.desc())
-                    .limit(limit)
-                    .all()
+
+            rows = (
+                db.query(model)
+                .filter(model.symbol == symbol)
+                .order_by(model.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "ts": r.timestamp.isoformat() if r.timestamp else None,
+                    "open": r.open,
+                    "high": r.high,
+                    "low": r.low,
+                    "close": r.close,
+                    "volume": r.volume,
+                }
+                for r in reversed(rows)
+            ]
+
+        backfill_map = {
+            "5m": (fetch_5m_candles, 100),
+            "15m": (fetch_15m_candles, 120),
+            "1h": (fetch_1h_candles, 365),
+            "daily": (fetch_daily_candles, 400),
+        }
+
+        db = SessionLocal()
+        try:
+            payload = _query_rows(db)
+            if len(payload) >= min_required or not allow_backfill:
+                return payload
+
+            # Backfill from Zerodha if this symbol/timeframe is missing or too sparse.
+            fetcher = backfill_map.get(timeframe)
+            if not fetcher:
+                return payload
+
+            try:
+                fetch_fn, days = fetcher
+                logger.info(
+                    "trading_agents: insufficient %s candles for %s (%d/%d). Backfilling from Zerodha.",
+                    timeframe,
+                    symbol,
+                    len(payload),
+                    min_required,
                 )
-                return [
-                    {
-                        "ts": r.timestamp.isoformat() if r.timestamp else None,
-                        "open": r.open,
-                        "high": r.high,
-                        "low": r.low,
-                        "close": r.close,
-                        "volume": r.volume,
-                    }
-                    for r in reversed(rows)
-                ]
+                fetch_fn(db, symbol, days=days)
+                payload = _query_rows(db)
+                if len(payload) >= min_required:
+                    logger.info(
+                        "trading_agents: Zerodha backfill succeeded for %s %s (%d rows)",
+                        symbol,
+                        timeframe,
+                        len(payload),
+                    )
+            except Exception as backfill_err:
+                logger.warning(
+                    "trading_agents: Zerodha backfill failed for %s %s: %s",
+                    symbol,
+                    timeframe,
+                    backfill_err,
+                )
+
+            return payload
         finally:
             db.close()
     except Exception as e:
@@ -466,6 +600,81 @@ def _get_twitter_sentiment(symbol: str) -> Optional[dict]:
     except Exception as e:
         logger.debug("trading_agents: twitter sentiment fetch failed: %s", e)
     return None
+
+
+def _get_portfolio_snapshot() -> dict:
+    """
+    Build a compact portfolio context for manager agents.
+    Uses open execution intents and latest capital snapshot when available.
+    """
+    snapshot = {
+        "open_positions_count": 0,
+        "gross_open_exposure": 0.0,
+        "concentration_pct": 0.0,
+        "largest_exposure_symbol": None,
+        "by_symbol": {},
+        "capital": None,
+        "daily_pnl": None,
+        "daily_loss_pct": None,
+    }
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models_intent import ExecutionIntent
+        from app.db.models import DailyCapital
+
+        db = SessionLocal()
+        try:
+            open_positions = (
+                db.query(ExecutionIntent)
+                .filter(ExecutionIntent.status == "EXECUTED", ExecutionIntent.closed_at.is_(None))
+                .all()
+            )
+
+            by_symbol: dict[str, dict[str, Any]] = {}
+            gross_exposure = 0.0
+            for pos in open_positions:
+                sym = (pos.underlying or "UNKNOWN").strip().upper() or "UNKNOWN"
+                exposure = float(pos.margin_required or pos.entry_credit or 0.0)
+                gross_exposure += abs(exposure)
+                if sym not in by_symbol:
+                    by_symbol[sym] = {"open_positions": 0, "gross_exposure": 0.0}
+                by_symbol[sym]["open_positions"] += 1
+                by_symbol[sym]["gross_exposure"] += abs(exposure)
+
+            max_symbol = None
+            max_exposure = 0.0
+            for sym, data in by_symbol.items():
+                if data["gross_exposure"] > max_exposure:
+                    max_exposure = data["gross_exposure"]
+                    max_symbol = sym
+
+            latest_capital = (
+                db.query(DailyCapital)
+                .order_by(DailyCapital.trade_date.desc())
+                .first()
+            )
+            capital = float(latest_capital.closing_capital) if latest_capital and latest_capital.closing_capital else None
+            daily_pnl = float(latest_capital.daily_pnl) if latest_capital and latest_capital.daily_pnl is not None else None
+
+            snapshot.update({
+                "open_positions_count": len(open_positions),
+                "gross_open_exposure": round(gross_exposure, 2),
+                "concentration_pct": round((max_exposure / gross_exposure) * 100, 2) if gross_exposure > 0 else 0.0,
+                "largest_exposure_symbol": max_symbol,
+                "by_symbol": by_symbol,
+                "capital": round(capital, 2) if capital else None,
+                "daily_pnl": round(daily_pnl, 2) if daily_pnl is not None else None,
+                "daily_loss_pct": (
+                    round(abs(daily_pnl) / capital * 100, 2)
+                    if capital and daily_pnl is not None and daily_pnl < 0
+                    else 0.0
+                ),
+            })
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug("trading_agents: portfolio snapshot fetch failed: %s", e)
+    return snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -693,16 +902,24 @@ def _run_bull_researcher(
     tech: dict,
     news: dict,
     sentiment: dict,
+    counter_bear: Optional[dict] = None,
+    round_no: int = 1,
+    total_rounds: int = 1,
 ) -> dict:
     context = {
         "technical_report": tech,
         "news_report": news,
         "sentiment_report": sentiment,
+        "debate_round": round_no,
+        "total_rounds": total_rounds,
     }
+    if counter_bear:
+        context["bear_counterarguments"] = counter_bear
     system = (
         "You are a bullish equity researcher for Indian markets. "
         "Your role is to build the strongest possible bullish case for a trade, "
         "using only the data provided. Be critical and evidence-based. "
+        "When bear arguments are provided, rebut them directly with evidence. "
         "Always respond with a single valid JSON object and nothing else."
     )
     user = (
@@ -723,16 +940,24 @@ def _run_bear_researcher(
     tech: dict,
     news: dict,
     sentiment: dict,
+    counter_bull: Optional[dict] = None,
+    round_no: int = 1,
+    total_rounds: int = 1,
 ) -> dict:
     context = {
         "technical_report": tech,
         "news_report": news,
         "sentiment_report": sentiment,
+        "debate_round": round_no,
+        "total_rounds": total_rounds,
     }
+    if counter_bull:
+        context["bull_counterarguments"] = counter_bull
     system = (
         "You are a bearish equity researcher for Indian markets. "
         "Your role is to build the strongest possible bearish / risk case for a trade, "
         "using only the data provided. Be critical and evidence-based. "
+        "When bull arguments are provided, rebut them directly with evidence. "
         "Always respond with a single valid JSON object and nothing else."
     )
     user = (
@@ -969,92 +1194,452 @@ def _run_trader_decision(
     return _llm_agent("TraderDecision", system, user, max_tokens=600)
 
 
+def _run_risk_manager(
+    symbol: str,
+    decision: dict,
+    indicators: dict,
+    tech: dict,
+    news: dict,
+    sentiment: dict,
+    bull: dict,
+    bear: dict,
+    fundamentals: dict | None,
+    portfolio_snapshot: dict,
+) -> dict:
+    context = {
+        "symbol": symbol,
+        "trader_decision": decision,
+        "technical_indicators": indicators,
+        "reports": {
+            "technical": tech,
+            "news": news,
+            "sentiment": sentiment,
+            "bull": bull,
+            "bear": bear,
+            "fundamentals": fundamentals,
+        },
+        "portfolio_snapshot": portfolio_snapshot,
+    }
+    system = (
+        "You are a risk manager at a professional trading desk. "
+        "Enforce risk controls for volatility, liquidity, event risk and daily drawdown. "
+        "You can override the trader recommendation when risk is excessive. "
+        "Always respond with a single valid JSON object and nothing else."
+    )
+    user = (
+        f"Risk Review Input:\n{json.dumps(context, indent=2)}\n\n"
+        "Respond with exactly this JSON structure:\n"
+        '{"volatility_regime": "LOW|NORMAL|ELEVATED|HIGH", '
+        '"liquidity_risk": "LOW|MEDIUM|HIGH", '
+        '"event_risk": "LOW|MEDIUM|HIGH", '
+        '"max_position_size_pct": <number 0-100>, '
+        '"risk_budget_pct": <number 0-100>, '
+        '"allowed_action": "BUY|SELL|HOLD", '
+        '"approval": <true|false>, '
+        '"hard_limits": ["..."], '
+        '"summary": "2-3 sentence risk verdict"}'
+    )
+    return _llm_agent("RiskManager", system, user, max_tokens=500)
+
+
+def _run_portfolio_manager(
+    symbol: str,
+    decision: dict,
+    risk_report: dict,
+    portfolio_snapshot: dict,
+) -> dict:
+    context = {
+        "symbol": symbol,
+        "trader_decision": decision,
+        "risk_manager_report": risk_report,
+        "portfolio_snapshot": portfolio_snapshot,
+    }
+    system = (
+        "You are a portfolio manager responsible for final position approval. "
+        "Validate concentration, open exposures, and total portfolio risk before execution. "
+        "When unsure, prefer HOLD over adding risk. "
+        "Always respond with a single valid JSON object and nothing else."
+    )
+    user = (
+        f"Portfolio Review Input:\n{json.dumps(context, indent=2)}\n\n"
+        "Respond with exactly this JSON structure:\n"
+        '{"approval": <true|false>, '
+        '"approved_action": "BUY|SELL|HOLD", '
+        '"suggested_allocation_pct": <number 0-100>, '
+        '"max_quantity": <integer or null>, '
+        '"reasons": ["..."], '
+        '"summary": "2-3 sentence portfolio-level verdict"}'
+    )
+    return _llm_agent("PortfolioManager", system, user, max_tokens=450)
+
+
+def _as_bool(value: Any, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "yes", "approved", "1"}:
+            return True
+        if text in {"false", "no", "rejected", "0"}:
+            return False
+    return default
+
+
+def _normalize_action(action: Any) -> str:
+    text = str(action or "").upper().strip()
+    return text if text in {"BUY", "SELL", "HOLD"} else "HOLD"
+
+
+def _apply_manager_enforcement(decision: dict, risk_report: dict, portfolio_report: dict) -> dict:
+    """Enforce manager approvals before exposing any executable action."""
+    merged = dict(decision or {})
+    requested_action = _normalize_action(merged.get("action"))
+    risk_allowed_action = _normalize_action(risk_report.get("allowed_action"))
+    pm_approved_action = _normalize_action(portfolio_report.get("approved_action"))
+
+    reasons: list[str] = []
+    blocked = False
+
+    risk_approved = _as_bool(risk_report.get("approval"), default=True)
+    portfolio_approved = _as_bool(portfolio_report.get("approval"), default=True)
+
+    if not risk_approved:
+        blocked = True
+        reasons.append("Risk manager rejected the trade")
+
+    if risk_allowed_action == "HOLD" and requested_action in {"BUY", "SELL"}:
+        blocked = True
+        reasons.append("Risk manager restricted action to HOLD")
+
+    if not portfolio_approved:
+        blocked = True
+        reasons.append("Portfolio manager rejected the trade")
+
+    final_action = requested_action
+    if not blocked and risk_allowed_action in {"BUY", "SELL"} and risk_allowed_action != requested_action:
+        final_action = risk_allowed_action
+        reasons.append(f"Action adjusted to {risk_allowed_action} by risk manager")
+
+    if not blocked and pm_approved_action in {"BUY", "SELL", "HOLD"} and pm_approved_action != final_action:
+        final_action = pm_approved_action
+        if pm_approved_action == "HOLD":
+            blocked = True
+            reasons.append("Portfolio manager restricted action to HOLD")
+        else:
+            reasons.append(f"Action adjusted to {pm_approved_action} by portfolio manager")
+
+    if blocked:
+        final_action = "HOLD"
+
+    merged["action"] = final_action
+    merged["execution_allowed"] = (final_action in {"BUY", "SELL"}) and not blocked
+    merged["manager_enforcement"] = {
+        "blocked": blocked,
+        "risk_approved": risk_approved,
+        "portfolio_approved": portfolio_approved,
+        "risk_allowed_action": risk_allowed_action,
+        "portfolio_approved_action": pm_approved_action,
+        "requested_action": requested_action,
+        "final_action": final_action,
+        "reasons": reasons,
+    }
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline orchestrator
 # ---------------------------------------------------------------------------
 
-def run_analysis_pipeline(job_id: str, symbol: str, exchange: str) -> None:
+def run_analysis_pipeline(job_id: str, symbol: str, exchange: str, debate_rounds: int = 1) -> None:
     """
-    Runs the 6-agent pipeline in a background thread.
+    Runs the multi-agent pipeline in a background thread.
     Updates job state at each step so the caller can poll progress.
     """
-    _update_job(job_id, status="RUNNING")
-    steps_done: list[str] = []
+    checkpoint = _load_checkpoint(symbol, exchange)
+    steps_done: list[str] = list(checkpoint.get("steps_done", [])) if checkpoint else []
+    context: dict[str, Any] = dict(checkpoint.get("context", {})) if checkpoint else {}
+    _update_job(
+        job_id,
+        status="RUNNING",
+        steps_done=list(steps_done),
+        resumed_from_checkpoint=bool(checkpoint),
+    )
+    current_step = "collecting_data"
 
     try:
         # ── Step 1: Collect data + decision history ───────────────────────
         _update_job(job_id, step="collecting_data")
-        candles_1h    = _get_candle_data(symbol, "1h", limit=60)
-        candles_daily = _get_candle_data(symbol, "daily", limit=60)
-        candles_5m    = _get_candle_data(symbol, "5m", limit=60)
-        candles_15m   = _get_candle_data(symbol, "15m", limit=60)
-        # Prefer 1h for primary indicators; fall back to daily
-        candles = candles_1h if len(candles_1h) >= 15 else candles_daily
-        indicators = _compute_indicators(candles)
-        # Multi-timeframe context for the technical analyst
-        multi_tf = {
-            "5m":    _compute_indicators(candles_5m)    if len(candles_5m)  >= 15 else {"available": False},
-            "15m":   _compute_indicators(candles_15m)   if len(candles_15m) >= 15 else {"available": False},
-            "1h":    indicators,
-            "daily": _compute_indicators(candles_daily) if len(candles_daily) >= 15 else {"available": False},
-        }
-
-        news_items = _get_news_items(limit=15)
-        vix        = _get_vix()
-        twitter    = _get_twitter_sentiment(symbol)
-
-        # Load past decisions for this symbol (memory injection)
-        history = _load_decision_history(symbol, limit=5)
-
-        steps_done.append("data_collection")
+        need_data_collection = (
+            "data_collection" not in steps_done
+            or any(k not in context for k in [
+                "candles_1h", "candles_daily", "candles_5m", "candles_15m",
+                "indicators", "multi_tf", "news_items", "vix", "twitter",
+                "history", "portfolio_snapshot",
+            ])
+        )
+        if need_data_collection:
+            candles_1h = _get_candle_data(symbol, "1h", limit=60, min_required=15)
+            candles_daily = _get_candle_data(symbol, "daily", limit=60, min_required=15)
+            candles_5m = _get_candle_data(symbol, "5m", limit=60, min_required=15)
+            candles_15m = _get_candle_data(symbol, "15m", limit=60, min_required=15)
+            candles = candles_1h if len(candles_1h) >= 15 else candles_daily
+            indicators = _compute_indicators(candles)
+            multi_tf = {
+                "5m": _compute_indicators(candles_5m) if len(candles_5m) >= 15 else {"available": False},
+                "15m": _compute_indicators(candles_15m) if len(candles_15m) >= 15 else {"available": False},
+                "1h": indicators,
+                "daily": _compute_indicators(candles_daily) if len(candles_daily) >= 15 else {"available": False},
+            }
+            news_items = _get_news_items(limit=15)
+            vix = _get_vix()
+            twitter = _get_twitter_sentiment(symbol)
+            history = _load_decision_history(symbol, limit=5)
+            portfolio_snapshot = _get_portfolio_snapshot()
+            context.update({
+                "candles_1h": candles_1h,
+                "candles_daily": candles_daily,
+                "candles_5m": candles_5m,
+                "candles_15m": candles_15m,
+                "indicators": indicators,
+                "multi_tf": multi_tf,
+                "news_items": news_items,
+                "vix": vix,
+                "twitter": twitter,
+                "history": history,
+                "portfolio_snapshot": portfolio_snapshot,
+                "debate_rounds": max(1, min(3, int(debate_rounds))),
+            })
+            if "data_collection" not in steps_done:
+                steps_done.append("data_collection")
+            _save_checkpoint(symbol, exchange, step="data_collection", steps_done=steps_done, context=context)
+        else:
+            candles_1h = context["candles_1h"]
+            candles_daily = context["candles_daily"]
+            candles_5m = context["candles_5m"]
+            candles_15m = context["candles_15m"]
+            indicators = context["indicators"]
+            multi_tf = context["multi_tf"]
+            news_items = context["news_items"]
+            vix = context["vix"]
+            twitter = context["twitter"]
+            history = context["history"]
+            portfolio_snapshot = context["portfolio_snapshot"]
+        debate_rounds = max(1, min(3, int(context.get("debate_rounds", debate_rounds))))
         _update_job(job_id, steps_done=list(steps_done))
 
         # ── Step 2: Technical Analyst ─────────────────────────────────────
+        current_step = "technical_analyst"
         _update_job(job_id, step="technical_analyst")
-        tech_report = _run_technical_agent(symbol, indicators, multi_tf)
-        steps_done.append("technical_analyst")
+        if "technical_analyst" not in steps_done or "tech_report" not in context:
+            tech_report = _run_technical_agent(symbol, indicators, multi_tf)
+            context["tech_report"] = tech_report
+            if "technical_analyst" not in steps_done:
+                steps_done.append("technical_analyst")
+            _save_checkpoint(symbol, exchange, step="technical_analyst", steps_done=steps_done, context=context)
+        else:
+            tech_report = context["tech_report"]
         _update_job(job_id, steps_done=list(steps_done))
 
         # ── Step 3: News Analyst ──────────────────────────────────────────
+        current_step = "news_analyst"
         _update_job(job_id, step="news_analyst")
-        news_report = _run_news_agent(symbol, news_items)
-        steps_done.append("news_analyst")
+        if "news_analyst" not in steps_done or "news_report" not in context:
+            news_report = _run_news_agent(symbol, news_items)
+            context["news_report"] = news_report
+            if "news_analyst" not in steps_done:
+                steps_done.append("news_analyst")
+            _save_checkpoint(symbol, exchange, step="news_analyst", steps_done=steps_done, context=context)
+        else:
+            news_report = context["news_report"]
         _update_job(job_id, steps_done=list(steps_done))
 
         # ── Step 4: Sentiment Analyst ─────────────────────────────────────
+        current_step = "sentiment_analyst"
         _update_job(job_id, step="sentiment_analyst")
-        sentiment_report = _run_sentiment_agent(symbol, vix, twitter)
-        steps_done.append("sentiment_analyst")
+        if "sentiment_analyst" not in steps_done or "sentiment_report" not in context:
+            sentiment_report = _run_sentiment_agent(symbol, vix, twitter)
+            context["sentiment_report"] = sentiment_report
+            if "sentiment_analyst" not in steps_done:
+                steps_done.append("sentiment_analyst")
+            _save_checkpoint(symbol, exchange, step="sentiment_analyst", steps_done=steps_done, context=context)
+        else:
+            sentiment_report = context["sentiment_report"]
         _update_job(job_id, steps_done=list(steps_done))
 
         # ── Step 5: Bull Researcher ───────────────────────────────────────
+        current_step = "bull_researcher"
         _update_job(job_id, step="bull_researcher")
-        bull_report = _run_bull_researcher(symbol, tech_report, news_report, sentiment_report)
-        steps_done.append("bull_researcher")
+        if "bull_researcher" not in steps_done or "bull_report" not in context:
+            bull_report = _run_bull_researcher(
+                symbol,
+                tech_report,
+                news_report,
+                sentiment_report,
+                round_no=1,
+                total_rounds=debate_rounds,
+            )
+            context["bull_report"] = bull_report
+            if "bull_researcher" not in steps_done:
+                steps_done.append("bull_researcher")
+            _save_checkpoint(symbol, exchange, step="bull_researcher", steps_done=steps_done, context=context)
+        else:
+            bull_report = context["bull_report"]
         _update_job(job_id, steps_done=list(steps_done))
 
         # ── Step 6: Bear Researcher ───────────────────────────────────────
+        current_step = "bear_researcher"
         _update_job(job_id, step="bear_researcher")
-        bear_report = _run_bear_researcher(symbol, tech_report, news_report, sentiment_report)
-        steps_done.append("bear_researcher")
+        if "bear_researcher" not in steps_done or "bear_report" not in context:
+            debate_transcript: list[dict[str, Any]] = []
+            bear_report = _run_bear_researcher(
+                symbol,
+                tech_report,
+                news_report,
+                sentiment_report,
+                counter_bull=bull_report,
+                round_no=1,
+                total_rounds=debate_rounds,
+            )
+            debate_transcript.append(
+                {
+                    "round": 1,
+                    "bull": {
+                        "thesis": bull_report.get("bull_thesis"),
+                        "confidence": bull_report.get("bull_confidence"),
+                    },
+                    "bear": {
+                        "thesis": bear_report.get("bear_thesis"),
+                        "confidence": bear_report.get("bear_confidence"),
+                    },
+                }
+            )
+
+            if debate_rounds > 1:
+                bull_current = bull_report
+                bear_current = bear_report
+                for round_no in range(2, debate_rounds + 1):
+                    bull_current = _run_bull_researcher(
+                        symbol,
+                        tech_report,
+                        news_report,
+                        sentiment_report,
+                        counter_bear=bear_current,
+                        round_no=round_no,
+                        total_rounds=debate_rounds,
+                    )
+                    bear_current = _run_bear_researcher(
+                        symbol,
+                        tech_report,
+                        news_report,
+                        sentiment_report,
+                        counter_bull=bull_current,
+                        round_no=round_no,
+                        total_rounds=debate_rounds,
+                    )
+                    debate_transcript.append(
+                        {
+                            "round": round_no,
+                            "bull": {
+                                "thesis": bull_current.get("bull_thesis"),
+                                "confidence": bull_current.get("bull_confidence"),
+                            },
+                            "bear": {
+                                "thesis": bear_current.get("bear_thesis"),
+                                "confidence": bear_current.get("bear_confidence"),
+                            },
+                        }
+                    )
+                bull_report = bull_current
+                bear_report = bear_current
+
+            context["bull_report"] = bull_report
+            context["bear_report"] = bear_report
+            context["debate_transcript"] = debate_transcript
+            context["debate_rounds_used"] = debate_rounds
+            if "bear_researcher" not in steps_done:
+                steps_done.append("bear_researcher")
+            _save_checkpoint(symbol, exchange, step="bear_researcher", steps_done=steps_done, context=context)
+        else:
+            bear_report = context["bear_report"]
+            debate_transcript = context.get("debate_transcript", [])
+            debate_rounds = int(context.get("debate_rounds_used", debate_rounds))
         _update_job(job_id, steps_done=list(steps_done))
 
         # ── Step 7: Fundamentals Analyst ───────────────────────────────────
+        current_step = "fundamentals_analyst"
         _update_job(job_id, step="fundamentals_analyst")
-        fund_data = _get_fundamental_data(symbol)
-        fundamentals_report = _run_fundamentals_analyst(symbol, fund_data, tech_report)
-        steps_done.append("fundamentals_analyst")
+        if "fundamentals_analyst" not in steps_done or "fund_data" not in context or "fundamentals_report" not in context:
+            fund_data = _get_fundamental_data(symbol)
+            fundamentals_report = _run_fundamentals_analyst(symbol, fund_data, tech_report)
+            context["fund_data"] = fund_data
+            context["fundamentals_report"] = fundamentals_report
+            if "fundamentals_analyst" not in steps_done:
+                steps_done.append("fundamentals_analyst")
+            _save_checkpoint(symbol, exchange, step="fundamentals_analyst", steps_done=steps_done, context=context)
+        else:
+            fund_data = context["fund_data"]
+            fundamentals_report = context["fundamentals_report"]
         _update_job(job_id, steps_done=list(steps_done))
 
         # ── Step 8: Trader Decision ───────────────────────────────────────
+        current_step = "trader_decision"
         _update_job(job_id, step="trader_decision")
-        decision = _run_trader_decision(
-            symbol, indicators, tech_report, news_report,
-            sentiment_report, bull_report, bear_report,
-            fundamentals_report,
-            history=history,
-        )
-        steps_done.append("trader_decision")
+        if "trader_decision" not in steps_done or "decision" not in context:
+            decision = _run_trader_decision(
+                symbol, indicators, tech_report, news_report,
+                sentiment_report, bull_report, bear_report,
+                fundamentals_report,
+                history=history,
+            )
+            context["decision"] = decision
+            if "trader_decision" not in steps_done:
+                steps_done.append("trader_decision")
+            _save_checkpoint(symbol, exchange, step="trader_decision", steps_done=steps_done, context=context)
+        else:
+            decision = context["decision"]
+        _update_job(job_id, steps_done=list(steps_done))
+
+        # ── Step 9: Risk Manager ──────────────────────────────────────────
+        current_step = "risk_manager"
+        _update_job(job_id, step="risk_manager")
+        if "risk_manager" not in steps_done or "risk_report" not in context:
+            risk_report = _run_risk_manager(
+                symbol,
+                decision,
+                indicators,
+                tech_report,
+                news_report,
+                sentiment_report,
+                bull_report,
+                bear_report,
+                fundamentals_report,
+                portfolio_snapshot,
+            )
+            context["risk_report"] = risk_report
+            if "risk_manager" not in steps_done:
+                steps_done.append("risk_manager")
+            _save_checkpoint(symbol, exchange, step="risk_manager", steps_done=steps_done, context=context)
+        else:
+            risk_report = context["risk_report"]
+        _update_job(job_id, steps_done=list(steps_done))
+
+        # ── Step 10: Portfolio Manager ────────────────────────────────────
+        current_step = "portfolio_manager"
+        _update_job(job_id, step="portfolio_manager")
+        if "portfolio_manager" not in steps_done or "portfolio_report" not in context:
+            portfolio_report = _run_portfolio_manager(symbol, decision, risk_report, portfolio_snapshot)
+            context["portfolio_report"] = portfolio_report
+            if "portfolio_manager" not in steps_done:
+                steps_done.append("portfolio_manager")
+            _save_checkpoint(symbol, exchange, step="portfolio_manager", steps_done=steps_done, context=context)
+        else:
+            portfolio_report = context["portfolio_report"]
+        _update_job(job_id, steps_done=list(steps_done))
+
+        # Enforce manager approvals before any downstream execution path.
+        decision = _apply_manager_enforcement(decision, risk_report, portfolio_report)
 
         # ── Assemble final result ─────────────────────────────────────────
         result = {
@@ -1069,6 +1654,8 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str) -> None:
                 "bull_researcher": bull_report,
                 "bear_researcher": bear_report,
                 "fundamentals": fundamentals_report,
+                "risk_manager": risk_report,
+                "portfolio_manager": portfolio_report,
             },
             "data_summary": {
                 "candles_used": indicators.get("bars_analysed", 0),
@@ -1079,8 +1666,16 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str) -> None:
                 "vix": vix,
                 "twitter_available": twitter is not None,
                 "history_decisions_used": len(history),
+                "portfolio_open_positions": portfolio_snapshot.get("open_positions_count", 0),
+                "portfolio_concentration_pct": portfolio_snapshot.get("concentration_pct", 0.0),
+                "risk_manager_approved": _as_bool(risk_report.get("approval"), default=True),
+                "portfolio_manager_approved": _as_bool(portfolio_report.get("approval"), default=True),
+                "execution_allowed": bool(decision.get("execution_allowed", False)),
+                "debate_rounds": debate_rounds,
             },
             "decision_history": history,
+            "debate_transcript": debate_transcript,
+            "portfolio_snapshot": portfolio_snapshot,
             "disclaimer": (
                 "This analysis is generated by AI agents for research purposes only. "
                 "It is NOT financial or investment advice. Trade at your own risk."
@@ -1095,12 +1690,21 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str) -> None:
             result=result,
             completed_at=datetime.utcnow().isoformat(),
         )
+        _clear_checkpoint(symbol, exchange)
         # Persist to DB (non-blocking, best-effort)
         _save_decision_to_db(job_id, symbol, exchange, result)
         logger.info("trading_agents: job %s completed for %s", job_id, symbol)
 
     except Exception as e:
         logger.exception("trading_agents: job %s failed: %s", job_id, e)
+        _save_checkpoint(
+            symbol,
+            exchange,
+            step=current_step,
+            steps_done=steps_done,
+            context=context,
+            error=str(e),
+        )
         _update_job(
             job_id,
             status="FAILED",
@@ -1115,7 +1719,7 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str) -> None:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def start_analysis(symbol: str, exchange: str = "NSE") -> str:
+def start_analysis(symbol: str, exchange: str = "NSE", debate_rounds: int = 1) -> str:
     """
     Validate inputs, create a job, start the pipeline in a daemon thread.
     Returns the job_id for polling.
@@ -1124,11 +1728,14 @@ def start_analysis(symbol: str, exchange: str = "NSE") -> str:
     """
     clean_symbol   = _safe_symbol(symbol)
     clean_exchange = _safe_symbol(exchange) if exchange else "NSE"
+    debate_rounds = max(1, min(3, int(debate_rounds)))
+    checkpoint = _load_checkpoint(clean_symbol, clean_exchange)
 
     job_id = _new_job(clean_symbol, clean_exchange)
+    _update_job(job_id, resumed_from_checkpoint=bool(checkpoint))
     thread = threading.Thread(
         target=run_analysis_pipeline,
-        args=(job_id, clean_symbol, clean_exchange),
+        args=(job_id, clean_symbol, clean_exchange, debate_rounds),
         name=f"trading-agents-{job_id[:8]}",
         daemon=True,
     )

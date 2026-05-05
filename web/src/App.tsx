@@ -31,10 +31,10 @@ import StrategyPnL from './pages/StrategyPnL';
 import StrategyMarketplace from './pages/StrategyMarketplace';
 import AIAssistant from './pages/AIAssistant';
 import AIAnalysis from './pages/AIAnalysis';
+import SignalReconciliation from './pages/SignalReconciliation';
 import CandleBackfill from './pages/CandleBackfill';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
-import TwitterAlertsMonitor from './components/TwitterAlerts';
 import CommandPalette from './components/CommandPalette';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
@@ -95,7 +95,6 @@ function AppInner() {
                 onSystemToggle={setSystemEnabled}
               />
               <SignalAlertMonitor />
-              <TwitterAlertsMonitor />
               <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
               <main className="flex-1 overflow-auto p-6">
                 <Routes>
@@ -126,6 +125,7 @@ function AppInner() {
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/ai-assistant" element={<AIAssistant />} />
                   <Route path="/ai-analysis" element={<AIAnalysis />} />
+                  <Route path="/signal-reconciliation" element={<SignalReconciliation />} />
                 </Routes>
               </main>
             </div>

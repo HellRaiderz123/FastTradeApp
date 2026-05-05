@@ -28,6 +28,18 @@ export interface AgentReport {
   [key: string]: unknown;
 }
 
+export interface DebateRoundEntry {
+  round: number;
+  bull?: {
+    thesis?: string;
+    confidence?: number;
+  };
+  bear?: {
+    thesis?: string;
+    confidence?: number;
+  };
+}
+
 export interface PipelineResult {
   job_id: string;
   symbol: string;
@@ -49,7 +61,9 @@ export interface PipelineResult {
     vix?: number;
     history_decisions_used?: number;
     fundamentals_used?: string[];
+    debate_rounds?: number;
   };
+  debate_transcript?: DebateRoundEntry[];
   error?: string;
   analysed_at: string;
 }
@@ -95,6 +109,11 @@ export interface HealthResponse {
   message?: string;
 }
 
+export interface AnalyzeOptions {
+  debate_rounds?: number;
+  clear_checkpoint?: boolean;
+}
+
 // ── API Client ───────────────────────────────────────────────────────────────
 
 export const aiAPI = {
@@ -103,8 +122,12 @@ export const aiAPI = {
     AI_API.get<HealthResponse>('/health'),
 
   // Start new analysis
-  analyze: (symbol: string, exchange: string = 'NSE') =>
-    AI_API.post<{ job_id: string; status: string }>('/analyze', { symbol, exchange }),
+  analyze: (symbol: string, exchange: string = 'NSE', options?: AnalyzeOptions) =>
+    AI_API.post<{ job_id: string; status: string }>('/analyze', {
+      symbol,
+      exchange,
+      ...(options || {}),
+    }),
 
   // Poll job status & result
   status: (jobId: string) =>

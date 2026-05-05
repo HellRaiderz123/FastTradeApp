@@ -17,7 +17,7 @@ class Watchlist(Base):
     description = Column(String, nullable=True)
     
     # Symbol list
-    symbols = Column(JSON, default=[])  # List of symbols: ["NIFTY", "BANKNIFTY", "RELIANCE", ...]
+    symbols = Column(JSON, default=list)  # List of symbols: ["NIFTY", "BANKNIFTY", "RELIANCE", ...]
     
     # Display settings
     color = Column(String, default="#3b82f6")  # Theme color for UI

@@ -9,9 +9,13 @@ Used by the multi-agent pipeline to:
      context so the system learns from its own history.
 """
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Text, Index
+import logging
+
+from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, Text, Index, Boolean, inspect, text
 from app.db.session import Base
 from app.core.utils.time import now_ist
+
+logger = logging.getLogger(__name__)
 
 
 class AIDecision(Base):
@@ -32,6 +36,8 @@ class AIDecision(Base):
     time_horizon = Column(String(20), nullable=True) # INTRADAY | SWING | POSITIONAL
     risk_level  = Column(String(10), nullable=True)
     rationale   = Column(Text, nullable=True)
+    execution_allowed = Column(Boolean, nullable=True)
+    manager_block_reason = Column(Text, nullable=True)
 
     # Price at time of decision
     price_at_decision = Column(Float, nullable=True)
@@ -47,6 +53,8 @@ class AIDecision(Base):
     bull_report        = Column(JSON, nullable=True)
     bear_report        = Column(JSON, nullable=True)
     fundamentals_report = Column(JSON, nullable=True)
+    risk_manager_report = Column(JSON, nullable=True)
+    portfolio_manager_report = Column(JSON, nullable=True)
 
     # Outcome evaluation (filled later by the cron evaluator)
     outcome_evaluated_at = Column(DateTime(timezone=True), nullable=True)
@@ -63,3 +71,32 @@ class AIDecision(Base):
     __table_args__ = (
         Index("ix_ai_decisions_symbol_analysed", "symbol", "analysed_at"),
     )
+
+
+def ensure_ai_decisions_schema(bind) -> None:
+    """Lightweight migration guard for newly added ai_decisions columns."""
+    try:
+        inspector = inspect(bind)
+        if "ai_decisions" not in inspector.get_table_names():
+            return
+
+        columns = {col["name"] for col in inspector.get_columns("ai_decisions")}
+        statements = []
+        if "execution_allowed" not in columns:
+            statements.append("ALTER TABLE ai_decisions ADD COLUMN execution_allowed BOOLEAN")
+        if "manager_block_reason" not in columns:
+            statements.append("ALTER TABLE ai_decisions ADD COLUMN manager_block_reason TEXT")
+        if "risk_manager_report" not in columns:
+            statements.append("ALTER TABLE ai_decisions ADD COLUMN risk_manager_report JSON")
+        if "portfolio_manager_report" not in columns:
+            statements.append("ALTER TABLE ai_decisions ADD COLUMN portfolio_manager_report JSON")
+
+        if not statements:
+            return
+
+        with bind.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+        logger.info("AI decisions schema ensured for manager/risk fields")
+    except Exception as exc:
+        logger.warning("AI decisions schema ensure failed: %s", exc)
