@@ -1052,8 +1052,13 @@ def start_strategy_discovery_scheduler():
 
 def start_neon_sync_scheduler():
     """
-    Start hourly delta sync: local Docker Postgres → Neon (cloud backup).
-    Runs every hour at :30 past the hour.
+    Start daily delta sync: local Docker Postgres → Neon (cloud backup).
+    Runs once a day at 3:15 PM IST.
+
+    Persistent catch-up: the last successful sync timestamp is written to
+    data/neon_sync_state.json.  If the service was down for N days, the next
+    run automatically syncs all rows from the entire missed window — no data
+    is ever lost regardless of how many consecutive runs were skipped.
     """
     if not scheduler.running:
         logger.warning("⚠️ Cannot start Neon sync scheduler: main scheduler not running")
@@ -1064,14 +1069,17 @@ def start_neon_sync_scheduler():
     scheduler.add_job(
         func=run_delta_sync,
         trigger="cron",
-        minute=30,   # runs at HH:30 every hour
+        hour=15,     # 3 PM IST
+        minute=15,   # :15
+        timezone="Asia/Kolkata",
         id="neon_sync_job",
         replace_existing=True,
         max_instances=1,
-        coalesce=True,
+        coalesce=True,   # if multiple triggers fired while down, run only once
+        misfire_grace_time=3600,  # allow up to 1 h late start (e.g. slow boot)
     )
 
-    logger.info("🟢 Neon delta sync scheduler started (every hour at :30)")
+    logger.info("🟢 Neon delta sync scheduler started (daily at 3:15 PM IST)")
 
 
 def _zerodha_auto_login_job():

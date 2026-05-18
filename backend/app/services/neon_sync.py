@@ -1,6 +1,10 @@
 """
 Delta sync: Local Docker PostgreSQL → Neon PostgreSQL
-Runs every hour via APScheduler. Only syncs rows added/updated since last run.
+Runs daily at 3:15 PM IST via APScheduler.
+
+Persistence: last successful sync timestamp is written to a JSON file so that
+even if the service is down for multiple days, the next run automatically
+catches up with ALL rows inserted/updated since the last successful run.
 
 Strategy per table:
   - Tables with `updated_at`  → sync WHERE updated_at > last_run
@@ -8,9 +12,11 @@ Strategy per table:
   - Tables with neither       → full upsert (small tables, safe to re-sync)
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import create_engine, text, inspect
@@ -25,8 +31,37 @@ NEON_URL = os.getenv(
     "/neondb?sslmode=require",
 )
 
-# ── State: timestamp of last successful sync (in-memory, resets on restart) ───
-_last_sync_at: Optional[datetime] = None
+# ── Persistent state file ─────────────────────────────────────────────────────
+# Survives container restarts; ensures missed days are always caught up.
+_STATE_FILE = Path(
+    os.getenv("NEON_SYNC_STATE_FILE", "").strip()
+    or Path(__file__).resolve().parents[2] / "data" / "neon_sync_state.json"
+)
+
+
+def _load_last_sync() -> Optional[datetime]:
+    """Return the last successful sync timestamp from disk, or None."""
+    try:
+        if _STATE_FILE.exists():
+            data = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+            ts = data.get("last_sync_at")
+            if ts:
+                return datetime.fromisoformat(ts)
+    except Exception as exc:
+        logger.warning("⚠️  Could not read Neon sync state file: %s", exc)
+    return None
+
+
+def _save_last_sync(ts: datetime) -> None:
+    """Persist the last successful sync timestamp to disk."""
+    try:
+        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _STATE_FILE.write_text(
+            json.dumps({"last_sync_at": ts.isoformat()}, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning("⚠️  Could not save Neon sync state file: %s", exc)
 
 # ── Tables that are too large / candle-only — skip syncing to Neon ────────────
 # Candle tables are huge and Neon has free-tier row limits; exclude them.
@@ -86,15 +121,17 @@ def _ensure_tables_exist(neon_engine, local_engine):
 def run_delta_sync():
     """
     Copy rows added/updated since last sync from local Postgres → Neon.
-    Called by the scheduler every hour.
-    """
-    global _last_sync_at
+    Called by the scheduler daily at 3:15 PM IST.
 
-    since = _last_sync_at
+    If the service was down for N days, `since` will be N days ago and this
+    run will automatically pick up all rows from the entire missed window.
+    """
+    since = _load_last_sync()
     run_started_at = datetime.now(timezone.utc)
 
     logger.info(
-        f"🔄 Neon delta sync started | since={since.isoformat() if since else 'FULL'}"
+        "🔄 Neon delta sync started | since=%s",
+        since.isoformat() if since else "FULL (first run or state lost)",
     )
 
     try:
@@ -178,14 +215,19 @@ def run_delta_sync():
             except Exception as table_err:
                 logger.warning(f"  ❌ {table}: {table_err}")
 
-        # Update last sync timestamp only on success
-        _last_sync_at = run_started_at
+        # Persist last sync timestamp only on success.
+        # On failure we intentionally leave it unchanged so the next run
+        # retries from the same (or earlier) window, catching up all missed data.
+        _save_last_sync(run_started_at)
 
         logger.info(
-            f"✅ Neon delta sync complete | {total_upserted} rows upserted, "
-            f"{total_skipped} skipped | next run in ~1h"
+            "✅ Neon delta sync complete | %d rows upserted, %d skipped | "
+            "next run tomorrow at 3:15 PM IST",
+            total_upserted,
+            total_skipped,
         )
 
     except Exception as e:
-        logger.error(f"❌ Neon delta sync failed: {e}", exc_info=True)
-        # Don't update _last_sync_at so next run retries from same window
+        logger.error("❌ Neon delta sync failed: %s", e, exc_info=True)
+        # Do NOT update the state file — next run will retry from last good timestamp,
+        # ensuring no data is ever skipped even after multiple consecutive failures.
