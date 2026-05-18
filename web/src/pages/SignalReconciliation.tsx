@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   MessageSquare,
   Brain,
@@ -13,7 +13,7 @@ import {
   Minus,
   Radar,
 } from 'lucide-react';
-import { aiAPI, DebateRoundEntry, HistoryEntry, PipelineResult } from '../api/aiAPI';
+import { aiAPI, DebateRoundEntry, PipelineResult } from '../api/aiAPI';
 import { journalAPI, mlAPI, watchlistAPI } from '../lib/api';
 
 type Action = 'BUY' | 'SELL' | 'HOLD';
@@ -24,6 +24,7 @@ type SourceVote = {
   confidence: number;
   detail: string;
   meta?: string;
+  signalLabel?: string;
 };
 
 type MLSnapshot = {
@@ -45,13 +46,40 @@ type WatchlistSuggestion = {
   avg_change_pct: number | null;
 };
 
+type AIOutcome = {
+  action: Action;
+  confidence: number;
+  rationale: string;
+  analysed_at?: string;
+};
+
+type ReconciliationSnapshot = {
+  savedAt: number;
+  aiOutcome: AIOutcome | null;
+  mlSingle: MLSnapshot | null;
+  mlEnsemble: MLSnapshot | null;
+  strategySuggestion: WatchlistSuggestion | null;
+  diagnosticsSummary: any;
+  diagnosticsScope: string;
+  debateTranscript: DebateRoundEntry[];
+  debateRoundsUsed: number | null;
+};
+
 const POPULAR_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'RELIANCE', 'TCS', 'SBIN', 'INFY', 'HDFCBANK'];
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 function normalizeMlToAction(signal?: string): Action {
   const s = String(signal || '').toUpperCase();
   if (s.includes('BULL')) return 'BUY';
   if (s.includes('BEAR')) return 'SELL';
   return 'HOLD';
+}
+
+function normalizeConfidence01(value: unknown): number {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  // ML endpoints return confidence in 0-100, AI returns 0-1.
+  return n > 1 ? Math.max(0, Math.min(1, n / 100)) : Math.max(0, Math.min(1, n));
 }
 
 function actionScore(action: Action): number {
@@ -80,21 +108,55 @@ function actionIcon(action: Action) {
 
 const SignalReconciliation: React.FC = () => {
   const [symbol, setSymbol] = useState('RELIANCE');
-  const [loading, setLoading] = useState(false);
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [aiLatest, setAiLatest] = useState<HistoryEntry | null>(null);
+  const [aiOutcome, setAiOutcome] = useState<AIOutcome | null>(null);
   const [mlSingle, setMlSingle] = useState<MLSnapshot | null>(null);
   const [mlEnsemble, setMlEnsemble] = useState<MLSnapshot | null>(null);
   const [strategySuggestion, setStrategySuggestion] = useState<WatchlistSuggestion | null>(null);
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<any>(null);
+  const [diagnosticsScope, setDiagnosticsScope] = useState<string>('Symbol');
 
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
   const [debateRounds, setDebateRounds] = useState(2);
-  const [aiRunLoading, setAiRunLoading] = useState(false);
-  const [aiRunStatus, setAiRunStatus] = useState<string | null>(null);
+  const [runStatus, setRunStatus] = useState<string | null>(null);
   const [debateTranscript, setDebateTranscript] = useState<DebateRoundEntry[]>([]);
   const [debateRoundsUsed, setDebateRoundsUsed] = useState<number | null>(null);
+  const cacheRef = useRef<Record<string, ReconciliationSnapshot>>({});
+
+  const cacheKey = (sym: string, rounds: number) => `${sym}:${rounds}`;
+
+  const resetCurrentResults = () => {
+    setError(null);
+    setAiOutcome(null);
+    setMlSingle(null);
+    setMlEnsemble(null);
+    setStrategySuggestion(null);
+    setDiagnosticsSummary(null);
+    setDiagnosticsScope('Symbol');
+    setDebateTranscript([]);
+    setDebateRoundsUsed(null);
+    setLastRefreshedAt(null);
+    setRunStatus(null);
+  };
+
+  const applySnapshot = (snapshot: ReconciliationSnapshot) => {
+    setAiOutcome(snapshot.aiOutcome);
+    setMlSingle(snapshot.mlSingle);
+    setMlEnsemble(snapshot.mlEnsemble);
+    setStrategySuggestion(snapshot.strategySuggestion);
+    setDiagnosticsSummary(snapshot.diagnosticsSummary);
+    setDiagnosticsScope(snapshot.diagnosticsScope || 'Symbol');
+    setDebateTranscript(snapshot.debateTranscript || []);
+    setDebateRoundsUsed(snapshot.debateRoundsUsed);
+    setLastRefreshedAt(new Date(snapshot.savedAt).toLocaleTimeString('en-IN'));
+  };
+
+  const handleSymbolChange = (next: string) => {
+    setSymbol(next.toUpperCase());
+    resetCurrentResults();
+  };
 
   const fetchStrategySuggestion = async (targetSymbol: string): Promise<WatchlistSuggestion | null> => {
     const wlRes = await watchlistAPI.getAll();
@@ -118,70 +180,32 @@ const SignalReconciliation: React.FC = () => {
     return best;
   };
 
-  const loadSnapshot = async () => {
+  const runAllSignals = async () => {
     const sym = symbol.trim().toUpperCase();
     if (!sym) return;
 
-    setLoading(true);
+    const key = cacheKey(sym, debateRounds);
+    const cached = cacheRef.current[key];
+    if (cached && Date.now() - cached.savedAt < CACHE_TTL_MS) {
+      applySnapshot(cached);
+      const ageSec = Math.max(1, Math.round((Date.now() - cached.savedAt) / 1000));
+      setRunStatus(`Loaded from cache (${ageSec}s old)`);
+      return;
+    }
+
+    setRunning(true);
     setError(null);
+    setRunStatus('Running full reconciliation...');
+    resetCurrentResults();
 
     try {
-      const [aiRes, singleRes, ensembleRes, diagRes, suggestionRes] = await Promise.allSettled([
-        aiAPI.history(sym, 5),
+      const [singleRes, ensembleRes, diagRes, suggestionRes] = await Promise.allSettled([
         mlAPI.predict(sym),
         mlAPI.ensemblePredict(sym),
         journalAPI.getSignalDiagnostics({ limit: 200, lookback_days: 45, underlying: sym }),
         fetchStrategySuggestion(sym),
       ]);
 
-      if (aiRes.status === 'fulfilled') {
-        const decisions: HistoryEntry[] = aiRes.value.data?.decisions || [];
-        setAiLatest(decisions[0] || null);
-      } else {
-        setAiLatest(null);
-      }
-
-      if (singleRes.status === 'fulfilled') {
-        setMlSingle(singleRes.value.data || null);
-      } else {
-        setMlSingle(null);
-      }
-
-      if (ensembleRes.status === 'fulfilled') {
-        setMlEnsemble(ensembleRes.value.data || null);
-      } else {
-        setMlEnsemble(null);
-      }
-
-      if (diagRes.status === 'fulfilled') {
-        setDiagnosticsSummary(diagRes.value.data?.summary || null);
-      } else {
-        setDiagnosticsSummary(null);
-      }
-
-      if (suggestionRes.status === 'fulfilled') {
-        setStrategySuggestion(suggestionRes.value || null);
-      } else {
-        setStrategySuggestion(null);
-      }
-
-      setLastRefreshedAt(new Date().toLocaleTimeString('en-IN'));
-    } catch (e: any) {
-      setError(e?.response?.data?.detail || e?.message || 'Failed to load reconciliation snapshot');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const runFreshAIDebate = async () => {
-    const sym = symbol.trim().toUpperCase();
-    if (!sym) return;
-
-    setAiRunLoading(true);
-    setAiRunStatus('Starting AI debate run...');
-    setError(null);
-
-    try {
       const startRes = await aiAPI.analyze(sym, 'NSE', {
         debate_rounds: debateRounds,
       });
@@ -191,13 +215,12 @@ const SignalReconciliation: React.FC = () => {
       let completed = false;
       let finalResult: PipelineResult | null = null;
       for (let attempt = 0; attempt < 120; attempt += 1) {
-        // Poll every 2.5s up to ~5 minutes for completion.
         await new Promise((resolve) => setTimeout(resolve, 2500));
         const statusRes = await aiAPI.status(jobId);
         const status = statusRes.data?.status;
         const currentStep = statusRes.data?.current_step;
         finalResult = statusRes.data?.result || null;
-        setAiRunStatus(status === 'RUNNING' && currentStep ? `Running: ${currentStep}` : `Status: ${status || 'UNKNOWN'}`);
+        setRunStatus(status === 'RUNNING' && currentStep ? `Running: ${currentStep}` : `Status: ${status || 'UNKNOWN'}`);
 
         if (status === 'COMPLETED') {
           completed = true;
@@ -212,54 +235,124 @@ const SignalReconciliation: React.FC = () => {
         throw new Error('Timed out waiting for AI debate run to complete');
       }
 
-      const historyRes = await aiAPI.history(sym, 5);
-      const decisions: HistoryEntry[] = historyRes.data?.decisions || [];
-      setAiLatest(decisions[0] || null);
+      const nextAiOutcome: AIOutcome | null = finalResult?.decision
+        ? {
+            action: finalResult.decision.action,
+            confidence: normalizeConfidence01(finalResult.decision.confidence || 0),
+            rationale: finalResult.decision.rationale || 'No AI rationale available.',
+            analysed_at: finalResult.analysed_at,
+          }
+        : null;
+
+      if (singleRes.status === 'fulfilled') {
+        setMlSingle(singleRes.value.data || null);
+      } else {
+        setMlSingle(null);
+      }
+
+      if (ensembleRes.status === 'fulfilled') {
+        setMlEnsemble(ensembleRes.value.data || null);
+      } else {
+        setMlEnsemble(null);
+      }
+
+      let nextDiagnosticsSummary: any = null;
+      let nextDiagnosticsScope = `Symbol (${sym})`;
+
+      if (diagRes.status === 'fulfilled') {
+        const symbolSummary = diagRes.value.data?.summary || null;
+        const symbolTrades = Number(symbolSummary?.total_trades || 0);
+        if (symbolSummary && symbolTrades > 0) {
+          nextDiagnosticsSummary = symbolSummary;
+          nextDiagnosticsScope = `Symbol (${sym})`;
+        } else {
+          try {
+            const portfolioDiag = await journalAPI.getSignalDiagnostics({ limit: 200, lookback_days: 45 });
+            const portfolioSummary = portfolioDiag.data?.summary || null;
+            nextDiagnosticsSummary = portfolioSummary;
+            nextDiagnosticsScope = 'Portfolio (fallback)';
+          } catch {
+            nextDiagnosticsSummary = symbolSummary;
+            nextDiagnosticsScope = `Symbol (${sym})`;
+          }
+        }
+      } else {
+        nextDiagnosticsSummary = null;
+        nextDiagnosticsScope = `Symbol (${sym})`;
+      }
+      setDiagnosticsSummary(nextDiagnosticsSummary);
+      setDiagnosticsScope(nextDiagnosticsScope);
+
+      if (suggestionRes.status === 'fulfilled') {
+        setStrategySuggestion(suggestionRes.value || null);
+      } else {
+        setStrategySuggestion(null);
+      }
+
+      setAiOutcome(nextAiOutcome);
       const transcript = finalResult?.debate_transcript || [];
       setDebateTranscript(Array.isArray(transcript) ? transcript : []);
       const rounds = Number(finalResult?.data_summary?.debate_rounds || 0);
-      setDebateRoundsUsed(Number.isFinite(rounds) && rounds > 0 ? rounds : null);
-      setAiRunStatus(`Completed with ${debateRounds} debate rounds`);
+      const nextRoundsUsed = Number.isFinite(rounds) && rounds > 0 ? rounds : null;
+      setDebateRoundsUsed(nextRoundsUsed);
+
+      const snapshot: ReconciliationSnapshot = {
+        savedAt: Date.now(),
+        aiOutcome: nextAiOutcome,
+        mlSingle: singleRes.status === 'fulfilled' ? (singleRes.value.data || null) : null,
+        mlEnsemble: ensembleRes.status === 'fulfilled' ? (ensembleRes.value.data || null) : null,
+        strategySuggestion: suggestionRes.status === 'fulfilled' ? (suggestionRes.value || null) : null,
+        diagnosticsSummary: nextDiagnosticsSummary,
+        diagnosticsScope: nextDiagnosticsScope,
+        debateTranscript: Array.isArray(transcript) ? transcript : [],
+        debateRoundsUsed: nextRoundsUsed,
+      };
+      cacheRef.current[key] = snapshot;
+      setRunStatus(`Completed with ${debateRounds} debate rounds`);
+
       setLastRefreshedAt(new Date().toLocaleTimeString('en-IN'));
     } catch (e: any) {
-      const msg = e?.response?.data?.detail || e?.message || 'Failed to run AI debate analysis';
-      setError(msg);
-      setAiRunStatus('Run failed');
+      setError(e?.response?.data?.detail || e?.message || 'Failed to load reconciliation snapshot');
+      setRunStatus('Run failed');
     } finally {
-      setAiRunLoading(false);
+      setRunning(false);
     }
   };
 
   const sourceVotes = useMemo<SourceVote[]>(() => {
     const votes: SourceVote[] = [];
 
-    if (aiLatest) {
+    if (aiOutcome) {
       votes.push({
         source: 'AI Recommendation',
-        action: (aiLatest.action as Action) || 'HOLD',
-        confidence: Number(aiLatest.confidence || 0),
-        detail: aiLatest.rationale || 'No AI rationale available.',
-        meta: aiLatest.analysed_at ? `Updated ${new Date(aiLatest.analysed_at).toLocaleString('en-IN')}` : undefined,
+        action: aiOutcome.action || 'HOLD',
+        confidence: Number(aiOutcome.confidence || 0),
+        detail: aiOutcome.rationale || 'No AI rationale available.',
+        meta: aiOutcome.analysed_at ? `Updated ${new Date(aiOutcome.analysed_at).toLocaleString('en-IN')}` : undefined,
       });
     }
 
     if (mlSingle) {
+      const rawSignal = String(mlSingle.signal || 'NO_TRADE').toUpperCase();
       votes.push({
         source: 'ML Recommendation',
-        action: normalizeMlToAction(mlSingle.signal),
-        confidence: Number(mlSingle.confidence || 0),
+        action: normalizeMlToAction(rawSignal),
+        confidence: normalizeConfidence01(mlSingle.confidence || 0),
         detail: mlSingle.reason || 'No ML explanation available.',
-        meta: `Signal: ${mlSingle.signal || 'NO_TRADE'} | Bias: ${mlSingle.bias || 'NEUTRAL'}`,
+        meta: `Signal: ${rawSignal} | Bias: ${mlSingle.bias || 'NEUTRAL'}`,
+        signalLabel: rawSignal,
       });
     }
 
     if (mlEnsemble) {
+      const rawSignal = String(mlEnsemble.signal || 'NO_TRADE').toUpperCase();
       votes.push({
         source: 'ML Ensemble',
-        action: normalizeMlToAction(mlEnsemble.signal),
-        confidence: Number(mlEnsemble.confidence || 0),
+        action: normalizeMlToAction(rawSignal),
+        confidence: normalizeConfidence01(mlEnsemble.confidence || 0),
         detail: mlEnsemble.reason || 'No ensemble explanation available.',
-        meta: `Signal: ${mlEnsemble.signal || 'NO_TRADE'} | Bias: ${mlEnsemble.bias || 'NEUTRAL'}`,
+        meta: `Signal: ${rawSignal} | Bias: ${mlEnsemble.bias || 'NEUTRAL'}`,
+        signalLabel: rawSignal,
       });
     }
 
@@ -281,7 +374,7 @@ const SignalReconciliation: React.FC = () => {
     }
 
     return votes;
-  }, [aiLatest, mlSingle, mlEnsemble, strategySuggestion]);
+  }, [aiOutcome, mlSingle, mlEnsemble, strategySuggestion]);
 
   const consensus = useMemo(() => {
     if (!sourceVotes.length) {
@@ -318,6 +411,8 @@ const SignalReconciliation: React.FC = () => {
       ? 'Mixed signals'
       : 'Strong disagreement';
 
+  const hasDiagnosticsTrades = Number(diagnosticsSummary?.total_trades || 0) > 0;
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-slate-700 bg-[radial-gradient(circle_at_top_left,_rgba(34,197,94,0.12),transparent_45%),radial-gradient(circle_at_top_right,_rgba(14,165,233,0.12),transparent_40%),#0f172a] p-6">
@@ -335,7 +430,7 @@ const SignalReconciliation: React.FC = () => {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <input
               value={symbol}
-              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+              onChange={(e) => handleSymbolChange(e.target.value)}
               placeholder="RELIANCE"
               className="w-full sm:w-52 rounded-xl border border-slate-600 bg-slate-900/80 px-4 py-2.5 text-white placeholder-slate-500 focus:border-cyan-400 focus:outline-none"
             />
@@ -349,20 +444,12 @@ const SignalReconciliation: React.FC = () => {
               <option value={3}>Debate x3</option>
             </select>
             <button
-              onClick={loadSnapshot}
-              disabled={loading}
+              onClick={runAllSignals}
+              disabled={running}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-60"
             >
-              {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              Refresh
-            </button>
-            <button
-              onClick={runFreshAIDebate}
-              disabled={aiRunLoading}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 py-2.5 font-semibold text-white transition hover:bg-violet-400 disabled:opacity-60"
-            >
-              {aiRunLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
-              Run AI Debate
+              {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              Run Reconciliation
             </button>
           </div>
         </div>
@@ -371,7 +458,7 @@ const SignalReconciliation: React.FC = () => {
           {POPULAR_SYMBOLS.map((s) => (
             <button
               key={s}
-              onClick={() => setSymbol(s)}
+              onClick={() => handleSymbolChange(s)}
               className={`rounded-lg border px-3 py-1.5 text-sm transition ${
                 symbol === s
                   ? 'border-cyan-400 bg-cyan-500/20 text-cyan-200'
@@ -386,8 +473,8 @@ const SignalReconciliation: React.FC = () => {
         {lastRefreshedAt && (
           <p className="mt-3 text-xs text-slate-400">Last refresh: {lastRefreshedAt}</p>
         )}
-        {aiRunStatus && (
-          <p className="mt-1 text-xs text-violet-200">{aiRunStatus}</p>
+        {runStatus && (
+          <p className="mt-1 text-xs text-violet-200">{runStatus}</p>
         )}
       </div>
 
@@ -439,7 +526,8 @@ const SignalReconciliation: React.FC = () => {
             <Target className="w-5 h-5 text-emerald-300" />
             Strategy Diagnostics
           </h2>
-          {diagnosticsSummary ? (
+          <p className="mt-1 text-xs text-slate-400">Scope: {diagnosticsScope}</p>
+          {diagnosticsSummary && hasDiagnosticsTrades ? (
             <div className="mt-4 space-y-2 text-sm">
               <div className="flex justify-between text-slate-300">
                 <span>Total Trades</span>
@@ -461,7 +549,14 @@ const SignalReconciliation: React.FC = () => {
               </div>
             </div>
           ) : (
-            <p className="mt-4 text-sm text-slate-400">No diagnostics yet for this symbol in current lookback.</p>
+            <div className="mt-4 space-y-2">
+              <p className="text-sm text-slate-400">No closed-trade diagnostics yet for this symbol in current lookback.</p>
+              {strategySuggestion ? (
+                <p className="text-xs text-slate-500">
+                  Recent strategy signals: {strategySuggestion.recent_signal_count || 0} | Latest strategy: {strategySuggestion.latest_strategy || 'N/A'}
+                </p>
+              ) : null}
+            </div>
           )}
         </div>
       </div>
@@ -490,6 +585,9 @@ const SignalReconciliation: React.FC = () => {
 
             <p className="mt-3 text-2xl font-bold text-white">{Math.round(vote.confidence * 100)}%</p>
             <p className="text-xs text-slate-400">Confidence</p>
+            {vote.signalLabel === 'NO_TRADE' ? (
+              <p className="mt-1 text-xs text-amber-300">Model stance: NO_TRADE (abstain), shown as HOLD in consensus.</p>
+            ) : null}
 
             <p className="mt-3 text-sm text-slate-300 line-clamp-4">{vote.detail}</p>
             {vote.meta && <p className="mt-2 text-xs text-slate-500">{vote.meta}</p>}

@@ -39,6 +39,29 @@ def decide_strategy(
     adx = indicators.get("adx", 0)
 
     # ================================================
+    # DAY CHANGE CONTEXT
+    # How the market is trading today relative to yesterday's close.
+    # A flat or near-flat open after a strong prior-day directional
+    # move means the market has ABSORBED (not continued) that impulse.
+    # Aggressive continuation strategies like Ratio Backspreads need
+    # the market to actually be moving in the expected direction today.
+    # ================================================
+    day_change_pct = ctx.get("day_change_pct", 0.0)
+    open_type = ctx.get("open_type", "UNKNOWN")
+
+    # True if today's intraday move has confirmed the directional bias
+    bullish_day_confirmed = (
+        day_change_pct > 0.5
+        or open_type in ("GAP_UP", "STRONG_GAP_UP")
+        or (open_type == "UNKNOWN")   # no data → don't block
+    )
+    bearish_day_confirmed = (
+        day_change_pct < -0.5
+        or open_type in ("GAP_DOWN", "STRONG_GAP_DOWN")
+        or (open_type == "UNKNOWN")   # no data → don't block
+    )
+
+    # ================================================
     # QUALITY GATE (relaxed for more trades)
     # ================================================
     # Lowered from 4 to 3 to allow more trades in backtests
@@ -64,21 +87,36 @@ def decide_strategy(
     # ================================================
     if market_mode in ["TRENDING", "BREAKOUT_SETUP"]:
         # Strong directional conviction + low/normal IV → Ratio Backspreads
+        # Also require that today's price action has CONFIRMED the directional move
+        # (flat/neutral open after a strong prior-day move is NOT confirmation).
         if (
             adx >= 20
             and iv_regime in ["LOW", "NORMAL"]
             and confidence >= ratio_min_conf
             and quality_score >= ratio_quality_min
         ):
-            if take_bull:
+            if take_bull and bullish_day_confirmed:
                 return (
                     "CALL_RATIO_BACKSPREAD",
-                    f"Strong bullish move expected (ADX={adx:.1f}, IV={iv_regime}, conf={confidence:.0f}%)",
+                    f"Strong bullish move expected (ADX={adx:.1f}, IV={iv_regime}, conf={confidence:.0f}%, day={day_change_pct:+.2f}%)",
                 )
-            if take_bear:
+            if take_bear and bearish_day_confirmed:
                 return (
                     "PUT_RATIO_BACKSPREAD",
-                    f"Strong bearish move expected (ADX={adx:.1f}, IV={iv_regime}, conf={confidence:.0f}%)",
+                    f"Strong bearish move expected (ADX={adx:.1f}, IV={iv_regime}, conf={confidence:.0f}%, day={day_change_pct:+.2f}%)",
+                )
+
+            # Indicators show directional bias but today's price action has NOT confirmed it
+            # (e.g., flat open after yesterday's strong move). Downgrade to a safer spread.
+            if take_bull and not bullish_day_confirmed:
+                return (
+                    "BULL_PUT",
+                    f"Bullish TA but flat/weak open ({day_change_pct:+.2f}% today, open_type={open_type}) — waiting for day move to confirm; using safer spread",
+                )
+            if take_bear and not bearish_day_confirmed:
+                return (
+                    "BEAR_CALL",
+                    f"Bearish TA but flat/weak open ({day_change_pct:+.2f}% today, open_type={open_type}) — waiting for day move to confirm; using safer spread",
                 )
         
         # Expecting volatility spike (low IV currently) + no strong directional bias

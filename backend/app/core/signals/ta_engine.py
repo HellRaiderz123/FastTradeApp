@@ -316,6 +316,51 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
     except Exception:
         pass
 
+    # ================================================================
+    # DAY CHANGE CONTEXT
+    # Computes today's intraday change vs previous day's close.
+    # Prevents lagging TA indicators (EMA/ADX from prior day's strong
+    # move) from triggering aggressive directional strategies on a flat
+    # or reversal open.
+    # ================================================================
+    try:
+        today_date = candles[0].timestamp.date()
+        today_candles = [c for c in candles if c.timestamp.date() == today_date]
+        prev_candles = [c for c in candles if c.timestamp.date() < today_date]
+
+        if today_candles and prev_candles:
+            # latest close today vs last close of previous trading day
+            today_latest_close = today_candles[0].close   # candles sorted desc → [0] is most recent
+            prev_day_close = prev_candles[0].close        # most recent candle of previous day
+
+            if prev_day_close and prev_day_close != 0:
+                day_change_pct = (today_latest_close - prev_day_close) / prev_day_close * 100
+                day_change_pct = round(day_change_pct, 3)
+
+                if abs(day_change_pct) <= 0.5:
+                    open_type = "FLAT"
+                elif day_change_pct > 1.5:
+                    open_type = "STRONG_GAP_UP"
+                elif day_change_pct > 0.5:
+                    open_type = "GAP_UP"
+                elif day_change_pct < -1.5:
+                    open_type = "STRONG_GAP_DOWN"
+                else:
+                    open_type = "GAP_DOWN"
+
+                if result.get("indicators") is None:
+                    result["indicators"] = {}
+                result["indicators"]["day_change_pct"] = day_change_pct
+                result["indicators"]["open_type"] = open_type
+                logger.info(
+                    "DAY CHANGE | symbol=%s | day_change=%.3f%% | open_type=%s",
+                    symbol,
+                    day_change_pct,
+                    open_type,
+                )
+    except Exception as e:
+        logger.debug("Could not compute day change context: %s", e)
+
     return result
 
 

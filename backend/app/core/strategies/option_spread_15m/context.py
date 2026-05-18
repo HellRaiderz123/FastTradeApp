@@ -78,6 +78,20 @@ def build_market_context(sig: Dict[str, Any]) -> Dict[str, Any]:
     quality_score = sig.get("quality_score", 0)
     trade_readiness_score = sig.get("trade_readiness_score", 0)
 
+    # ============================
+    # DAY CHANGE CONTEXT
+    # How much has the market moved today vs previous close.
+    # A flat open after a strong prior-day move signals that the
+    # market has absorbed (not continued) that directional momentum.
+    # ============================
+    day_change_pct = 0.0
+    open_type = "UNKNOWN"
+    try:
+        day_change_pct = float(indicators.get("day_change_pct", 0.0))
+        open_type = indicators.get("open_type", "UNKNOWN") or "UNKNOWN"
+    except (ValueError, TypeError):
+        pass
+
     return {
         # Core context
         "market_mode": market_mode,
@@ -95,4 +109,8 @@ def build_market_context(sig: Dict[str, Any]) -> Dict[str, Any]:
         
         # Trend strength
         "trend_score": sig.get("trend_score", 0),
+
+        # Day change context (intraday move vs previous day close)
+        "day_change_pct": day_change_pct,
+        "open_type": open_type,
     }
