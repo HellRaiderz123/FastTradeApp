@@ -4,7 +4,7 @@ import {
   TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart,
   Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock,
   GitCompare, DollarSign, Star, Filter, RefreshCw, PieChart, ShoppingBag, Database,
-  ChevronDown,
+  ChevronDown, Activity,
 } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
 
@@ -78,6 +78,7 @@ const SECTIONS: Section[] = [
     label: 'System',
     items: [
       { path: '/finance', icon: Wallet, label: 'Finance' },
+      { path: '/scheduled-jobs', icon: Activity, label: 'Scheduled Jobs' },
       { path: '/settings', icon: Settings, label: 'Settings' },
     ],
   },

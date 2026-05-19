@@ -837,11 +837,31 @@ class OptionSpread15m:
         """In-memory backtest signal generation — no DB needed, ~100x faster."""
         from app.core.signals.signals import generate_signal_from_candles
 
+        params = context.get("parameters", {}) if isinstance(context.get("parameters"), dict) else {}
+        latest_candle = candle_history[-1] if candle_history else {}
+
+        india_vix = latest_candle.get("india_vix", params.get("backtest_india_vix"))
+        vix_rank = latest_candle.get("vix_rank", params.get("backtest_vix_rank"))
+        iv_regime = latest_candle.get("iv_regime", params.get("backtest_iv_regime"))
+
+        try:
+            india_vix = float(india_vix) if india_vix is not None else None
+        except (TypeError, ValueError):
+            india_vix = None
+        try:
+            vix_rank = float(vix_rank) if vix_rank is not None else None
+        except (TypeError, ValueError):
+            vix_rank = None
+        if iv_regime is not None:
+            iv_regime = str(iv_regime).upper().strip()
+            if iv_regime not in {"LOW", "NORMAL", "HIGH"}:
+                iv_regime = None
+
         sig = generate_signal_from_candles(
             candles=candle_history,
-            india_vix=15.0,
-            vix_rank=50.0,
-            iv_regime="NORMAL",
+            india_vix=india_vix,
+            vix_rank=vix_rank,
+            iv_regime=iv_regime,
         )
         confidence = float(sig.get("confidence", 0.0))
         ctx = build_market_context(sig)

@@ -18,6 +18,33 @@ export const authTokenStore = {
   clear: () => localStorage.removeItem(AUTH_TOKEN_KEY),
 };
 
+export interface SchedulerJob {
+  id: string;
+  label: string;
+  name?: string | null;
+  category: string;
+  trigger: string;
+  next_run_time?: string | null;
+  pending: boolean;
+  max_instances?: number | null;
+  coalesce?: boolean | null;
+  manual_run_allowed: boolean;
+  manual_run: {
+    status: 'idle' | 'running' | 'completed' | 'failed';
+    started_at?: string | null;
+    finished_at?: string | null;
+    last_error?: string | null;
+    last_result?: any;
+  };
+}
+
+export interface SchedulerJobsResponse {
+  scheduler_running: boolean;
+  timezone: string;
+  job_count: number;
+  jobs: SchedulerJob[];
+}
+
 api.interceptors.request.use((config) => {
   const token = authTokenStore.get();
   if (token) {
@@ -203,6 +230,11 @@ export const autoTraderAPI = {
   getLogs: (params?: { limit?: number; action?: string; underlying?: string; severity?: string }) =>
     api.get('/auto-trader/logs', { params }),
   clearLogs: () => api.delete('/auto-trader/logs'),
+};
+
+export const schedulerAPI = {
+  listJobs: () => api.get<SchedulerJobsResponse>('/system/scheduler/jobs'),
+  runNow: (jobId: string) => api.post(`/system/scheduler/jobs/${jobId}/run-now`),
 };
 
 // Market Data APIs

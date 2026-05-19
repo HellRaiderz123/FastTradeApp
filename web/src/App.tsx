@@ -33,6 +33,7 @@ import AIAssistant from './pages/AIAssistant';
 import AIAnalysis from './pages/AIAnalysis';
 import SignalReconciliation from './pages/SignalReconciliation';
 import CandleBackfill from './pages/CandleBackfill';
+import ScheduledJobs from './pages/ScheduledJobs';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import CommandPalette from './components/CommandPalette';
@@ -126,6 +127,7 @@ function AppInner() {
                   <Route path="/ai-assistant" element={<AIAssistant />} />
                   <Route path="/ai-analysis" element={<AIAnalysis />} />
                   <Route path="/signal-reconciliation" element={<SignalReconciliation />} />
+                  <Route path="/scheduled-jobs" element={<ScheduledJobs />} />
                 </Routes>
               </main>
             </div>

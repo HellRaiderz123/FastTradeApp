@@ -43,6 +43,7 @@ from app.core.risk.tp_sl_calculator import (
     get_risk_percentage_from_settings,
 )
 from app.core.execution.factory import get_execution_adapter
+from app.core.execution.paper import PaperExecutionAdapter
 from app.core.learning.signal_diagnostics import record_entry_snapshot, record_exit_outcome
 from app.services.notifications import NotificationService
 
@@ -113,15 +114,6 @@ def _log(db: Session, config_id: int, **kwargs):
     db.add(entry)
     try:
         db.commit()
-
-        try:
-            record_entry_snapshot(
-                db,
-                intent=intent,
-                engine_result=engine_result,
-            )
-        except Exception:
-            pass
     except Exception:
         db.rollback()
 
@@ -455,6 +447,15 @@ def _auto_enter_position(
                  "confidence": engine_result.get("signal", {}).get("confidence", 0),
              },
              severity="SUCCESS")
+
+        try:
+            record_entry_snapshot(
+                db,
+                intent=intent,
+                engine_result=engine_result,
+            )
+        except Exception:
+            pass
 
         _notify(db, "notify_trade_executed", strategy, underlying, {
             "entry_credit": exec_result.get("entry_credit", 0),

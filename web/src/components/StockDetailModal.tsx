@@ -111,12 +111,14 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
   const loadStockDetails = async () => {
     setLoading(true);
     try {
-      await Promise.all([
-        loadNews(),
+      // Keep modal snappy: wait only for core overview data, load the rest in background.
+      await Promise.allSettled([
         loadTechnicals(),
-        loadTimeframeSuggestions(),
-        loadMLSignal()
+        loadMLSignal(),
       ]);
+
+      void loadNews();
+      void loadTimeframeSuggestions();
     } catch (error) {
       console.error('Failed to load stock details:', error);
     } finally {
@@ -127,33 +129,25 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
   const loadNews = async () => {
     setNewsLoading(true);
     try {
-      console.log(`📰 Loading news for ${symbol}...`);
       const newsUrl = `/api/stock-news/${symbol}`;
-      console.log(`📡 Calling: ${newsUrl}`);
       
       const response = await fetch(newsUrl);
-      console.log(`📊 Response Status: ${response.status} ${response.statusText}`);
       
       if (!response.ok) {
-        console.error(`❌ News API error ${response.status}:`, response.statusText);
-        const errorText = await response.text();
-        console.error('Error response body:', errorText);
+        console.error(`News API error ${response.status}:`, response.statusText);
         setNews([]);
         return;
       }
       
       const data = await response.json();
-      console.log('✅ News API Response:', data);
-      console.log(`📰 Articles found: ${data.articles?.length || 0}`);
-      console.log(`🔍 Data source: ${data.data_source}`);
       
       if (data.error) {
-        console.warn('⚠️ API Warning:', data.error);
+        console.warn('News API warning:', data.error);
       }
       
       setNews(data.articles || []);
     } catch (error) {
-      console.error('❌ Failed to load news:', error);
+      console.error('Failed to load news:', error);
       if (error instanceof Error) {
         console.error('Error details:', error.message, error.stack);
       }
@@ -165,24 +159,17 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
 
   const loadTechnicals = async () => {
     try {
-      console.log(`📊 Loading technicals for ${symbol}...`);
       const techUrl = `/api/market-dashboard/stock-technicals/${symbol}`;
-      console.log(`📡 Calling: ${techUrl}`);
       
       const response = await fetch(techUrl);
-      console.log(`📊 Response Status: ${response.status} ${response.statusText}`);
       
       if (!response.ok) {
-        console.error(`❌ Technicals API error ${response.status}:`, response.statusText);
+        console.error(`Technicals API error ${response.status}:`, response.statusText);
         setTechnicals(null);
         return;
       }
       
       const data = await response.json();
-      console.log('✅ Technicals API Response:', data);
-      console.log(`📈 RSI: ${data.indicators?.rsi || 'N/A'}`);
-      console.log(`📊 Trend: ${data.trend || 'N/A'}`);
-      console.log(`💡 Recommendation: ${data.recommendation || 'N/A'}`);
       
       setTechnicals({
         rsi: data.indicators?.rsi || null,
@@ -193,7 +180,7 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
         recommendation: data.recommendation || 'HOLD'
       });
     } catch (error) {
-      console.error('❌ Failed to load technicals:', error);
+      console.error('Failed to load technicals:', error);
       if (error instanceof Error) {
         console.error('Error details:', error.message, error.stack);
       }

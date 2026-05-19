@@ -24,6 +24,9 @@ from app.services.trading_agents import (
     clear_analysis_checkpoint,
     evaluate_pending_outcomes,
     get_job,
+    get_reconciliation_desk_snapshot,
+    run_holdings_reconciliation,
+    run_nifty100_reconciliation,
     start_analysis,
 )
 from app.services.llm_service import LLM_MODEL, LLM_PROVIDER, is_available
@@ -315,3 +318,23 @@ def trigger_outcome_evaluation(
     """
     updated = evaluate_pending_outcomes(evaluation_days=evaluation_days)
     return {"ok": True, "decisions_evaluated": updated}
+
+
+@router.get("/reconciliation/desk")
+def get_reconciliation_desk() -> dict:
+    """Return the latest background reconciliation snapshot for Nifty100 and holdings."""
+    return {"ok": True, "desk": get_reconciliation_desk_snapshot()}
+
+
+@router.post("/reconciliation/run-nifty100")
+def trigger_nifty100_reconciliation(debate_rounds: int = Query(default=2, ge=1, le=3)) -> dict:
+    """Queue a fresh background reconciliation run for the Nifty100 universe."""
+    count = run_nifty100_reconciliation(debate_rounds=debate_rounds)
+    return {"ok": True, "queued": count, "debate_rounds": debate_rounds}
+
+
+@router.post("/reconciliation/run-holdings")
+def trigger_holdings_reconciliation(debate_rounds: int = Query(default=2, ge=1, le=3)) -> dict:
+    """Queue a fresh background reconciliation run for Zerodha holdings."""
+    count = run_holdings_reconciliation(debate_rounds=debate_rounds)
+    return {"ok": True, "queued": count, "debate_rounds": debate_rounds}

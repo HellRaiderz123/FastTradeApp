@@ -73,6 +73,54 @@ _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
 _CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "data_cache" / "ai_checkpoints"
 
+# Background desk state for bulk symbol queues (Nifty100 / Holdings)
+_desk_state: dict[str, dict[str, Any]] = {
+    "nifty100": {"status": "idle", "last_run_at": None, "queued": 0, "last_error": None},
+    "holdings": {"status": "idle", "last_run_at": None, "queued": 0, "last_error": None},
+}
+
+
+def _update_desk_progress_locked(job: dict[str, Any]) -> None:
+    """Update aggregate + per-symbol desk progress from a job update. Requires _jobs_lock."""
+    desk_key = str(job.get("desk_key") or "").strip()
+    if not desk_key:
+        return
+
+    state = _desk_state.get(desk_key)
+    if not state:
+        return
+
+    symbol = str(job.get("symbol") or "").strip().upper()
+    if not symbol:
+        return
+
+    by_symbol = state.setdefault("by_symbol", {})
+    by_symbol[symbol] = {
+        "job_id": job.get("job_id"),
+        "status": job.get("status"),
+        "step": job.get("step"),
+        "error": job.get("error"),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    statuses = [str((item or {}).get("status") or "").upper() for item in by_symbol.values()]
+    total = int(state.get("symbol_count") or len(by_symbol) or 0)
+    running = sum(1 for s in statuses if s == "RUNNING")
+    completed = sum(1 for s in statuses if s == "COMPLETED")
+    failed = sum(1 for s in statuses if s == "FAILED")
+    queued = max(0, total - completed - failed - running)
+
+    state["running"] = running
+    state["completed"] = completed
+    state["failed"] = failed
+    state["remaining"] = queued
+    state["processed"] = completed + failed
+    # Keep legacy field used by existing UI while also exposing richer counters.
+    state["queued"] = queued
+
+    if total > 0 and (completed + failed) >= total:
+        state["status"] = "completed_with_errors" if failed > 0 else "completed"
+
 
 def _checkpoint_file(symbol: str, exchange: str) -> Path:
     key = f"{exchange.strip().upper()}_{symbol.strip().upper()}"
@@ -141,13 +189,14 @@ def clear_analysis_checkpoint(symbol: str, exchange: str = "NSE") -> bool:
     return True
 
 
-def _new_job(symbol: str, exchange: str) -> str:
+def _new_job(symbol: str, exchange: str, desk_key: str | None = None) -> str:
     job_id = str(uuid.uuid4())
     with _jobs_lock:
         _jobs[job_id] = {
             "job_id": job_id,
             "symbol": symbol,
             "exchange": exchange,
+            "desk_key": (desk_key or "").strip() or None,
             "status": "QUEUED",        # QUEUED → RUNNING → COMPLETED / FAILED
             "step": None,              # current agent name
             "steps_done": [],          # ordered list of completed steps
@@ -157,6 +206,7 @@ def _new_job(symbol: str, exchange: str) -> str:
             "created_at": datetime.utcnow().isoformat(),
             "completed_at": None,
         }
+        _update_desk_progress_locked(_jobs[job_id])
     return job_id
 
 
@@ -166,11 +216,13 @@ def get_job(job_id: str) -> Optional[dict]:
 
 
 def _update_job(job_id: str, **kwargs) -> None:
+    job: Optional[dict[str, Any]] = None
     with _jobs_lock:
         if job_id in _jobs:
             _jobs[job_id].update(kwargs)
+            _update_desk_progress_locked(_jobs[job_id])
+            job = dict(_jobs[job_id])
     # Broadcast progress to all connected WebSocket clients
-    job = get_job(job_id)
     if job:
         _ws_broadcast({
             "type": "ai_analysis_progress",
@@ -1719,9 +1771,15 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str, debate_rounds
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def start_analysis(symbol: str, exchange: str = "NSE", debate_rounds: int = 1) -> str:
+def start_analysis(
+    symbol: str,
+    exchange: str = "NSE",
+    debate_rounds: int = 1,
+    desk_key: str | None = None,
+    run_async: bool = True,
+) -> str:
     """
-    Validate inputs, create a job, start the pipeline in a daemon thread.
+    Validate inputs, create a job, and run the pipeline.
     Returns the job_id for polling.
 
     Raises ValueError for invalid symbol input.
@@ -1731,16 +1789,20 @@ def start_analysis(symbol: str, exchange: str = "NSE", debate_rounds: int = 1) -
     debate_rounds = max(1, min(3, int(debate_rounds)))
     checkpoint = _load_checkpoint(clean_symbol, clean_exchange)
 
-    job_id = _new_job(clean_symbol, clean_exchange)
+    job_id = _new_job(clean_symbol, clean_exchange, desk_key=desk_key)
     _update_job(job_id, resumed_from_checkpoint=bool(checkpoint))
-    thread = threading.Thread(
-        target=run_analysis_pipeline,
-        args=(job_id, clean_symbol, clean_exchange, debate_rounds),
-        name=f"trading-agents-{job_id[:8]}",
-        daemon=True,
-    )
-    thread.start()
-    logger.info("trading_agents: started job %s for %s:%s", job_id, clean_exchange, clean_symbol)
+    if run_async:
+        thread = threading.Thread(
+            target=run_analysis_pipeline,
+            args=(job_id, clean_symbol, clean_exchange, debate_rounds),
+            name=f"trading-agents-{job_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info("trading_agents: started async job %s for %s:%s", job_id, clean_exchange, clean_symbol)
+    else:
+        logger.info("trading_agents: running sync job %s for %s:%s", job_id, clean_exchange, clean_symbol)
+        run_analysis_pipeline(job_id, clean_symbol, clean_exchange, debate_rounds)
     return job_id
 
 
@@ -1781,3 +1843,286 @@ def run_watchlist_analysis(exchange: str = "NSE") -> int:
 
     logger.info("run_watchlist_analysis: launched %d jobs for watchlist symbols", count)
     return count
+
+
+def _queue_symbol_analysis(symbols: list[str], exchange: str = "NSE", debate_rounds: int = 2, *, desk_key: str) -> int:
+    count = 0
+    try:
+        with _jobs_lock:
+            _desk_state[desk_key] = {
+                "status": "running",
+                "last_run_at": datetime.utcnow().isoformat(),
+                "queued": 0,
+                "running": 0,
+                "completed": 0,
+                "failed": 0,
+                "remaining": len(symbols),
+                "processed": 0,
+                "last_error": None,
+                "symbol_count": len(symbols),
+                "by_symbol": {
+                    sym: {
+                        "job_id": None,
+                        "status": "QUEUED",
+                        "step": None,
+                        "error": None,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                    for sym in symbols
+                },
+            }
+
+        for sym in symbols:
+            try:
+                start_analysis(sym, exchange, debate_rounds=debate_rounds, desk_key=desk_key, run_async=False)
+                count += 1
+            except Exception as e:
+                logger.warning("%s queue: skipping %s: %s", desk_key, sym, e)
+                with _jobs_lock:
+                    state = _desk_state.get(desk_key) or {}
+                    by_symbol = state.get("by_symbol") or {}
+                    if sym in by_symbol:
+                        by_symbol[sym].update(
+                            {
+                                "status": "FAILED",
+                                "error": str(e),
+                                "updated_at": datetime.utcnow().isoformat(),
+                            }
+                        )
+                    state["last_error"] = str(e)
+                    _desk_state[desk_key] = state
+                    statuses = [str((item or {}).get("status") or "").upper() for item in by_symbol.values()]
+                    total = int(state.get("symbol_count") or len(by_symbol) or 0)
+                    running = sum(1 for s in statuses if s == "RUNNING")
+                    completed = sum(1 for s in statuses if s == "COMPLETED")
+                    failed = sum(1 for s in statuses if s == "FAILED")
+                    queued = max(0, total - completed - failed - running)
+                    state["running"] = running
+                    state["completed"] = completed
+                    state["failed"] = failed
+                    state["remaining"] = queued
+                    state["processed"] = completed + failed
+                    state["queued"] = queued
+
+        with _jobs_lock:
+            state = _desk_state.get(desk_key, {})
+            status = str(state.get("status") or "").lower()
+            if status == "running":
+                state["status"] = "queued"
+            state["queued"] = int(state.get("remaining", max(0, len(symbols) - count)))
+            _desk_state[desk_key] = state
+    except Exception as e:
+        with _jobs_lock:
+            _desk_state[desk_key]["status"] = "failed"
+            _desk_state[desk_key]["last_error"] = str(e)
+        raise
+
+    logger.info("%s: processed %d symbols", desk_key, count)
+    return count
+
+
+def run_nifty100_reconciliation(exchange: str = "NSE", debate_rounds: int = 2) -> int:
+    """Queue background AI analysis jobs for the Nifty100 universe."""
+    from app.core.market.scheduler import _get_daily_symbols
+
+    symbols = _get_daily_symbols()
+    return _queue_symbol_analysis(symbols, exchange=exchange, debate_rounds=debate_rounds, desk_key="nifty100")
+
+
+def run_holdings_reconciliation(exchange: str = "NSE", debate_rounds: int = 2) -> int:
+    """Queue background AI analysis jobs for current Zerodha holdings."""
+    try:
+        from app.core.broker.zerodha.client import get_kite_client
+
+        kite = get_kite_client()
+        holdings = kite.holdings() or []
+        symbols = []
+        for row in holdings:
+            sym = str(row.get("tradingsymbol") or row.get("symbol") or "").strip().upper()
+            if sym:
+                symbols.append(sym)
+        symbols = sorted(set(symbols))
+    except Exception as e:
+        logger.warning("holdings reconciliation: failed to load holdings: %s", e)
+        symbols = []
+
+    return _queue_symbol_analysis(symbols, exchange=exchange, debate_rounds=debate_rounds, desk_key="holdings")
+
+
+def _serialize_latest_decision(row: Any) -> dict[str, Any]:
+    return {
+        "job_id": row.job_id,
+        "symbol": row.symbol,
+        "exchange": row.exchange,
+        "action": row.action,
+        "confidence": row.confidence,
+        "conviction": row.conviction,
+        "time_horizon": row.time_horizon,
+        "risk_level": row.risk_level,
+        "rationale": row.rationale,
+        "execution_allowed": row.execution_allowed,
+        "manager_block_reason": row.manager_block_reason,
+        "analysed_at": row.analysed_at.isoformat() if getattr(row, "analysed_at", None) else None,
+    }
+
+
+def _serialize_job_decision(job: dict[str, Any]) -> Optional[dict[str, Any]]:
+    result = job.get("result") or {}
+    if not isinstance(result, dict):
+        return None
+    decision = result.get("decision") or {}
+    if not isinstance(decision, dict):
+        return None
+    symbol = str(result.get("symbol") or job.get("symbol") or "").strip().upper()
+    if not symbol:
+        return None
+    return {
+        "job_id": job.get("job_id"),
+        "symbol": symbol,
+        "exchange": result.get("exchange") or job.get("exchange"),
+        "action": decision.get("action"),
+        "confidence": decision.get("confidence"),
+        "conviction": decision.get("conviction"),
+        "time_horizon": decision.get("time_horizon"),
+        "risk_level": decision.get("risk_level"),
+        "rationale": decision.get("rationale"),
+        "execution_allowed": decision.get("execution_allowed"),
+        "manager_block_reason": (
+            "; ".join((decision.get("manager_enforcement") or {}).get("reasons", []))
+            if isinstance((decision.get("manager_enforcement") or {}).get("reasons", []), list)
+            else None
+        ),
+        "analysed_at": result.get("analysed_at") or job.get("completed_at"),
+    }
+
+
+def _is_newer_decision(candidate: Optional[dict[str, Any]], current: Optional[dict[str, Any]]) -> bool:
+    if not candidate:
+        return False
+    if not current:
+        return True
+    c_ts = str(candidate.get("analysed_at") or "")
+    cur_ts = str(current.get("analysed_at") or "")
+    return c_ts > cur_ts
+
+
+def _latest_in_memory_decisions_by_symbol(desk_key: str) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    with _jobs_lock:
+        for job in _jobs.values():
+            if str(job.get("desk_key") or "") != desk_key:
+                continue
+            if str(job.get("status") or "").upper() != "COMPLETED":
+                continue
+            parsed = _serialize_job_decision(job)
+            if not parsed:
+                continue
+            sym = str(parsed.get("symbol") or "")
+            if _is_newer_decision(parsed, latest.get(sym)):
+                latest[sym] = parsed
+    return latest
+
+
+def get_reconciliation_desk_snapshot(limit: int = 40) -> dict[str, Any]:
+    """Return latest AI decisions plus current holdings for the reconciliation desk."""
+    from sqlalchemy import desc
+
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models_ai_decisions import AIDecision
+        from app.core.broker.zerodha.client import get_kite_client
+        from app.core.market.scheduler import _get_daily_symbols
+
+        db = SessionLocal()
+        try:
+            symbols = _get_daily_symbols()
+            rows = (
+                db.query(AIDecision)
+                .filter(AIDecision.symbol.in_(symbols))
+                .order_by(AIDecision.symbol.asc(), desc(AIDecision.analysed_at))
+                .all()
+            )
+            latest_by_symbol: dict[str, Any] = {}
+            for row in rows:
+                if row.symbol not in latest_by_symbol:
+                    latest_by_symbol[row.symbol] = _serialize_latest_decision(row)
+
+            in_memory_nifty = _latest_in_memory_decisions_by_symbol("nifty100")
+            for sym, decision in in_memory_nifty.items():
+                if _is_newer_decision(decision, latest_by_symbol.get(sym)):
+                    latest_by_symbol[sym] = decision
+
+            nifty100_rows = [
+                row
+                for row in latest_by_symbol.values()
+            ]
+            nifty100_rows.sort(key=lambda item: (item.get("analysed_at") or "", item.get("confidence") or 0), reverse=True)
+
+            holdings = []
+            try:
+                kite = get_kite_client()
+                holdings = kite.holdings() or []
+            except Exception as e:
+                logger.warning("get_reconciliation_desk_snapshot: holdings load failed: %s", e)
+
+            holding_symbols = []
+            for row in holdings:
+                sym = str(row.get("tradingsymbol") or row.get("symbol") or "").strip().upper()
+                if sym:
+                    holding_symbols.append(sym)
+
+            holding_latest = (
+                db.query(AIDecision)
+                .filter(AIDecision.symbol.in_(holding_symbols or ["__NONE__"]))
+                .order_by(AIDecision.symbol.asc(), desc(AIDecision.analysed_at))
+                .all()
+            )
+            latest_holding_by_symbol: dict[str, Any] = {}
+            for row in holding_latest:
+                if row.symbol not in latest_holding_by_symbol:
+                    latest_holding_by_symbol[row.symbol] = _serialize_latest_decision(row)
+
+            in_memory_holdings = _latest_in_memory_decisions_by_symbol("holdings")
+            for sym, decision in in_memory_holdings.items():
+                if _is_newer_decision(decision, latest_holding_by_symbol.get(sym)):
+                    latest_holding_by_symbol[sym] = decision
+
+            holding_rows = []
+            for row in holdings:
+                sym = str(row.get("tradingsymbol") or row.get("symbol") or "").strip().upper()
+                if not sym:
+                    continue
+                decision = latest_holding_by_symbol.get(sym)
+                holding_rows.append({
+                    "symbol": sym,
+                    "quantity": row.get("quantity") or row.get("net_quantity") or 0,
+                    "average_price": row.get("average_price") or row.get("average_price") or 0,
+                    "last_price": row.get("last_price") or 0,
+                    "pnl": row.get("pnl") or row.get("m2m") or 0,
+                    "decision": decision if decision else None,
+                })
+
+            top_buys = [row for row in nifty100_rows if str(row.get("action") or "").upper() == "BUY"][:limit]
+            top_sells = [row for row in nifty100_rows if str(row.get("action") or "").upper() == "SELL"][:limit]
+
+            return {
+                "nifty100": {
+                    "state": dict(_desk_state.get("nifty100", {})),
+                    "latest": nifty100_rows[:limit],
+                    "buy_recommendations": top_buys[:10],
+                    "sell_recommendations": top_sells[:10],
+                    "symbol_count": len(symbols),
+                },
+                "holdings": {
+                    "state": dict(_desk_state.get("holdings", {})),
+                    "rows": holding_rows,
+                },
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("get_reconciliation_desk_snapshot failed: %s", e)
+        return {
+            "nifty100": {"state": dict(_desk_state.get("nifty100", {})), "latest": [], "buy_recommendations": [], "sell_recommendations": [], "symbol_count": 0},
+            "holdings": {"state": dict(_desk_state.get("holdings", {})), "rows": []},
+        }

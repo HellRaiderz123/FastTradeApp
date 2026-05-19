@@ -33,6 +33,7 @@ const COMMANDS: CommandItem[] = [
   { label: 'ML Center', path: '/ml', keywords: 'ml machine learning signals' },
   { label: 'AI Analysis', path: '/ai-analysis', keywords: 'ai analysis agents signals decision' },
   { label: 'Signal Reconciliation', path: '/signal-reconciliation', keywords: 'ai ml strategy recommendation reconcile stock' },
+  { label: 'Scheduled Jobs', path: '/scheduled-jobs', keywords: 'scheduler cron jobs run now manual operations' },
   { label: 'Finance', path: '/finance', keywords: 'finance budget goals' },
   { label: 'Settings', path: '/settings', keywords: 'settings zerodha api' },
 ];

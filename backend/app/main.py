@@ -77,6 +77,8 @@ from app.core.market.scheduler import (
     start_auto_exit_scheduler,
     start_expiry_exit_scheduler,
     start_twitter_sentiment_scheduler,
+    start_nifty100_reconciliation_scheduler,
+    start_holdings_reconciliation_scheduler,
     start_neon_sync_scheduler,
     start_zerodha_auto_login_scheduler,
     start_strategy_discovery_scheduler,
@@ -142,6 +144,8 @@ async def lifespan(app: FastAPI):
         start_expiry_exit_scheduler()  # Auto-exit options near expiry
         start_intraday_candles_scheduler(delay_minutes=3)  # 5m + 1h candles
         start_twitter_sentiment_scheduler()  # Twitter market sentiment
+        start_nifty100_reconciliation_scheduler()  # Daily Nifty100 AI reconciliation
+        start_holdings_reconciliation_scheduler()   # Daily Zerodha holdings review
         start_neon_sync_scheduler()            # Hourly delta backup to Neon
         start_zerodha_auto_login_scheduler()    # Daily auto-login at 8 AM IST
         start_strategy_discovery_scheduler()    # Daily strategy discovery at 4:15 PM IST

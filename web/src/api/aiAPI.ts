@@ -114,6 +114,64 @@ export interface AnalyzeOptions {
   clear_checkpoint?: boolean;
 }
 
+export interface ReconciliationDeskRow {
+  job_id: string;
+  symbol: string;
+  exchange: string;
+  action: 'BUY' | 'SELL' | 'HOLD';
+  confidence: number | null;
+  conviction?: string | null;
+  time_horizon?: string | null;
+  risk_level?: string | null;
+  rationale?: string | null;
+  execution_allowed?: boolean | null;
+  manager_block_reason?: string | null;
+  analysed_at?: string | null;
+}
+
+export interface ReconciliationDeskSnapshot {
+  nifty100: {
+    state: {
+      status?: string;
+      last_run_at?: string | null;
+      queued?: number;
+      running?: number;
+      completed?: number;
+      failed?: number;
+      remaining?: number;
+      processed?: number;
+      last_error?: string | null;
+      symbol_count?: number;
+    };
+    latest: ReconciliationDeskRow[];
+    buy_recommendations: ReconciliationDeskRow[];
+    sell_recommendations: ReconciliationDeskRow[];
+    symbol_count: number;
+  };
+  holdings: {
+    state: {
+      status?: string;
+      last_run_at?: string | null;
+      queued?: number;
+      running?: number;
+      completed?: number;
+      failed?: number;
+      remaining?: number;
+      processed?: number;
+      last_error?: string | null;
+      symbol_count?: number;
+    };
+    rows: Array<{
+      symbol: string;
+      quantity: number;
+      average_price: number;
+      last_price: number;
+      pnl: number;
+      decision: ReconciliationDeskRow | null;
+    }>;
+  };
+}
+
 // ── API Client ───────────────────────────────────────────────────────────────
 
 export const aiAPI = {
@@ -144,4 +202,14 @@ export const aiAPI = {
   // Cleanup expired jobs
   cleanupJobs: () =>
     AI_API.delete('/jobs/cleanup'),
+
+  // Background reconciliation desk
+  getReconciliationDesk: () =>
+    AI_API.get<{ ok: boolean; desk: ReconciliationDeskSnapshot }>('/reconciliation/desk'),
+
+  runNifty100Reconciliation: (debateRounds: number = 2) =>
+    AI_API.post('/reconciliation/run-nifty100', {}, { params: { debate_rounds: debateRounds } }),
+
+  runHoldingsReconciliation: (debateRounds: number = 2) =>
+    AI_API.post('/reconciliation/run-holdings', {}, { params: { debate_rounds: debateRounds } }),
 };

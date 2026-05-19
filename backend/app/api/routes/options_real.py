@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import logging
+import pandas as pd
 
 from app.services.zerodha import KiteConnectService
 from app.core.broker.zerodha.instruments import load_instruments
@@ -16,6 +17,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/options/real", tags=["options_real"])
 
 kite_service = KiteConnectService()
+
+_CHAIN_CACHE: Dict[str, Dict[str, Any]] = {}
+_EXPIRY_CACHE: Dict[str, Dict[str, Any]] = {}
+_INSTRUMENTS_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _cache_get(cache: Dict[str, Dict[str, Any]], key: str, ttl_seconds: int) -> Optional[Any]:
+    payload = cache.get(key)
+    if not payload:
+        return None
+    age = (datetime.now() - payload["ts"]).total_seconds()
+    if age > ttl_seconds:
+        cache.pop(key, None)
+        return None
+    return payload.get("value")
+
+
+def _cache_set(cache: Dict[str, Dict[str, Any]], key: str, value: Any) -> None:
+    cache[key] = {"ts": datetime.now(), "value": value}
+
+
+def _get_instruments_cached(exchange: str = "NFO", ttl_seconds: int = 300) -> pd.DataFrame:
+    key = f"instruments:{exchange}"
+    cached = _cache_get(_INSTRUMENTS_CACHE, key, ttl_seconds)
+    if cached is not None:
+        return cached
+    df = load_instruments(exchange=exchange)
+    _cache_set(_INSTRUMENTS_CACHE, key, df)
+    return df
 
 
 @router.get("/chain/{symbol}")
@@ -66,9 +96,14 @@ async def get_real_option_chain(
             expiry_date = today + timedelta(days=days_until_tuesday)
         else:
             expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
+
+        cache_key = f"{symbol}:{expiry_date.isoformat()}"
+        cached_chain = _cache_get(_CHAIN_CACHE, cache_key, ttl_seconds=8)
+        if cached_chain is not None:
+            return cached_chain
         
         # 3. Load instruments to get option tokens
-        instruments = load_instruments(exchange="NFO")
+        instruments = _get_instruments_cached(exchange="NFO")
         
         # Filter for this underlying and expiry
         symbol_options = instruments[
@@ -84,31 +119,31 @@ async def get_real_option_chain(
             )
         
         # 4. Determine strike range (ATM ± 10 strikes)
-        atm_strike = round(spot / 50) * 50
+        strike_step = 50 if symbol == "NIFTY" else 100
+        atm_strike = round(spot / strike_step) * strike_step
         strikes_to_fetch = []
         for i in range(-10, 11):
-            strikes_to_fetch.append(atm_strike + (i * 50))
+            strikes_to_fetch.append(atm_strike + (i * strike_step))
         
         # 5. Build list of tradingsymbols to quote
         symbols_to_quote = []
         strike_map = {}  # Map tradingsymbol -> (strike, option_type)
         
+        available_pairs = {
+            (int(row["strike"]), str(row["instrument_type"]))
+            for _, row in symbol_options[["strike", "instrument_type"]].iterrows()
+            if row.get("strike") is not None
+        }
+
         for strike in strikes_to_fetch:
             for opt_type in ['CE', 'PE']:
-                tradingsymbol = build_zerodha_option_symbol(
-                    underlying=symbol,
-                    expiry=expiry_date,
-                    strike=strike,
-                    option_type=opt_type
-                )
-                
-                # Check if this option exists in instruments
-                option_row = symbol_options[
-                    (symbol_options['strike'] == strike) &
-                    (symbol_options['instrument_type'] == opt_type)
-                ]
-                
-                if not option_row.empty:
+                if (int(strike), opt_type) in available_pairs:
+                    tradingsymbol = build_zerodha_option_symbol(
+                        underlying=symbol,
+                        expiry=expiry_date,
+                        strike=strike,
+                        option_type=opt_type
+                    )
                     symbols_to_quote.append(tradingsymbol)
                     strike_map[tradingsymbol] = (strike, opt_type)
         
@@ -215,7 +250,7 @@ async def get_real_option_chain(
         today = datetime.now().date()
         days_to_expiry = (expiry_date - today).days
         
-        return {
+        response_payload = {
             "symbol": symbol,
             "spot": round(spot, 2),
             "expiry": expiry_date.strftime("%Y-%m-%d"),
@@ -226,6 +261,8 @@ async def get_real_option_chain(
             "data_source": "ZERODHA_REAL",
             "timestamp": datetime.now().isoformat()
         }
+        _cache_set(_CHAIN_CACHE, cache_key, response_payload)
+        return response_payload
     
     except HTTPException:
         raise
@@ -242,9 +279,13 @@ async def get_real_expiries(symbol: str):
     """Get actual expiry dates from Zerodha instruments"""
     try:
         symbol = symbol.upper()
+
+        cached_expiries = _cache_get(_EXPIRY_CACHE, symbol, ttl_seconds=120)
+        if cached_expiries is not None:
+            return cached_expiries
         
         # Load instruments
-        instruments = load_instruments(exchange="NFO")
+        instruments = _get_instruments_cached(exchange="NFO")
         
         # Get unique expiries for this symbol
         symbol_options = instruments[
@@ -262,12 +303,14 @@ async def get_real_expiries(symbol: str):
         expiries = sorted(symbol_options['expiry'].unique())
         expiry_strings = [exp.strftime("%Y-%m-%d") for exp in expiries]
         
-        return {
+        response_payload = {
             "symbol": symbol,
             "expiries": expiry_strings,
             "count": len(expiry_strings),
             "data_source": "ZERODHA_REAL"
         }
+        _cache_set(_EXPIRY_CACHE, symbol, response_payload)
+        return response_payload
     
     except HTTPException:
         raise

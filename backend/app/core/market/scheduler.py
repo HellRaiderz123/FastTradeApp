@@ -1159,3 +1159,59 @@ def start_watchlist_analysis_scheduler():
     )
     logger.info("🟢 Watchlist AI analysis scheduler started (Mon-Fri at 8:45 AM IST)")
 
+
+def start_nifty100_reconciliation_scheduler():
+    """Schedule daily AI analysis for the Nifty100 universe at 8:55 AM IST (Mon-Fri)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start Nifty100 reconciliation scheduler: main scheduler not running")
+        return
+
+    def _nifty100_job():
+        try:
+            from app.services.trading_agents import run_nifty100_reconciliation
+            count = run_nifty100_reconciliation()
+            logger.info("🤖 Nifty100 reconciliation: queued %d jobs", count)
+        except Exception as e:
+            logger.warning("⚠️ Nifty100 reconciliation job failed: %s", e)
+
+    scheduler.add_job(
+        func=_nifty100_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=55,
+        id="nifty100_reconciliation_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("🟢 Nifty100 reconciliation scheduler started (Mon-Fri at 8:55 AM IST)")
+
+
+def start_holdings_reconciliation_scheduler():
+    """Schedule daily AI analysis for Zerodha holdings at 9:05 AM IST (Mon-Fri)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start holdings reconciliation scheduler: main scheduler not running")
+        return
+
+    def _holdings_job():
+        try:
+            from app.services.trading_agents import run_holdings_reconciliation
+            count = run_holdings_reconciliation()
+            logger.info("🤖 Holdings reconciliation: queued %d jobs", count)
+        except Exception as e:
+            logger.warning("⚠️ Holdings reconciliation job failed: %s", e)
+
+    scheduler.add_job(
+        func=_holdings_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=9,
+        minute=5,
+        id="holdings_reconciliation_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("🟢 Holdings reconciliation scheduler started (Mon-Fri at 9:05 AM IST)")
+

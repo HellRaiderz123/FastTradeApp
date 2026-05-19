@@ -22,6 +22,7 @@ from app.db import finance_repo
 from app.api.schemas.finance import (
     BudgetCreate, SavingsGoalCreate, BillReminderCreate, FinanceTransactionCreate
 )
+from app.services.llm_service import get_model_candidates, request_chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -2410,7 +2411,7 @@ def _call_llm(
             "⚙️ AI not configured.\n\n"
             "Set **GROQ_API_KEY** in your .env file (free at console.groq.com) "
             "and restart the backend.\n\n"
-            "Model used: " + LLM_MODEL,
+            "Model used: " + ", ".join(get_model_candidates()),
             [],
         )
 
@@ -2443,35 +2444,22 @@ JARVIS VOICE MODE:
     tool_choice = _preferred_tool_choice(message, history)
 
     for _round in range(max_tool_rounds):
-        try:
-            resp = httpx.post(
-                f"{LLM_BASE_URL}/chat/completions",
-                headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-                json={"model": LLM_MODEL, "messages": messages, "tools": TOOLS, "tool_choice": tool_choice},
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-        except httpx.TimeoutException:
-            return "⚠️ LLM request timed out. Check your connection.", actions_taken
-        except httpx.HTTPStatusError as e:
-            return f"⚠️ LLM API error {e.response.status_code}: {e.response.text[:300]}", actions_taken
-        except Exception as e:
-            return f"⚠️ LLM error: {e}", actions_taken
+        response_data, model_used, error = request_chat_completion(
+            messages,
+            tools=TOOLS,
+            tool_choice=tool_choice,
+            timeout=30.0,
+        )
+        if not response_data:
+            return f"⚠️ LLM error: {error or 'No response from configured models'}", actions_taken
 
-        response_data = resp.json()
         choice = response_data["choices"][0]
         assistant_message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")
 
-        # Groq (and some providers) return content=None or content='' on tool-call
-        # rounds.  An assistant message with empty content AND no tool_calls is
-        # invalid and causes a 400 on the very next request.  Sanitise before
-        # appending: omit content when tool_calls are present (Groq rejects
-        # content="" alongside tool_calls), keep it as a string otherwise.
         safe_message: dict = {"role": "assistant"}
         if assistant_message.get("tool_calls"):
             safe_message["tool_calls"] = assistant_message["tool_calls"]
-            # Only add content if it is a non-empty string
             raw_content = assistant_message.get("content")
             if raw_content:
                 safe_message["content"] = raw_content
@@ -2481,13 +2469,7 @@ JARVIS VOICE MODE:
 
         has_tool_calls = bool(assistant_message.get("tool_calls"))
 
-        # Decide whether to execute tools.  Use has_tool_calls as the source of
-        # truth — Groq sometimes returns finish_reason="stop" WITH tool_calls,
-        # which the old code handled incorrectly (appended assistant msg then
-        # continued, leaving assistant msg as the last message → 400).
         if has_tool_calls:
-            # Always append before executing so the tool results are anchored
-            # to this specific assistant message.
             messages.append(safe_message)
 
             for tc in assistant_message["tool_calls"]:
@@ -2497,9 +2479,9 @@ JARVIS VOICE MODE:
                 except json.JSONDecodeError:
                     tool_args = {}
 
-                logger.info("AI tool call: %s(%s)", tool_name, tool_args)
+                logger.info("AI tool call via %s: %s(%s)", model_used or LLM_MODEL, tool_name, tool_args)
                 result = _execute_tool(tool_name, tool_args, db)
-                actions_taken.append({"tool": tool_name, "args": tool_args, "result": result})
+                actions_taken.append({"tool": tool_name, "args": tool_args, "result": result, "model": model_used})
 
                 messages.append({
                     "role": "tool",
@@ -2538,20 +2520,15 @@ JARVIS VOICE MODE:
             "Keep it concise and do not call any more tools."
         ),
     })
-    try:
-        resp = httpx.post(
-            f"{LLM_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-            json={"model": LLM_MODEL, "messages": messages},
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        final_text = resp.json()["choices"][0]["message"].get("content") or ""
+    response_data, _, error = request_chat_completion(messages, timeout=30.0)
+    if response_data:
+        final_text = response_data["choices"][0]["message"].get("content") or ""
         if voice_mode or requested_style == "jarvis":
             final_text = _normalize_voice_answer(final_text)
         return final_text, actions_taken
-    except Exception:
-        return "I completed the requested actions. Please review the results above.", actions_taken
+    if error:
+        logger.warning("AI chat final summary failed across configured models: %s", error)
+    return "I completed the requested actions. Please review the results above.", actions_taken
 
 
 @router.post("/query")

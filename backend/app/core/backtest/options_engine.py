@@ -34,11 +34,46 @@ def _dt_from_candle(candle: dict) -> datetime:
 
 def _lot_size_for_underlying(underlying: str) -> int:
     lot_size_map = {
-        "NIFTY": 65,
-        "BANKNIFTY": 15,
+        "NIFTY": 75,
+        "BANKNIFTY": 30,
         "FINNIFTY": 40,
     }
     return int(lot_size_map.get((underlying or "").upper().strip(), 1))
+
+
+def _resolve_backtest_iv_inputs(candle: Dict[str, Any], params: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    """Resolve IV inputs from candle payload first, then strategy params.
+
+    This keeps existing behavior when no historical IV fields are available,
+    while allowing realistic regime replay when they are present.
+    """
+    india_vix = candle.get("india_vix")
+    vix_rank = candle.get("vix_rank")
+    iv_regime = candle.get("iv_regime")
+
+    if india_vix is None:
+        india_vix = params.get("backtest_india_vix")
+    if vix_rank is None:
+        vix_rank = params.get("backtest_vix_rank")
+    if iv_regime is None:
+        iv_regime = params.get("backtest_iv_regime")
+
+    try:
+        india_vix = float(india_vix) if india_vix is not None else None
+    except (TypeError, ValueError):
+        india_vix = None
+
+    try:
+        vix_rank = float(vix_rank) if vix_rank is not None else None
+    except (TypeError, ValueError):
+        vix_rank = None
+
+    if iv_regime is not None:
+        iv_regime = str(iv_regime).upper().strip()
+        if iv_regime not in {"LOW", "NORMAL", "HIGH"}:
+            iv_regime = None
+
+    return india_vix, vix_rank, iv_regime
 
 
 @dataclass
@@ -91,6 +126,7 @@ class OptionsBacktestEngine:
 
     def run(self, start_date: date, end_date: date, initial_capital: float = 100000) -> Dict[str, Any]:
         starting_capital = float(initial_capital)
+        params = self.config.parameters or {}
         # Load instruments snapshot (if available) for the backtest start date.
         # This is critical for old backtests because expired contracts are often
         # missing from today's live instruments dump.
@@ -106,17 +142,17 @@ class OptionsBacktestEngine:
         if not underlying:
             return {"success": False, "error": "StrategyConfig.underlying missing"}
 
-        lots = int((self.config.parameters or {}).get("lots", 1) or 1)
-        risk_mode = str((self.config.parameters or {}).get("risk_mode", "Conservative"))
-        min_confidence = float((self.config.parameters or {}).get("min_confidence", 75) or 75)
-        capital = float((self.config.parameters or {}).get("capital", initial_capital) or initial_capital)
+        lots = int(params.get("lots", 1) or 1)
+        risk_mode = str(params.get("risk_mode", "Conservative"))
+        min_confidence = float(params.get("min_confidence", 75) or 75)
+        capital = float(params.get("capital", initial_capital) or initial_capital)
 
-        tp_pct = float((self.config.parameters or {}).get("tp_pct", 0) or 0)
-        sl_pct = float((self.config.parameters or {}).get("sl_pct", 0) or 0)
-        trailing_sl_pct = float((self.config.parameters or {}).get("trailing_sl_pct", 0) or 0)
+        tp_pct = float(params.get("tp_pct", 0) or 0)
+        sl_pct = float(params.get("sl_pct", 0) or 0)
+        trailing_sl_pct = float(params.get("trailing_sl_pct", 0) or 0)
 
-        entry_time_raw = str((self.config.parameters or {}).get("entry_time", "09:20") or "09:20")
-        exit_time_raw = str((self.config.parameters or {}).get("exit_time", "15:20") or "15:20")
+        entry_time_raw = str(params.get("entry_time", "09:20") or "09:20")
+        exit_time_raw = str(params.get("exit_time", "15:20") or "15:20")
         try:
             entry_time = time.fromisoformat(entry_time_raw)
         except Exception:
@@ -154,12 +190,14 @@ class OptionsBacktestEngine:
             # Accumulate candles in memory for TA computation
             _candle_history.append(candle)
 
+            india_vix, vix_rank, iv_regime = _resolve_backtest_iv_inputs(candle, params)
+
             # Generate signal from in-memory candles (100x faster than DB round-trip)
             sig = generate_signal_from_candles(
                 candles=_candle_history,
-                india_vix=15.0,
-                vix_rank=50.0,
-                iv_regime="NORMAL",
+                india_vix=india_vix,
+                vix_rank=vix_rank,
+                iv_regime=iv_regime,
             )
             confidence = float(sig.get("confidence", 0.0))
             ctx = build_market_context(sig)

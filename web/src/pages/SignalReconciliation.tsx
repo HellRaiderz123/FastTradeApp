@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MessageSquare,
   Brain,
@@ -13,7 +13,7 @@ import {
   Minus,
   Radar,
 } from 'lucide-react';
-import { aiAPI, DebateRoundEntry, PipelineResult } from '../api/aiAPI';
+import { aiAPI, DebateRoundEntry, PipelineResult, type ReconciliationDeskSnapshot } from '../api/aiAPI';
 import { journalAPI, mlAPI, watchlistAPI } from '../lib/api';
 
 type Action = 'BUY' | 'SELL' | 'HOLD';
@@ -124,6 +124,9 @@ const SignalReconciliation: React.FC = () => {
   const [debateTranscript, setDebateTranscript] = useState<DebateRoundEntry[]>([]);
   const [debateRoundsUsed, setDebateRoundsUsed] = useState<number | null>(null);
   const cacheRef = useRef<Record<string, ReconciliationSnapshot>>({});
+  const [deskSnapshot, setDeskSnapshot] = useState<ReconciliationDeskSnapshot | null>(null);
+  const [deskLoading, setDeskLoading] = useState(false);
+  const [deskError, setDeskError] = useState<string | null>(null);
 
   const cacheKey = (sym: string, rounds: number) => `${sym}:${rounds}`;
 
@@ -152,6 +155,25 @@ const SignalReconciliation: React.FC = () => {
     setDebateRoundsUsed(snapshot.debateRoundsUsed);
     setLastRefreshedAt(new Date(snapshot.savedAt).toLocaleTimeString('en-IN'));
   };
+
+  const loadDeskSnapshot = async () => {
+    setDeskLoading(true);
+    setDeskError(null);
+    try {
+      const res = await aiAPI.getReconciliationDesk();
+      setDeskSnapshot(res.data?.desk || null);
+    } catch (e: any) {
+      setDeskError(e?.response?.data?.detail || e?.message || 'Failed to load background desk');
+    } finally {
+      setDeskLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadDeskSnapshot();
+    const timer = setInterval(loadDeskSnapshot, 15000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleSymbolChange = (next: string) => {
     setSymbol(next.toUpperCase());
@@ -319,6 +341,20 @@ const SignalReconciliation: React.FC = () => {
     }
   };
 
+  const runBackgroundDesk = async () => {
+    setRunStatus('Queueing background Nifty100 and holdings review...');
+    try {
+      await Promise.allSettled([
+        aiAPI.runNifty100Reconciliation(debateRounds),
+        aiAPI.runHoldingsReconciliation(debateRounds),
+      ]);
+      await loadDeskSnapshot();
+      setRunStatus('Background reconciliation queued');
+    } catch (e: any) {
+      setRunStatus(e?.message || 'Background reconciliation failed');
+    }
+  };
+
   const sourceVotes = useMemo<SourceVote[]>(() => {
     const votes: SourceVote[] = [];
 
@@ -451,6 +487,14 @@ const SignalReconciliation: React.FC = () => {
               {running ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
               Run Reconciliation
             </button>
+            <button
+              onClick={runBackgroundDesk}
+              disabled={running || deskLoading}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-2.5 font-semibold text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-60"
+            >
+              <Radar className="w-4 h-4" />
+              Queue Background Desk
+            </button>
           </div>
         </div>
 
@@ -475,6 +519,114 @@ const SignalReconciliation: React.FC = () => {
         )}
         {runStatus && (
           <p className="mt-1 text-xs text-violet-200">{runStatus}</p>
+        )}
+        {(deskLoading || deskError || deskSnapshot) && (
+          <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950/50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-white font-semibold text-lg flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-emerald-300" />
+                  Background Decision Desk
+                </h2>
+                <p className="text-xs text-slate-400">Nifty100 queue plus Zerodha holdings review, refreshed in the background.</p>
+              </div>
+              <button
+                onClick={loadDeskSnapshot}
+                className="rounded-lg border border-slate-600 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-200 hover:border-cyan-400"
+              >
+                Refresh Desk
+              </button>
+            </div>
+            {deskError && <p className="mt-2 text-xs text-rose-300">{deskError}</p>}
+            {!deskError && deskLoading && <p className="mt-2 text-xs text-slate-400">Loading background desk...</p>}
+
+            {deskSnapshot && (
+              <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Nifty100 Desk</p>
+                      <h3 className="text-white font-semibold">Daily Buy Queue</h3>
+                    </div>
+                    <span className="text-xs text-slate-400">{deskSnapshot.nifty100.symbol_count} symbols</span>
+                  </div>
+                  <div className="mt-3 text-xs text-slate-400 flex flex-wrap gap-2">
+                    <span className="rounded-full border border-slate-700 px-2 py-1">State: {deskSnapshot.nifty100.state.status || 'idle'}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Queued: {deskSnapshot.nifty100.state.queued || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Running: {deskSnapshot.nifty100.state.running || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Completed: {deskSnapshot.nifty100.state.completed || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Failed: {deskSnapshot.nifty100.state.failed || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Remaining: {deskSnapshot.nifty100.state.remaining || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Last run: {deskSnapshot.nifty100.state.last_run_at || '—'}</span>
+                  </div>
+                  <div className="mt-4 space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {(deskSnapshot.nifty100.buy_recommendations || []).slice(0, 8).map((row) => (
+                      <div key={`${row.symbol}-${row.job_id}`} className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-semibold text-white">{row.symbol}</div>
+                            <div className="text-xs text-slate-400">{row.conviction || '—'} • {Math.round(Number(row.confidence || 0) * 100)}%</div>
+                          </div>
+                          <span className="rounded-full border border-emerald-400/40 px-2 py-1 text-xs text-emerald-200">BUY</span>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-300 line-clamp-2">{row.rationale || 'No rationale available.'}</p>
+                      </div>
+                    ))}
+                    {(deskSnapshot.nifty100.buy_recommendations || []).length === 0 && (
+                      <p className="text-xs text-slate-500">No BUY recommendations available yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Zerodha Holdings</p>
+                      <h3 className="text-white font-semibold">Hold / Sell Desk</h3>
+                    </div>
+                    <span className="text-xs text-slate-400">{deskSnapshot.holdings.rows.length} holdings</span>
+                  </div>
+                  <div className="mt-3 text-xs text-slate-400 flex flex-wrap gap-2">
+                    <span className="rounded-full border border-slate-700 px-2 py-1">State: {deskSnapshot.holdings.state.status || 'idle'}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Queued: {deskSnapshot.holdings.state.queued || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Running: {deskSnapshot.holdings.state.running || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Completed: {deskSnapshot.holdings.state.completed || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Failed: {deskSnapshot.holdings.state.failed || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Remaining: {deskSnapshot.holdings.state.remaining || 0}</span>
+                    <span className="rounded-full border border-slate-700 px-2 py-1">Last run: {deskSnapshot.holdings.state.last_run_at || '—'}</span>
+                  </div>
+                  <div className="mt-4 space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {deskSnapshot.holdings.rows.map((row) => {
+                      const action = String(row.decision?.action || 'HOLD').toUpperCase();
+                      const actionClass = action === 'BUY'
+                        ? 'border-emerald-400/40 text-emerald-200 bg-emerald-500/10'
+                        : action === 'SELL'
+                          ? 'border-rose-400/40 text-rose-200 bg-rose-500/10'
+                          : 'border-amber-400/40 text-amber-200 bg-amber-500/10';
+
+                      return (
+                        <div key={row.symbol} className="rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <div className="text-sm font-semibold text-white">{row.symbol}</div>
+                              <div className="text-xs text-slate-400">Qty {row.quantity} • P&L ₹{Number(row.pnl || 0).toLocaleString('en-IN')}</div>
+                            </div>
+                            <span className={`rounded-full border px-2 py-1 text-xs font-semibold ${actionClass}`}>{action}</span>
+                          </div>
+                          <p className="mt-2 text-xs text-slate-300 line-clamp-2">
+                            {row.decision?.rationale || 'No daily verdict yet for this holding.'}
+                          </p>
+                        </div>
+                      );
+                    })}
+                    {deskSnapshot.holdings.rows.length === 0 && (
+                      <p className="text-xs text-slate-500">No Zerodha holdings found or holdings API unavailable.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
