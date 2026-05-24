@@ -1345,7 +1345,7 @@ def _normalize_action(action: Any) -> str:
 
 
 def _apply_manager_enforcement(decision: dict, risk_report: dict, portfolio_report: dict) -> dict:
-    """Enforce manager approvals before exposing any executable action."""
+    """Preserve the research recommendation while gating executable actions."""
     merged = dict(decision or {})
     requested_action = _normalize_action(merged.get("action"))
     risk_allowed_action = _normalize_action(risk_report.get("allowed_action"))
@@ -1353,6 +1353,7 @@ def _apply_manager_enforcement(decision: dict, risk_report: dict, portfolio_repo
 
     reasons: list[str] = []
     blocked = False
+    recommended_action = requested_action
 
     risk_approved = _as_bool(risk_report.get("approval"), default=True)
     portfolio_approved = _as_bool(portfolio_report.get("approval"), default=True)
@@ -1369,24 +1370,22 @@ def _apply_manager_enforcement(decision: dict, risk_report: dict, portfolio_repo
         blocked = True
         reasons.append("Portfolio manager rejected the trade")
 
-    final_action = requested_action
-    if not blocked and risk_allowed_action in {"BUY", "SELL"} and risk_allowed_action != requested_action:
-        final_action = risk_allowed_action
+    if not blocked and risk_allowed_action in {"BUY", "SELL"} and risk_allowed_action != recommended_action:
+        recommended_action = risk_allowed_action
         reasons.append(f"Action adjusted to {risk_allowed_action} by risk manager")
 
-    if not blocked and pm_approved_action in {"BUY", "SELL", "HOLD"} and pm_approved_action != final_action:
-        final_action = pm_approved_action
+    if not blocked and pm_approved_action in {"BUY", "SELL", "HOLD"} and pm_approved_action != recommended_action:
         if pm_approved_action == "HOLD":
             blocked = True
             reasons.append("Portfolio manager restricted action to HOLD")
         else:
+            recommended_action = pm_approved_action
             reasons.append(f"Action adjusted to {pm_approved_action} by portfolio manager")
 
-    if blocked:
-        final_action = "HOLD"
+    executable_action = recommended_action if recommended_action in {"BUY", "SELL"} and not blocked else "HOLD"
 
-    merged["action"] = final_action
-    merged["execution_allowed"] = (final_action in {"BUY", "SELL"}) and not blocked
+    merged["action"] = recommended_action
+    merged["execution_allowed"] = executable_action in {"BUY", "SELL"}
     merged["manager_enforcement"] = {
         "blocked": blocked,
         "risk_approved": risk_approved,
@@ -1394,7 +1393,9 @@ def _apply_manager_enforcement(decision: dict, risk_report: dict, portfolio_repo
         "risk_allowed_action": risk_allowed_action,
         "portfolio_approved_action": pm_approved_action,
         "requested_action": requested_action,
-        "final_action": final_action,
+        "recommended_action": recommended_action,
+        "executable_action": executable_action,
+        "final_action": executable_action,
         "reasons": reasons,
     }
     return merged
@@ -1950,11 +1951,24 @@ def run_holdings_reconciliation(exchange: str = "NSE", debate_rounds: int = 2) -
 
 
 def _serialize_latest_decision(row: Any) -> dict[str, Any]:
+    risk_report = row.risk_manager_report if isinstance(row.risk_manager_report, dict) else {}
+    portfolio_report = row.portfolio_manager_report if isinstance(row.portfolio_manager_report, dict) else {}
+    stored_action = _normalize_action(row.action)
+    risk_allowed_action = _normalize_action(risk_report.get("allowed_action")) if risk_report else None
+    portfolio_approved_action = _normalize_action(portfolio_report.get("approved_action")) if portfolio_report else None
+    recommendation_action = stored_action
+    if stored_action == "HOLD" and not row.execution_allowed and risk_allowed_action in {"BUY", "SELL"}:
+        # Legacy rows saved before recommendations were separated from execution gates.
+        recommendation_action = risk_allowed_action
+    executable_action = stored_action if row.execution_allowed and stored_action in {"BUY", "SELL"} else "HOLD"
+
     return {
         "job_id": row.job_id,
         "symbol": row.symbol,
         "exchange": row.exchange,
-        "action": row.action,
+        "action": stored_action,
+        "recommendation_action": recommendation_action,
+        "executable_action": executable_action,
         "confidence": row.confidence,
         "conviction": row.conviction,
         "time_horizon": row.time_horizon,
@@ -1962,6 +1976,10 @@ def _serialize_latest_decision(row: Any) -> dict[str, Any]:
         "rationale": row.rationale,
         "execution_allowed": row.execution_allowed,
         "manager_block_reason": row.manager_block_reason,
+        "risk_allowed_action": risk_allowed_action,
+        "risk_approved": _as_bool(risk_report.get("approval"), default=True) if risk_report else None,
+        "portfolio_approved_action": portfolio_approved_action,
+        "portfolio_approved": _as_bool(portfolio_report.get("approval"), default=True) if portfolio_report else None,
         "analysed_at": row.analysed_at.isoformat() if getattr(row, "analysed_at", None) else None,
     }
 
@@ -1976,11 +1994,20 @@ def _serialize_job_decision(job: dict[str, Any]) -> Optional[dict[str, Any]]:
     symbol = str(result.get("symbol") or job.get("symbol") or "").strip().upper()
     if not symbol:
         return None
+    reports = result.get("reports") or {}
+    risk_report = reports.get("risk_manager") if isinstance(reports.get("risk_manager"), dict) else {}
+    portfolio_report = reports.get("portfolio_manager") if isinstance(reports.get("portfolio_manager"), dict) else {}
+    enforcement = decision.get("manager_enforcement") if isinstance(decision.get("manager_enforcement"), dict) else {}
+    stored_action = _normalize_action(decision.get("action"))
+    recommendation_action = _normalize_action(enforcement.get("recommended_action") or stored_action)
+    executable_action = _normalize_action(enforcement.get("executable_action") or enforcement.get("final_action"))
     return {
         "job_id": job.get("job_id"),
         "symbol": symbol,
         "exchange": result.get("exchange") or job.get("exchange"),
-        "action": decision.get("action"),
+        "action": stored_action,
+        "recommendation_action": recommendation_action,
+        "executable_action": executable_action,
         "confidence": decision.get("confidence"),
         "conviction": decision.get("conviction"),
         "time_horizon": decision.get("time_horizon"),
@@ -1988,10 +2015,14 @@ def _serialize_job_decision(job: dict[str, Any]) -> Optional[dict[str, Any]]:
         "rationale": decision.get("rationale"),
         "execution_allowed": decision.get("execution_allowed"),
         "manager_block_reason": (
-            "; ".join((decision.get("manager_enforcement") or {}).get("reasons", []))
-            if isinstance((decision.get("manager_enforcement") or {}).get("reasons", []), list)
+            "; ".join(enforcement.get("reasons", []))
+            if isinstance(enforcement.get("reasons", []), list)
             else None
         ),
+        "risk_allowed_action": _normalize_action(risk_report.get("allowed_action")) if risk_report else None,
+        "risk_approved": _as_bool(risk_report.get("approval"), default=True) if risk_report else None,
+        "portfolio_approved_action": _normalize_action(portfolio_report.get("approved_action")) if portfolio_report else None,
+        "portfolio_approved": _as_bool(portfolio_report.get("approval"), default=True) if portfolio_report else None,
         "analysed_at": result.get("analysed_at") or job.get("completed_at"),
     }
 
@@ -2057,6 +2088,12 @@ def get_reconciliation_desk_snapshot(limit: int = 40) -> dict[str, Any]:
                 for row in latest_by_symbol.values()
             ]
             nifty100_rows.sort(key=lambda item: (item.get("analysed_at") or "", item.get("confidence") or 0), reverse=True)
+            nifty100_action_counts = {"BUY": 0, "SELL": 0, "HOLD": 0}
+            for row in nifty100_rows:
+                action = str(row.get("recommendation_action") or row.get("action") or "HOLD").upper()
+                if action not in nifty100_action_counts:
+                    action = "HOLD"
+                nifty100_action_counts[action] += 1
 
             holdings = []
             try:
@@ -2102,8 +2139,14 @@ def get_reconciliation_desk_snapshot(limit: int = 40) -> dict[str, Any]:
                     "decision": decision if decision else None,
                 })
 
-            top_buys = [row for row in nifty100_rows if str(row.get("action") or "").upper() == "BUY"][:limit]
-            top_sells = [row for row in nifty100_rows if str(row.get("action") or "").upper() == "SELL"][:limit]
+            top_buys = [
+                row for row in nifty100_rows
+                if str(row.get("recommendation_action") or row.get("action") or "").upper() == "BUY"
+            ][:limit]
+            top_sells = [
+                row for row in nifty100_rows
+                if str(row.get("recommendation_action") or row.get("action") or "").upper() == "SELL"
+            ][:limit]
 
             return {
                 "nifty100": {
@@ -2111,6 +2154,7 @@ def get_reconciliation_desk_snapshot(limit: int = 40) -> dict[str, Any]:
                     "latest": nifty100_rows[:limit],
                     "buy_recommendations": top_buys[:10],
                     "sell_recommendations": top_sells[:10],
+                    "action_counts": nifty100_action_counts,
                     "symbol_count": len(symbols),
                 },
                 "holdings": {

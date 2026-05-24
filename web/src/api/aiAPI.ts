@@ -119,6 +119,8 @@ export interface ReconciliationDeskRow {
   symbol: string;
   exchange: string;
   action: 'BUY' | 'SELL' | 'HOLD';
+  recommendation_action?: 'BUY' | 'SELL' | 'HOLD' | null;
+  executable_action?: 'BUY' | 'SELL' | 'HOLD' | null;
   confidence: number | null;
   conviction?: string | null;
   time_horizon?: string | null;
@@ -126,6 +128,10 @@ export interface ReconciliationDeskRow {
   rationale?: string | null;
   execution_allowed?: boolean | null;
   manager_block_reason?: string | null;
+  risk_allowed_action?: 'BUY' | 'SELL' | 'HOLD' | null;
+  risk_approved?: boolean | null;
+  portfolio_approved_action?: 'BUY' | 'SELL' | 'HOLD' | null;
+  portfolio_approved?: boolean | null;
   analysed_at?: string | null;
 }
 
@@ -146,6 +152,11 @@ export interface ReconciliationDeskSnapshot {
     latest: ReconciliationDeskRow[];
     buy_recommendations: ReconciliationDeskRow[];
     sell_recommendations: ReconciliationDeskRow[];
+    action_counts?: {
+      BUY?: number;
+      SELL?: number;
+      HOLD?: number;
+    };
     symbol_count: number;
   };
   holdings: {

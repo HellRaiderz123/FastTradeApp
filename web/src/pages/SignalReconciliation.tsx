@@ -13,7 +13,7 @@ import {
   Minus,
   Radar,
 } from 'lucide-react';
-import { aiAPI, DebateRoundEntry, PipelineResult, type ReconciliationDeskSnapshot } from '../api/aiAPI';
+import { aiAPI, DebateRoundEntry, PipelineResult, type ReconciliationDeskRow, type ReconciliationDeskSnapshot } from '../api/aiAPI';
 import { journalAPI, mlAPI, watchlistAPI } from '../lib/api';
 
 type Action = 'BUY' | 'SELL' | 'HOLD';
@@ -72,6 +72,13 @@ function normalizeMlToAction(signal?: string): Action {
   const s = String(signal || '').toUpperCase();
   if (s.includes('BULL')) return 'BUY';
   if (s.includes('BEAR')) return 'SELL';
+  return 'HOLD';
+}
+
+function normalizeDeskAction(action?: string | null): Action {
+  const s = String(action || '').toUpperCase();
+  if (s === 'BUY') return 'BUY';
+  if (s === 'SELL') return 'SELL';
   return 'HOLD';
 }
 
@@ -448,6 +455,24 @@ const SignalReconciliation: React.FC = () => {
       : 'Strong disagreement';
 
   const hasDiagnosticsTrades = Number(diagnosticsSummary?.total_trades || 0) > 0;
+  const latestNiftyRows = useMemo(
+    () => (deskSnapshot?.nifty100.latest || []).slice(0, 12),
+    [deskSnapshot]
+  );
+  const niftyActionCounts = useMemo(() => {
+    const counts: Record<Action, number> = { BUY: 0, SELL: 0, HOLD: 0 };
+    const apiCounts = deskSnapshot?.nifty100.action_counts;
+    if (apiCounts) {
+      counts.BUY = Number(apiCounts.BUY || 0);
+      counts.SELL = Number(apiCounts.SELL || 0);
+      counts.HOLD = Number(apiCounts.HOLD || 0);
+      return counts;
+    }
+    for (const row of deskSnapshot?.nifty100.latest || []) {
+      counts[normalizeDeskAction(row.recommendation_action || row.action)] += 1;
+    }
+    return counts;
+  }, [deskSnapshot]);
 
   return (
     <div className="space-y-6">
@@ -546,7 +571,7 @@ const SignalReconciliation: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Nifty100 Desk</p>
-                      <h3 className="text-white font-semibold">Daily Buy Queue</h3>
+                      <h3 className="text-white font-semibold">Daily Decision Queue</h3>
                     </div>
                     <span className="text-xs text-slate-400">{deskSnapshot.nifty100.symbol_count} symbols</span>
                   </div>
@@ -559,21 +584,65 @@ const SignalReconciliation: React.FC = () => {
                     <span className="rounded-full border border-slate-700 px-2 py-1">Remaining: {deskSnapshot.nifty100.state.remaining || 0}</span>
                     <span className="rounded-full border border-slate-700 px-2 py-1">Last run: {deskSnapshot.nifty100.state.last_run_at || '—'}</span>
                   </div>
-                  <div className="mt-4 space-y-2 max-h-72 overflow-y-auto pr-1">
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                    {(['BUY', 'SELL', 'HOLD'] as Action[]).map((action) => (
+                      <div key={action} className={`rounded-lg border px-3 py-2 ${actionPill(action)}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-1 font-semibold">
+                            {actionIcon(action)}
+                            {action}
+                          </span>
+                          <span>{niftyActionCounts[action]}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 space-y-2 max-h-80 overflow-y-auto pr-1">
                     {(deskSnapshot.nifty100.buy_recommendations || []).slice(0, 8).map((row) => (
                       <div key={`${row.symbol}-${row.job_id}`} className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
                         <div className="flex items-center justify-between gap-2">
                           <div>
                             <div className="text-sm font-semibold text-white">{row.symbol}</div>
-                            <div className="text-xs text-slate-400">{row.conviction || '—'} • {Math.round(Number(row.confidence || 0) * 100)}%</div>
+                            <div className="text-xs text-slate-400">
+                              {row.conviction || 'N/A'} | {Math.round(Number(row.confidence || 0) * 100)}% | {row.execution_allowed ? 'Allowed' : 'Blocked'}
+                            </div>
                           </div>
                           <span className="rounded-full border border-emerald-400/40 px-2 py-1 text-xs text-emerald-200">BUY</span>
                         </div>
-                        <p className="mt-2 text-xs text-slate-300 line-clamp-2">{row.rationale || 'No rationale available.'}</p>
+                        <p className="mt-2 text-xs text-slate-300 line-clamp-2">{row.manager_block_reason || row.rationale || 'No rationale available.'}</p>
                       </div>
                     ))}
                     {(deskSnapshot.nifty100.buy_recommendations || []).length === 0 && (
-                      <p className="text-xs text-slate-500">No BUY recommendations available yet.</p>
+                      <p className="text-xs text-slate-500">No BUY recommendations in the latest completed batch.</p>
+                    )}
+                    {latestNiftyRows.length > 0 && (
+                      <div className="pt-2">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Latest Decisions</div>
+                        <div className="space-y-2">
+                          {latestNiftyRows.map((row: ReconciliationDeskRow) => {
+                            const action = normalizeDeskAction(row.recommendation_action || row.action);
+                            return (
+                              <div key={`latest-${row.symbol}-${row.job_id}`} className="rounded-lg border border-slate-700 bg-slate-950/50 px-3 py-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <div className="text-sm font-semibold text-white">{row.symbol}</div>
+                                    <div className="text-xs text-slate-400">
+                                      {row.conviction || 'N/A'} | {Math.round(Number(row.confidence || 0) * 100)}% | {row.execution_allowed ? 'Allowed' : 'Blocked'}
+                                    </div>
+                                  </div>
+                                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-semibold ${actionPill(action)}`}>
+                                    {actionIcon(action)}
+                                    {action}
+                                  </span>
+                                </div>
+                                <p className="mt-2 text-xs text-slate-300 line-clamp-2">
+                                  {row.manager_block_reason || row.rationale || 'No rationale available.'}
+                                </p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </div>
