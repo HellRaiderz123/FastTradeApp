@@ -35,6 +35,7 @@ class ExecutionIntentOut(BaseModel):
     
     tp: Optional[float]
     sl: Optional[float]
+    trailing_sl_pct: Optional[float]
     exit_reason: Optional[str]
     
     entry_credit: Optional[float]

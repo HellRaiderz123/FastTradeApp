@@ -227,6 +227,12 @@ export const exitAPI = {
     api.post(`/exit/manual/${intentId}`, {}),
 };
 
+// ── Intent (TP/SL) ──────────────────────────────────────────────────
+export const intentAPI = {
+  updateTpSl: (intentId: string, payload: { tp?: number; sl?: number; tp_pct?: number; sl_pct?: number; trailing_sl?: number }) =>
+    api.patch(`/intent/${intentId}/update_tp_sl`, payload),
+};
+
 // ── System ───────────────────────────────────────────────────────────
 export const systemAPI = {
   status: () => api.get('/system/status'),

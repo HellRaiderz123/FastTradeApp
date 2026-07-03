@@ -36,16 +36,28 @@ def update_tp_sl(
     intent_id: str,
     tp: Optional[float] = Body(None),
     sl: Optional[float] = Body(None),
+    tp_pct: Optional[float] = Body(None),
+    sl_pct: Optional[float] = Body(None),
     trailing_sl: Optional[float] = Body(None),
     db: Session = Depends(get_db)
 ):
     intent = db.query(ExecutionIntent).filter(ExecutionIntent.intent_id == intent_id).first()
     if not intent:
         raise HTTPException(status_code=404, detail="Intent not found")
-    if tp is not None:
+
+    entry = float(intent.entry_credit or 0)
+
+    # Percentage-based TP/SL (converted to absolute ₹ from entry_credit)
+    if tp_pct is not None and entry > 0:
+        intent.tp = round(entry * tp_pct / 100, 2)
+    elif tp is not None:
         intent.tp = tp
-    if sl is not None:
+
+    if sl_pct is not None and entry > 0:
+        intent.sl = round(-(entry * sl_pct / 100), 2)
+    elif sl is not None:
         intent.sl = sl
+
     if trailing_sl is not None:
         intent.trailing_sl_pct = trailing_sl
 

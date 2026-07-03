@@ -2,6 +2,7 @@ import * as Notifications from 'expo-notifications';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
+    shouldShowAlert: true,   // required for SDK <0.29 compat layer
     shouldShowBanner: true,
     shouldShowList: true,
     shouldPlaySound: true,
@@ -24,7 +25,7 @@ export async function sendLocalNotification(title: string, body: string) {
   try {
     await Notifications.scheduleNotificationAsync({
       content: { title, body, sound: true },
-      trigger: null,
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, repeats: false },
     });
   } catch {
     // no-op: notifications may not be available in all environments

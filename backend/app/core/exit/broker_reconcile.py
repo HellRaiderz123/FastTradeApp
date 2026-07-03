@@ -148,9 +148,8 @@ def reconcile_broker_positions(db: Session, force: bool = False) -> List[str]:
         intent.closed_at = now_ist()  # type: ignore
         intent.exit_reason = "BROKER_CLOSED"  # type: ignore
 
-        # Use broker-reported P&L if available, otherwise keep last computed MTM
-        if total_broker_pnl != 0:
-            intent.pnl = total_broker_pnl  # type: ignore
+        # Always write broker-reported P&L (including 0) so closed entries are accurate
+        intent.pnl = total_broker_pnl  # type: ignore
 
         try:
             record_exit_outcome(db, intent=intent, commit=False)

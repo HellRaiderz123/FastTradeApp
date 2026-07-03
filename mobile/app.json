@@ -33,6 +33,14 @@
       "expo-router",
       "expo-secure-store",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/adaptive-icon.png",
+          "color": "#ffffff",
+          "defaultChannel": "default"
+        }
+      ],
+      [
         "expo-speech-recognition",
         {
           "microphonePermission": "Allow FastTrade to use the microphone for Jarvis voice commands.",

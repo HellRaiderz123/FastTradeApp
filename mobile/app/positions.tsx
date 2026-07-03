@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, RefreshControl,
-  TouchableOpacity, Alert, StatusBar,
+  TouchableOpacity, Alert, StatusBar, Modal, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { journalAPI, exitAPI, getApiBaseUrl, authTokenStore } from '../lib/api';
+import { journalAPI, exitAPI, intentAPI, getApiBaseUrl, authTokenStore } from '../lib/api';
 import { Colors, Spacing, Radius } from '../lib/theme';
 import { GlassCard, MetalCard, PnLBadge, EmptyState, LoadingSpinner, ScreenHeader, Tag, ProgressBar } from '../components/ui';
 
@@ -155,6 +155,51 @@ export default function Positions() {
     }, 10000);
     return () => clearInterval(pollId);
   }, [wsConnected, load]);
+
+  // ── Set Target Modal ──────────────────────────────────────────────
+  const [targetModal, setTargetModal] = useState<{ visible: boolean; position: any | null }>({ visible: false, position: null });
+  const [tpInput, setTpInput] = useState('');
+  const [slInput, setSlInput] = useState('');
+  const [trailingInput, setTrailingInput] = useState('');
+  const [tpMode, setTpMode] = useState<'abs' | 'pct'>('abs');
+  const [slMode, setSlMode] = useState<'abs' | 'pct'>('abs');
+  const [saving, setSaving] = useState(false);
+
+  const openTargetModal = (position: any) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setTpInput(position.tp ? String(position.tp) : '');
+    setSlInput(position.sl ? String(Math.abs(position.sl)) : '');
+    setTrailingInput(position.trailing_sl_pct ? String(position.trailing_sl_pct) : '');
+    setTpMode('abs');
+    setSlMode('abs');
+    setTargetModal({ visible: true, position });
+  };
+
+  const saveTarget = async () => {
+    const pos = targetModal.position;
+    if (!pos) return;
+    setSaving(true);
+    try {
+      const payload: any = {};
+      if (tpInput) {
+        if (tpMode === 'pct') payload.tp_pct = parseFloat(tpInput);
+        else payload.tp = parseFloat(tpInput);
+      }
+      if (slInput) {
+        if (slMode === 'pct') payload.sl_pct = parseFloat(slInput);
+        else payload.sl = -Math.abs(parseFloat(slInput));
+      }
+      if (trailingInput) payload.trailing_sl = parseFloat(trailingInput);
+      await intentAPI.updateTpSl(pos.intent_id, payload);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setTargetModal({ visible: false, position: null });
+      load();
+    } catch {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Error', 'Failed to update targets');
+    }
+    setSaving(false);
+  };
 
   const handleClose = (intentId: string, symbol: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -325,34 +370,119 @@ export default function Positions() {
                     {p.sl && (
                       <View style={styles.posMetric}>
                         <Text style={styles.posMetricLabel}>SL</Text>
-                        <Text style={[styles.posMetricValue, { color: Colors.red }]}>₹{p.sl}</Text>
+                        <Text style={[styles.posMetricValue, { color: Colors.red }]}>₹{Math.abs(p.sl)}</Text>
                       </View>
                     )}
+                    {p.trailing_sl_pct ? (
+                      <View style={styles.posMetric}>
+                        <Text style={styles.posMetricLabel}>Trail</Text>
+                        <Text style={[styles.posMetricValue, { color: Colors.amber }]}>{p.trailing_sl_pct}%</Text>
+                      </View>
+                    ) : null}
                     <View style={styles.posMetric}>
                       <Text style={styles.posMetricLabel}>Legs</Text>
                       <Text style={styles.posMetricValue}>{legs.length}</Text>
                     </View>
                   </View>
 
-                  {/* Opened */}
+                  {/* Opened + Actions */}
                   <View style={styles.posFooter}>
                     <Text style={styles.posDate}>
                       {p.created_at ? new Date(p.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
                     </Text>
-                    <TouchableOpacity
-                      onPress={() => handleClose(p.intent_id, p.underlying)}
-                      disabled={closing === p.intent_id}
-                      style={styles.closeBtn}
-                    >
-                      <LinearGradient colors={['#7F1D1D', '#EF4444']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.closeBtnGrad}>
-                        <Text style={styles.closeBtnText}>{closing === p.intent_id ? 'Closing...' : 'Close'}</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity onPress={() => openTargetModal(p)} style={styles.targetBtn}>
+                        <Text style={styles.targetBtnText}>🎯 Target</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleClose(p.intent_id, p.underlying)}
+                        disabled={closing === p.intent_id}
+                        style={styles.closeBtn}
+                      >
+                        <LinearGradient colors={['#7F1D1D', '#EF4444']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.closeBtnGrad}>
+                          <Text style={styles.closeBtnText}>{closing === p.intent_id ? 'Closing...' : 'Close'}</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </MetalCard>
               );
             })
           )}
+
+          {/* Set Target Modal */}
+          <Modal visible={targetModal.visible} transparent animationType="slide">
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>Set Profit / Loss Target</Text>
+                <Text style={styles.modalSubtitle}>{targetModal.position?.underlying}</Text>
+
+                {/* TP */}
+                <View style={styles.modalRow}>
+                  <Text style={styles.modalLabel}>Take Profit</Text>
+                  <View style={styles.modeToggle}>
+                    <TouchableOpacity onPress={() => setTpMode('abs')} style={[styles.modeBtn, tpMode === 'abs' && styles.modeBtnActive]}>
+                      <Text style={[styles.modeBtnText, tpMode === 'abs' && styles.modeBtnTextActive]}>₹</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setTpMode('pct')} style={[styles.modeBtn, tpMode === 'pct' && styles.modeBtnActive]}>
+                      <Text style={[styles.modeBtnText, tpMode === 'pct' && styles.modeBtnTextActive]}>%</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <TextInput
+                  style={styles.modalInput}
+                  value={tpInput}
+                  onChangeText={setTpInput}
+                  placeholder={tpMode === 'pct' ? 'e.g. 5 (exit at 5% profit)' : 'e.g. 6000'}
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="numeric"
+                />
+
+                {/* SL */}
+                <View style={styles.modalRow}>
+                  <Text style={styles.modalLabel}>Stop Loss</Text>
+                  <View style={styles.modeToggle}>
+                    <TouchableOpacity onPress={() => setSlMode('abs')} style={[styles.modeBtn, slMode === 'abs' && styles.modeBtnActive]}>
+                      <Text style={[styles.modeBtnText, slMode === 'abs' && styles.modeBtnTextActive]}>₹</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setSlMode('pct')} style={[styles.modeBtn, slMode === 'pct' && styles.modeBtnActive]}>
+                      <Text style={[styles.modeBtnText, slMode === 'pct' && styles.modeBtnTextActive]}>%</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <TextInput
+                  style={styles.modalInput}
+                  value={slInput}
+                  onChangeText={setSlInput}
+                  placeholder={slMode === 'pct' ? 'e.g. 3 (exit at 3% loss)' : 'e.g. 2000'}
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="numeric"
+                />
+
+                {/* Trailing SL */}
+                <Text style={[styles.modalLabel, { marginTop: 12 }]}>Trailing SL (%)</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={trailingInput}
+                  onChangeText={setTrailingInput}
+                  placeholder="e.g. 50 (exit if profit drops 50% from peak)"
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="numeric"
+                />
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity onPress={() => setTargetModal({ visible: false, position: null })} style={styles.modalCancelBtn}>
+                    <Text style={styles.modalCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={saveTarget} disabled={saving} style={styles.modalSaveBtn}>
+                    <LinearGradient colors={['#1D4ED8', '#3B82F6']} style={styles.modalSaveBtnGrad}>
+                      <Text style={styles.modalSaveText}>{saving ? 'Saving...' : 'Save'}</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </Modal>
           <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
@@ -412,4 +542,34 @@ const styles = StyleSheet.create({
   closeBtn: { borderRadius: Radius.sm, overflow: 'hidden' },
   closeBtnGrad: { paddingHorizontal: 16, paddingVertical: 7 },
   closeBtnText: { fontSize: 13, fontWeight: '600', color: '#fff' },
+  targetBtn: {
+    borderRadius: Radius.sm, borderWidth: 1, borderColor: Colors.accent,
+    paddingHorizontal: 12, paddingVertical: 6, backgroundColor: Colors.accentSoft,
+  },
+  targetBtnText: { fontSize: 12, fontWeight: '600', color: Colors.accentLight },
+  // Modal
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+  modalContent: {
+    backgroundColor: Colors.bgElevated, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl,
+    padding: Spacing.lg, paddingBottom: 40,
+  },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
+  modalSubtitle: { fontSize: 13, color: Colors.textSecondary, marginBottom: 16 },
+  modalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 },
+  modalLabel: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary },
+  modeToggle: { flexDirection: 'row', gap: 4 },
+  modeBtn: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border },
+  modeBtnActive: { borderColor: Colors.accent, backgroundColor: Colors.accentSoft },
+  modeBtnText: { fontSize: 13, color: Colors.textMuted, fontWeight: '600' },
+  modeBtnTextActive: { color: Colors.accentLight },
+  modalInput: {
+    marginTop: 6, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.sm,
+    padding: 12, fontSize: 15, color: Colors.textPrimary, backgroundColor: Colors.bgGlass,
+  },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 20 },
+  modalCancelBtn: { paddingHorizontal: 16, paddingVertical: 10 },
+  modalCancelText: { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
+  modalSaveBtn: { borderRadius: Radius.sm, overflow: 'hidden' },
+  modalSaveBtnGrad: { paddingHorizontal: 24, paddingVertical: 10 },
+  modalSaveText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 });

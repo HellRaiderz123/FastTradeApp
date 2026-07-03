@@ -130,62 +130,87 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")
     
-    # Initialize VIX data and start schedulers
-    try:
-        # Get startup delay config from environment (prevents startup blocking)
-        daily_backfill_delay = int(os.getenv("DAILY_BACKFILL_DELAY_MINUTES", "5"))
-        vix_backfill_delay = int(os.getenv("VIX_BACKFILL_DELAY_MINUTES", "2"))
-        
-        initialize_vix_data()
-        start_candle_scheduler()
-        start_daily_candles_scheduler(delay_minutes=daily_backfill_delay)
-        start_vix_scheduler(delay_minutes=vix_backfill_delay)
-        start_auto_exit_scheduler()  # Monitor TP/SL/Trailing stops
-        start_expiry_exit_scheduler()  # Auto-exit options near expiry
-        start_intraday_candles_scheduler(delay_minutes=3)  # 5m + 1h candles
-        start_twitter_sentiment_scheduler()  # Twitter market sentiment
-        start_nifty100_reconciliation_scheduler()  # Daily Nifty100 AI reconciliation
-        start_holdings_reconciliation_scheduler()   # Daily Zerodha holdings review
-        start_neon_sync_scheduler()            # Hourly delta backup to Neon
-        start_zerodha_auto_login_scheduler()    # Daily auto-login at 8 AM IST
-        start_strategy_discovery_scheduler()    # Daily strategy discovery at 4:15 PM IST
-        start_strategy_decay_scheduler()         # Daily decay check at 4:30 PM IST
-        start_watchlist_analysis_scheduler()     # Daily AI agents analysis at 8:45 AM IST
-        logger.info("✅ Schedulers started")
-    except Exception as e:
-        logger.warning(f"⚠️ Schedulers failed to start: {e}")
+    # Initialize schedulers only if enabled (set SCHEDULERS_ENABLED=false to skip)
+    schedulers_enabled = os.getenv("SCHEDULERS_ENABLED", "true").lower() == "true"
+    
+    if schedulers_enabled:
+        try:
+            daily_backfill_delay = int(os.getenv("DAILY_BACKFILL_DELAY_MINUTES", "5"))
+            vix_backfill_delay = int(os.getenv("VIX_BACKFILL_DELAY_MINUTES", "2"))
+            
+            import threading
+            threading.Thread(target=initialize_vix_data, name="vix-init", daemon=True).start()
+            start_candle_scheduler()
+            start_daily_candles_scheduler(delay_minutes=daily_backfill_delay)
+            start_vix_scheduler(delay_minutes=vix_backfill_delay)
+            start_auto_exit_scheduler()
+            start_expiry_exit_scheduler()
+            start_intraday_candles_scheduler(delay_minutes=3)
+            start_twitter_sentiment_scheduler()
+            start_nifty100_reconciliation_scheduler()
+            start_holdings_reconciliation_scheduler()
+            start_neon_sync_scheduler()
+            start_zerodha_auto_login_scheduler()
+            start_strategy_discovery_scheduler()
+            start_strategy_decay_scheduler()
+            start_watchlist_analysis_scheduler()
+            logger.info("✅ Schedulers started")
+        except Exception as e:
+            logger.warning(f"⚠️ Schedulers failed to start: {e}")
 
-    # Fire Zerodha auto-login immediately on startup
-    try:
-        import threading
-        from app.core.market.scheduler import _zerodha_auto_login_job
-        threading.Thread(target=_zerodha_auto_login_job, name="zerodha-startup-login", daemon=True).start()
-        logger.info("🔐 Zerodha auto-login triggered on startup")
-    except Exception as e:
-        logger.warning(f"⚠️ Zerodha startup login failed: {e}")
+        # Fire Zerodha auto-login immediately on startup
+        try:
+            import threading
+            from app.core.market.scheduler import _zerodha_auto_login_job
+            threading.Thread(target=_zerodha_auto_login_job, name="zerodha-startup-login", daemon=True).start()
+            logger.info("🔐 Zerodha auto-login triggered on startup")
+        except Exception as e:
+            logger.warning(f"⚠️ Zerodha startup login failed: {e}")
 
-    # Resume auto-trader scheduler if it was RUNNING before restart
-    try:
-        from app.db.session import SessionLocal as _SL
-        from app.db.models_auto_trader import AutoTraderConfig as _ATC
-        from app.core.auto_trader import _ensure_scheduler_job, reset_daily_counters
-        _db = _SL()
-        _cfg = _db.query(_ATC).first()
-        if _cfg and _cfg.enabled and _cfg.status == "RUNNING":
-            _ensure_scheduler_job(_cfg.scan_interval_sec or 30)
-            # Reset daily counters on fresh server start
-            reset_daily_counters(_db)
-            logger.info("✅ Auto-trader scheduler resumed (was RUNNING before restart)")
-        _db.close()
-    except Exception as e:
-        logger.warning(f"⚠️ Auto-trader resume failed: {e}")
+        # Resume auto-trader scheduler if it was RUNNING before restart
+        try:
+            from app.db.session import SessionLocal as _SL
+            from app.db.models_auto_trader import AutoTraderConfig as _ATC
+            from app.core.auto_trader import _ensure_scheduler_job, reset_daily_counters
+            _db = _SL()
+            _cfg = _db.query(_ATC).first()
+            if _cfg and _cfg.enabled and _cfg.status == "RUNNING":
+                _ensure_scheduler_job(_cfg.scan_interval_sec or 30)
+                reset_daily_counters(_db)
+                logger.info("✅ Auto-trader scheduler resumed (was RUNNING before restart)")
+            _db.close()
+        except Exception as e:
+            logger.warning(f"⚠️ Auto-trader resume failed: {e}")
 
-    # Resume condition-scanner scheduler if any strategies have auto_scan_enabled
-    try:
-        from app.core.condition_scanner_scheduler import resume_scanner_on_startup
-        resume_scanner_on_startup()
-    except Exception as e:
-        logger.warning(f"⚠️ Condition scanner resume failed: {e}")
+        # Resume condition-scanner scheduler
+        try:
+            from app.core.condition_scanner_scheduler import resume_scanner_on_startup
+            resume_scanner_on_startup()
+        except Exception as e:
+            logger.warning(f"⚠️ Condition scanner resume failed: {e}")
+
+        # Schedule daily AI outcome evaluation
+        try:
+            from apscheduler.triggers.interval import IntervalTrigger
+            from app.core.market.scheduler import _scheduler
+            from app.services.trading_agents import evaluate_pending_outcomes
+
+            def _run_outcome_evaluation():
+                updated = evaluate_pending_outcomes(evaluation_days=3)
+                if updated:
+                    logger.info(f"🤖 AI outcome evaluation: {updated} decisions evaluated")
+
+            _scheduler.add_job(
+                _run_outcome_evaluation,
+                trigger=IntervalTrigger(hours=24),
+                id="ai_outcome_evaluator",
+                replace_existing=True,
+            )
+            logger.info("✅ AI outcome evaluator scheduled (daily)")
+        except Exception as e:
+            logger.warning(f"⚠️ AI outcome evaluator scheduler failed: {e}")
+    else:
+        logger.info("⏭️ Schedulers DISABLED (SCHEDULERS_ENABLED=false)")
 
     # Wire event loop into trading_agents so background threads can broadcast WS events
     try:
@@ -195,31 +220,8 @@ async def lifespan(app: FastAPI):
         logger.info("✅ TradingAgents event loop wired")
     except Exception as e:
         logger.warning(f"⚠️ TradingAgents event loop wiring failed: {e}")
-
-    # Schedule daily AI outcome evaluation (runs every 24h, skips if already done)
-    try:
-        from apscheduler.triggers.interval import IntervalTrigger
-        from app.core.market.scheduler import _scheduler
-        from app.services.trading_agents import evaluate_pending_outcomes
-
-        def _run_outcome_evaluation():
-            updated = evaluate_pending_outcomes(evaluation_days=3)
-            if updated:
-                logger.info(f"🤖 AI outcome evaluation: {updated} decisions evaluated")
-
-        _scheduler.add_job(
-            _run_outcome_evaluation,
-            trigger=IntervalTrigger(hours=24),
-            id="ai_outcome_evaluator",
-            replace_existing=True,
-        )
-        logger.info("✅ AI outcome evaluator scheduled (daily)")
-    except Exception as e:
-        logger.warning(f"⚠️ AI outcome evaluator scheduler failed: {e}")
     
     # Start WebSocket background tasks
-    # FIX: Initialize to None before try block — prevents NameError on shutdown
-    # if task creation fails mid-way.
     mtm_task = None
     health_task = None
     db = None
@@ -228,8 +230,6 @@ async def lifespan(app: FastAPI):
         from app.db.session import SessionLocal
         
         db = SessionLocal()
-        
-        # Create background tasks
         mtm_task = asyncio.create_task(periodic_mtm_updates(db))
         health_task = asyncio.create_task(periodic_system_health(db))
         

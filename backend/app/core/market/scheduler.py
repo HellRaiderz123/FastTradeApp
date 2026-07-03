@@ -481,7 +481,16 @@ def start_candle_scheduler():
 
     scheduler.start()
     logger.info("🟢 Candle scheduler started")
-    _update()  # Initial run
+
+    # Defer initial run to avoid blocking startup (prevents 504)
+    from datetime import datetime, timedelta
+    scheduler.add_job(
+        func=_update,
+        trigger="date",
+        run_date=datetime.now() + timedelta(seconds=10),
+        id="candle_15m_initial_run",
+        replace_existing=True,
+    )
 
 
 def start_vix_scheduler(delay_minutes: int = 2):

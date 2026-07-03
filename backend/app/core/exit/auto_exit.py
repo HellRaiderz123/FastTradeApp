@@ -23,7 +23,6 @@ def run_auto_exit(db: Session):
         db.query(ExecutionIntent)
         .filter(
             ExecutionIntent.status == "EXECUTED",
-            ExecutionIntent.pnl.isnot(None),
         )
         .all()
     )
@@ -37,7 +36,7 @@ def run_auto_exit(db: Session):
 
     for intent in intents:
         reason = None
-        current_pnl = intent.pnl
+        current_pnl = intent.pnl or 0.0
 
         # Update max unrealized PnL (track highest profit)
         max_pnl = getattr(intent, 'max_unrealized_pnl', None) or 0.0

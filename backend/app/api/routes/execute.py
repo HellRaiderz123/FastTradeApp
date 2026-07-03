@@ -175,6 +175,10 @@ def execute_paper(
         entry_credit = compute_entry_credit_total(intent.ticket)
     intent.entry_credit = entry_credit  # pyright: ignore[reportAttributeAccessIssue]
 
+    # Initialize pnl to 0.0 so MTM updates have a valid baseline (avoids NULL → 0 confusion)
+    if intent.pnl is None:  # type: ignore
+        intent.pnl = 0.0  # type: ignore
+
     margin_required = result.get("margin_required")
     if margin_required is not None:
         intent.margin_required = margin_required  # pyright: ignore[reportAttributeAccessIssue]
