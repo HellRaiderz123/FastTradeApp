@@ -452,28 +452,42 @@ class BulkPredictRequest(BaseModel):
 async def predict_bulk(request: BulkPredictRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
     Get ML predictions for multiple symbols at once.
+    Uses thread pool to run predictions concurrently instead of sequentially.
     """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
     from app.core.signals.ml_engine import ml_stock_signal
-    
-    predictions = {}
-    for symbol in request.symbols[:30]:  # Cap at 30 symbols
-        sym = symbol.upper()
+
+    symbols = [s.upper() for s in request.symbols[:30]]
+
+    def _predict_one(sym: str) -> tuple:
+        local_db = SessionLocal()
         try:
-            result = ml_stock_signal(db, sym)
-            predictions[sym] = {
+            result = ml_stock_signal(local_db, sym)
+            return sym, {
                 "signal": result.get("signal", "NO_TRADE"),
                 "confidence": result.get("confidence", 0),
                 "bias": result.get("bias", "NEUTRAL"),
                 "reason": result.get("reason", ""),
+                "model_type": result.get("model_type", "none"),
             }
         except Exception as e:
-            predictions[sym] = {
+            return sym, {
                 "signal": "NO_TRADE",
                 "confidence": 0,
                 "bias": "NEUTRAL",
                 "reason": f"Error: {str(e)}",
             }
-    
+        finally:
+            local_db.close()
+
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=min(len(symbols), 6)) as pool:
+        futures = [loop.run_in_executor(pool, _predict_one, sym) for sym in symbols]
+        results = await asyncio.gather(*futures)
+
+    predictions = dict(results)
+
     return {
         "predictions": predictions,
         "count": len(predictions),

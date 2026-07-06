@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from app.db.models_intent import ExecutionIntent
@@ -34,6 +35,8 @@ def run_auto_exit(db: Session):
 
     notifications = NotificationService(db)
 
+    now = now_ist()
+
     for intent in intents:
         reason = None
         current_pnl = intent.pnl or 0.0
@@ -44,19 +47,37 @@ def run_auto_exit(db: Session):
             intent.max_unrealized_pnl = current_pnl  # type: ignore
             max_pnl = current_pnl
 
+        # --- Fix 2: Exit at 50% of max profit for credit spreads ---
+        entry_credit = intent.entry_credit or 0.0
+        strategy = (intent.strategy or "").upper()
+        is_credit_spread = strategy in ("BULL_PUT", "BEAR_CALL", "IRON_CONDOR", "SHORT_STRADDLE", "SHORT_STRANGLE")
+        if is_credit_spread and entry_credit > 0 and current_pnl >= entry_credit * 0.5:
+            reason = "PROFIT_50PCT"
+
+        # --- Fix 6: Time-based exit (1 day before expiry if profitable) ---
+        if not reason and intent.expiry and current_pnl > 0:
+            try:
+                from datetime import date as _date
+                expiry_str = str(intent.expiry)
+                expiry_date = _date.fromisoformat(expiry_str)
+                if now.date() >= expiry_date - timedelta(days=1):
+                    reason = "PRE_EXPIRY_EXIT"
+            except (ValueError, TypeError):
+                pass
+
         # Check TP
-        if intent.tp is not None and current_pnl >= intent.tp: # type: ignore
+        if not reason and intent.tp is not None and current_pnl >= intent.tp:  # type: ignore
             reason = "TP_HIT"
 
         # Check SL
-        elif intent.sl is not None and current_pnl <= intent.sl: # type: ignore
+        elif not reason and intent.sl is not None and current_pnl <= intent.sl:  # type: ignore
             reason = "SL_HIT"
 
         # Check trailing stop only if trailing_sl_pct is configured
-        # (50% retracement from peak profit when enabled)
         elif (
-            intent.trailing_sl_pct is not None  # type: ignore
-            and intent.trailing_sl_pct > 0  # Only if explicitly enabled
+            not reason
+            and intent.trailing_sl_pct is not None  # type: ignore
+            and intent.trailing_sl_pct > 0
             and max_pnl > 0
             and current_pnl < (max_pnl * (1 - intent.trailing_sl_pct / 100))  # type: ignore
         ):

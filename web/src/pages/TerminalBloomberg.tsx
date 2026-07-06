@@ -176,18 +176,24 @@ const Terminal: React.FC = () => {
         setTodayEvents([]);
       }
 
-      const metricsRes = await mlAPI.getMetrics().catch(() => null);
-      const status = metricsRes?.data?.model_status || 'not_trained';
-      setMlModelStatus(status);
-      setMlModelType(metricsRes?.data?.model_type || 'none');
-      if (status === 'ready') {
-        const mlRes = await mlAPI.predictBulk(watchlistSymbols).catch(() => null);
-        if (mlRes?.data?.predictions) {
-          setMlPredictions(mlRes.data.predictions);
+      // ML predictions — fire and forget (don't block market data rendering)
+      mlAPI.getMetrics().then((metricsRes) => {
+        const status = metricsRes?.data?.model_status || 'not_trained';
+        setMlModelStatus(status);
+        setMlModelType(metricsRes?.data?.model_type || 'none');
+        if (status === 'ready') {
+          mlAPI.predictBulk(watchlistSymbols).then((mlRes) => {
+            if (mlRes?.data?.predictions) {
+              setMlPredictions(mlRes.data.predictions);
+            }
+          }).catch(() => {});
+        } else {
+          setMlPredictions({});
         }
-      } else {
+      }).catch(() => {
+        setMlModelStatus('unknown');
         setMlPredictions({});
-      }
+      });
     };
 
     fetchMarketData();

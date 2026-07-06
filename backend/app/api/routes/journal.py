@@ -239,20 +239,20 @@ def list_execution_intents(
     intents = db.query(ExecutionIntent).order_by(ExecutionIntent.created_at.desc()).limit(limit).all()
 
     # Best-effort MTM refresh for open paper positions.
-    # (Uses Zerodha websocket ticks when available; REST fallback otherwise.)
+    # Batches all LTP lookups into a single call to avoid N+1 Zerodha API hits.
     try:
         from app.core.execution.paper import PaperExecutionAdapter
+        from app.core.execution.base import get_ticket
+        from app.core.market.ltp import get_ltp
 
         paper = PaperExecutionAdapter()
-        changed = False
+        open_paper_intents = []
+
         for intent in intents:
             if intent is None:
                 continue
-            is_open = (intent.status == "EXECUTED") and (intent.closed_at is None)
-            if not is_open:
+            if intent.status != "EXECUTED" or intent.closed_at is not None:
                 continue
-
-            # Only compute MTM for paper intents (by convention stored in execution_result)
             mode = None
             if isinstance(intent.execution_result, dict):
                 mode = intent.execution_result.get("mode")
@@ -264,22 +264,45 @@ def list_execution_intents(
                     pass
             if mode and str(mode).upper() != "PAPER":
                 continue
+            open_paper_intents.append(intent)
 
-            mtm = paper.mtm(intent)
-            intent.pnl = mtm
-            intent.unrealized_pnl = mtm
-            intent.last_mtm_at = now_ist()
-            changed = True
+        if open_paper_intents:
+            # Collect ALL symbols across all open positions in one batch
+            all_symbols = set()
+            for intent in open_paper_intents:
+                ticket = get_ticket(intent)
+                for leg in ticket.get("legs", []):
+                    sym = leg.get("symbol") or f'{leg.get("strike", "")}{leg.get("type", "")}'
+                    if sym:
+                        all_symbols.add(sym)
 
-            current_margin = getattr(intent, "margin_required", None)
-            if current_margin is None or float(current_margin or 0) <= 0:
-                computed_margin = paper.estimate_margin_required(intent, getattr(intent, "entry_credit", None))
-                if computed_margin and computed_margin > 0:
-                    intent.margin_required = float(computed_margin)
+            # Single batched LTP call (1 Zerodha request instead of N)
+            ltp_map = get_ltp(list(all_symbols)) if all_symbols else {}
+
+            changed = False
+            for intent in open_paper_intents:
+                try:
+                    ticket = get_ticket(intent)
+                    ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
+                    pnl = 0.0
+                    for leg in ticket.get("legs", []):
+                        symbol = leg.get("symbol") or f'{leg.get("strike", "")}{leg.get("type", "")}'
+                        current = ltp_map.get(symbol, 0.0)
+                        entry = leg.get("price")
+                        if entry is None:
+                            continue
+                        leg_qty = paper._resolve_leg_qty(leg, ticket_qty)
+                        sign = 1.0 if leg["side"] == "SELL" else -1.0
+                        pnl += (float(entry) - float(current)) * sign * leg_qty
+                    intent.pnl = round(pnl, 2)
+                    intent.unrealized_pnl = round(pnl, 2)
+                    intent.last_mtm_at = now_ist()
                     changed = True
+                except Exception:
+                    pass
 
-        if changed:
-            db.commit()
+            if changed:
+                db.commit()
     except Exception:
         # Never fail the list endpoint due to MTM calculation.
         pass

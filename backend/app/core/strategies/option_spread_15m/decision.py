@@ -62,21 +62,20 @@ def decide_strategy(
     )
 
     # ================================================
-    # QUALITY GATE (relaxed for more trades)
+    # QUALITY GATE
     # ================================================
-    # Lowered from 4 to 3 to allow more trades in backtests
-    if quality_score < 3:
-        return "NO_TRADE", f"Insufficient quality score ({quality_score}/8 - minimum 3 required)"
+    if quality_score < 4:
+        return "NO_TRADE", f"Insufficient quality score ({quality_score}/8 - minimum 4 required)"
 
     take_bull = bias == "BULLISH"
     take_bear = bias == "BEARISH"
 
-    # Confidence thresholds (adaptive by IV)
-    spread_min_conf = min_confidence
+    # Confidence thresholds (minimum 65% for all trades)
+    spread_min_conf = max(65, min_confidence)
     if iv_regime == "LOW":
-        spread_min_conf = max(55, min_confidence - 10)
+        spread_min_conf = max(65, min_confidence - 5)
     elif iv_regime == "NORMAL":
-        spread_min_conf = max(60, min_confidence - 5)
+        spread_min_conf = max(65, min_confidence)
 
     # Ratio strategies require stronger conviction
     ratio_min_conf = max(65, min_confidence)

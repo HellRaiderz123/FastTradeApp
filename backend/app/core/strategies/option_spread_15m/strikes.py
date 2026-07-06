@@ -53,22 +53,22 @@ def compute_spread_strikes(
     width = step * (2 if risk_mode == "Conservative" else 1)
 
     # ============================
-    # MINIMUM ATM DISTANCE (from risk limits)
+    # MINIMUM ATM DISTANCE (at least 1% OTM)
     # ============================
     min_atm_dist_map = {
-        "LOW": 0.5,
-        "NORMAL": 0.6,
-        "HIGH": 0.8,
+        "LOW": 1.0,
+        "NORMAL": 1.0,
+        "HIGH": 1.2,
     }
-    min_atm_dist_pct = min_atm_dist_map.get(iv_regime, 0.6)
+    min_atm_dist_pct = min_atm_dist_map.get(iv_regime, 1.0)
     
-    # Calculate minimum offset in rupees
+    # Calculate minimum offset in rupees (at least 1% of spot)
     min_offset_rupees = spot * (min_atm_dist_pct / 100.0)
     min_offset_steps = max(1, int(round(min_offset_rupees / step)))
     min_offset = min_offset_steps * step
 
-    # Conservative default: slightly OTM
-    short_offset = step if risk_mode == "Conservative" else min_offset
+    # Always enforce minimum 1% OTM distance
+    short_offset = max(min_offset, step * 2) if risk_mode == "Conservative" else min_offset
 
     # ============================
     # LOW IV → FAR OTM LOGIC

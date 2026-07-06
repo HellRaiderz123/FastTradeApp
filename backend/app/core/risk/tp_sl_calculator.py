@@ -90,10 +90,10 @@ def calculate_tp_sl(
     # TP/SL CALCULATION
     # =========================================
     
-    # Simple 1:1 ratio (risk:reward)
-    # TP = max_risk (profit target)
+    # 1.5:1 reward:risk ratio
+    # TP = 1.5× risk (profit target)
     # SL = -max_risk (stop loss)
-    tp = max_risk
+    tp = max_risk * 1.5
     sl = -max_risk
     
     # =========================================
@@ -101,31 +101,36 @@ def calculate_tp_sl(
     # =========================================
     
     if strategy_type in ["BULL_PUT", "BEAR_CALL"]:
-        # Credit spread: Limited profit potential, high loss potential
-        # For spreads, margin is only 1 lot_size difference (100-200 per spread)
-        # Risk = spread_width × lot_size × num_spreads
+        # Credit spread: TP at 50% of max profit (entry_credit), SL at 1× max loss
+        # R:R ≈ 1.5:1 — exit early to lock gains, let SL be wider
         spread_width = 100  # Typical 100-point spread for NIFTY
         inherent_risk = spread_width * position_qty  # Max possible loss
         
-        # Scale TP/SL based on actual spread risk
         if inherent_risk > 0 and inherent_risk < max_risk:
-            # If spread's max loss is less than our risk tolerance,
-            # adjust TP to be a fraction of the max spread loss
-            tp = inherent_risk * 0.5  # Aim for 50% of max spread loss
-            sl = -inherent_risk * 0.9  # Stop at 90% of max loss
+            # TP = 75% of inherent risk (1.5:1 vs SL)
+            tp = inherent_risk * 0.75
+            # SL = 50% of inherent risk (tighter SL to maintain R:R)
+            sl = -inherent_risk * 0.5
+        else:
+            # Fallback: use capital-based with 1.5:1
+            tp = max_risk * 1.5
+            sl = -max_risk
         
         logger.info(f"SPREAD TP/SL: {strategy_type} - Spread Width: {spread_width}, "
                    f"Inherent Risk: {inherent_risk}, Adjusted TP: {tp}, SL: {sl}")
     
     elif strategy_type == "IRON_CONDOR":
-        # Iron condor: Similar to spreads but double-sided
-        # Max loss = higher spread × lot_size × num
+        # Iron condor: double-sided credit spread
+        # R:R 1.5:1 — TP at 60% of max loss, SL at 40%
         spread_width = 200  # Higher width for iron condor
         inherent_risk = spread_width * position_qty
         
         if inherent_risk > 0 and inherent_risk < max_risk:
-            tp = inherent_risk * 0.4  # Aim for 40% of max loss
-            sl = -inherent_risk * 0.85
+            tp = inherent_risk * 0.6   # 1.5× the SL
+            sl = -inherent_risk * 0.4
+        else:
+            tp = max_risk * 1.5
+            sl = -max_risk
         
         logger.info(f"IRON_CONDOR TP/SL: Spread Width: {spread_width}, "
                    f"Inherent Risk: {inherent_risk}, Adjusted TP: {tp}, SL: {sl}")
