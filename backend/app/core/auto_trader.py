@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -265,9 +265,11 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
         confidence = advice.get("current_confidence", 0)
 
         # Act on HIGH severity signals OR MEDIUM severity with CONSIDER_EXIT action
+        # MEDIUM requires confidence >= threshold to avoid noisy exits on signal flicker
         should_act = (
             (severity == "HIGH" and confidence >= (cfg.reversal_confidence_threshold or 65))
-            or (severity == "MEDIUM" and action == "CONSIDER_EXIT")
+            or (severity == "MEDIUM" and action == "CONSIDER_EXIT"
+                and confidence >= (cfg.reversal_confidence_threshold or 65))
         )
 
         if should_act:
@@ -315,6 +317,24 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
              action="SKIP", underlying=underlying,
              strategy=auto_intents[0].strategy,
              reason=f"Already have open {auto_intents[0].strategy} position for {underlying}",
+             severity="INFO")
+        return
+
+    # Cooldown: don't re-enter within 15 min of a reversal exit on same underlying
+    recent_exit = (
+        db.query(ExecutionIntent)
+        .filter(
+            ExecutionIntent.underlying == underlying,
+            ExecutionIntent.status == "CLOSED",
+            ExecutionIntent.exit_reason == "AUTO_REVERSAL_EXIT",
+            ExecutionIntent.closed_at >= now_ist() - timedelta(minutes=15),
+        )
+        .first()
+    )
+    if recent_exit:
+        _log(db, cfg.id,
+             action="SKIP", underlying=underlying,
+             reason=f"Cooldown: reversal exit {recent_exit.intent_id} was <15min ago",
              severity="INFO")
         return
 

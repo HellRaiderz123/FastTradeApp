@@ -166,7 +166,7 @@ def advise_position(
                 "reason": f"TA says NO_TRADE but {position_name} is direction-neutral - let TP/SL manage exit",
                 "details": f"Neutral strategy held. conf={confidence:.0f}%, market={market_mode}, IV={iv_regime}.",
             }
-        # If position is in profit, suggest taking profits (HIGH severity)
+        # If position is in good profit (>50% of credit), suggest booking
         if pnl > 0 and entry_credit > 0 and (pnl / abs(entry_credit)) > 0.5:
             return {
                 **base,
@@ -179,19 +179,29 @@ def advise_position(
                     f"No new strategy passes quality gates. Consider booking profits."
                 ),
             }
-        # Strategy completely changed to NO_TRADE — this is a clear signal to exit
-        # Use MEDIUM severity minimum so auto-trader can act on it
-        sev = "HIGH" if confidence >= 65 else "MEDIUM"
+        # NO_TRADE without profit — signal just flickered or quality dipped temporarily
+        # Only flag HIGH if there's an actual OPPOSING bias with strong confidence
+        # Otherwise just WATCH — let TP/SL handle the exit
+        if _are_biases_conflicting(position_bias, signal_bias) and confidence >= 70:
+            return {
+                **base,
+                "action": "CONSIDER_EXIT",
+                "severity": "HIGH",
+                "reason": f"TA engine says NO_TRADE with opposing bias ({signal_bias}) — exit recommended",
+                "details": (
+                    f"Your {position_name} ({position_bias}) faces opposing signal bias ({signal_bias}) "
+                    f"with {confidence:.0f}% confidence. Strategy conditions invalidated."
+                ),
+            }
         return {
             **base,
-            "action": "CONSIDER_EXIT",
-            "severity": sev,
-            "reason": f"TA engine says NO_TRADE — strategy conditions no longer valid",
+            "action": "WATCH",
+            "severity": "LOW",
+            "reason": f"TA engine says NO_TRADE — quality/confidence dipped, monitoring",
             "details": (
-                f"Your {position_name} ({position_bias}) is still open but the TA engine "
-                f"no longer recommends any strategy (quality/confidence too low). "
-                f"Current: {signal_bias} bias, {confidence:.0f}% confidence, {market_mode} market. "
-                f"Strategy conditions have changed — consider exiting to avoid risk."
+                f"Your {position_name} ({position_bias}) is still open. TA quality dropped "
+                f"(conf={confidence:.0f}%, bias={signal_bias}) but no opposing signal. "
+                f"TP/SL will manage exit. Re-evaluate if signal persists."
             ),
         }
 
