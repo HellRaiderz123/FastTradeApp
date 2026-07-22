@@ -82,7 +82,7 @@ def _is_price_sane(close: float, baseline: float | None, threshold: float = 0.50
     return (1 - threshold) <= ratio <= (1 + threshold)
 
 
-def fetch_daily_candles(db: Session, symbol: str, days: int = 400):
+def fetch_daily_candles(db: Session, symbol: str, days: int = 2000):
     """Fetch and store daily candles for a symbol."""
     symbol = symbol.upper().strip()
 

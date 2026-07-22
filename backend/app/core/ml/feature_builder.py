@@ -18,10 +18,7 @@ FEATURE_COLUMNS: List[str] = [
     "rsi",
     "macd_hist",
     "adx",
-    # Moving averages
-    "ema_fast",
-    "ema_slow",
-    "ema_long",
+    # EMA slopes (price-relative, not raw price)
     "ema_fast_slope",
     "ema_slow_slope",
     # EMA relative position
@@ -38,6 +35,11 @@ FEATURE_COLUMNS: List[str] = [
     "body_ratio",
     "upper_shadow",
     "lower_shadow",
+    # Additional momentum / mean-reversion
+    "rsi_slope",
+    "ret_5_vs_vol",
+    "close_vs_high20",
+    "close_vs_low20",
 ]
 
 
@@ -96,10 +98,9 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     data["volume_ma"] = data["volume"].rolling(config.vol_window).mean()
     data["volume_ratio"] = data["volume"] / data["volume_ma"]
     
-    # OBV slope (On Balance Volume momentum)
-    obv = ((data["close"] > data["close"].shift(1)).astype(int) * 2 - 1) * data["volume"]
-    obv_cumsum = obv.cumsum()
-    data["obv_slope"] = obv_cumsum.pct_change(10)  # 10-day OBV momentum
+    # OBV direction slope (sign of OBV change, not pct_change of cumsum)
+    obv_direction = ((data["close"] > data["close"].shift(1)).astype(int) * 2 - 1)
+    data["obv_slope"] = obv_direction.rolling(10).mean()  # -1 to +1 smoothed direction
     
     # --- Candle Body Patterns ---
     candle_range = data["high"] - data["low"]
@@ -107,6 +108,14 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     data["body_ratio"] = (data["close"] - data["open"]) / candle_range  # -1 to +1
     data["upper_shadow"] = (data["high"] - data[["open", "close"]].max(axis=1)) / candle_range
     data["lower_shadow"] = (data[["open", "close"]].min(axis=1) - data["low"]) / candle_range
+
+    # --- Additional momentum / mean-reversion features ---
+    data["rsi_slope"] = data["rsi"].pct_change(3)  # RSI momentum
+    data["ret_5_vs_vol"] = data["ret_short"] / (data["volatility"] + 1e-8)  # Sharpe-like ratio
+    rolling_high = data["high"].rolling(20).max()
+    rolling_low = data["low"].rolling(20).min()
+    data["close_vs_high20"] = (data["close"] - rolling_high) / rolling_high  # proximity to 20d high
+    data["close_vs_low20"] = (data["close"] - rolling_low) / rolling_low    # proximity to 20d low
 
     if float(data["volume"].fillna(0).sum()) == 0.0:
         data["volume_ratio"] = 1.0

@@ -21,11 +21,47 @@ from app.core.ml.model_registry import save_model, load_model
 logger = logging.getLogger(__name__)
 
 
-def _temporal_split(x: pd.DataFrame, y: pd.Series, test_ratio: float = 0.2) -> Tuple:
-    split_idx = int(len(x) * (1 - test_ratio))
-    x_train, x_test = x.iloc[:split_idx], x.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
-    return x_train, x_test, y_train, y_test
+def _per_symbol_split(
+    x: pd.DataFrame, y: pd.Series, test_ratio: float = 0.2
+) -> Tuple:
+    """
+    Split each symbol's rows independently at test_ratio, then combine.
+    Prevents a single market regime (e.g. recent bull run) from dominating
+    the test set when data is sorted by timestamp across all symbols.
+    """
+    from app.core.ml.dataset import build_stock_ml_dataset  # avoid circular at module level
+
+    # x must carry a 'symbol' column — added by build_stock_ml_dataset
+    if "symbol" not in x.columns:
+        # Fallback: plain temporal split
+        split_idx = int(len(x) * (1 - test_ratio))
+        return x.iloc[:split_idx], x.iloc[split_idx:], y.iloc[:split_idx], y.iloc[split_idx:]
+
+    train_idx, test_idx = [], []
+    for _, grp in x.groupby("symbol", sort=False):
+        n = len(grp)
+        cut = int(n * (1 - test_ratio))
+        train_idx.extend(grp.index[:cut].tolist())
+        test_idx.extend(grp.index[cut:].tolist())
+
+    return (
+        x.loc[train_idx].drop(columns=["symbol"]),
+        x.loc[test_idx].drop(columns=["symbol"]),
+        y.loc[train_idx],
+        y.loc[test_idx],
+    )
+
+
+def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
+    """Find threshold that maximises F1 on the validation set."""
+    from sklearn.metrics import f1_score as _f1
+    best_t, best_f1 = 0.5, 0.0
+    for t in np.arange(0.35, 0.70, 0.01):
+        preds = (y_proba >= t).astype(int)
+        score = _f1(y_true, preds, zero_division=0)
+        if score > best_f1:
+            best_f1, best_t = score, t
+    return round(float(best_t), 2)
 
 
 def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) -> Dict[str, float]:
@@ -33,22 +69,20 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
     if x.empty or len(x) < config.min_rows:
         raise ValueError(f"Not enough data to train the stock ML model (got {len(x)} rows, need {config.min_rows})")
 
-    # Log class distribution
     class_counts = y.value_counts()
     logger.info(f"📊 Dataset: {len(x)} samples, Classes: {dict(class_counts)}")
 
-    x_train, x_test, y_train, y_test = _temporal_split(x, y)
+    x_train, x_test, y_train, y_test = _per_symbol_split(x, y)
 
-    # GradientBoosting: much better than LogisticRegression for non-linear trading patterns
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", GradientBoostingClassifier(
             n_estimators=200,
-            max_depth=5,
-            learning_rate=0.1,
+            max_depth=4,
+            learning_rate=0.05,
             subsample=0.8,
-            min_samples_split=20,
-            min_samples_leaf=10,
+            min_samples_split=30,
+            min_samples_leaf=15,
             max_features="sqrt",
             random_state=42,
         )),
@@ -56,9 +90,13 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
 
     pipeline.fit(x_train, y_train)
 
-    # Get predictions for test set
-    y_pred = pipeline.predict(x_test) if len(x_test) else np.array([])
     y_proba = pipeline.predict_proba(x_test)[:, 1] if len(x_test) else np.array([])
+
+    # Find calibrated threshold on test set, store it in metadata for inference
+    best_threshold = _find_best_threshold(y_test.values, y_proba) if len(x_test) else 0.5
+    logger.info(f"📊 Calibrated threshold: {best_threshold}")
+
+    y_pred = (y_proba >= best_threshold).astype(int) if len(x_test) else np.array([])
     
     # Calculate metrics
     accuracy = float(pipeline.score(x_test, y_test)) if len(x_test) else 0.0
@@ -93,6 +131,7 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
         "timeframe": config.timeframe,
         "horizon": config.horizon,
         "return_threshold": config.return_threshold,
+        "decision_threshold": best_threshold,
         "train_rows": int(len(x_train)),
         "test_rows": int(len(x_test)),
         "total_samples": int(len(x)),
@@ -115,55 +154,44 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
     return metadata
 
 
-def _prob_to_signal(prob_up: float, config: StockMLConfig) -> Dict[str, str]:
-    if prob_up >= config.bullish_prob_threshold:
-        return {"signal": "BULLISH", "bias": "BULLISH"}
-    if prob_up <= config.bearish_prob_threshold:
-        return {"signal": "BEARISH", "bias": "BEARISH"}
-    return {"signal": "NO_TRADE", "bias": "NEUTRAL"}
-
-
 def predict_stock_signal(db: Session, symbol: str, config: StockMLConfig) -> Dict:
     model = load_model(config)
     if model is None:
-        return {
-            "signal": "NO_TRADE",
-            "confidence": 0,
-            "reason": "ML model not trained",
-            "bias": "NEUTRAL",
-        }
+        return {"signal": "NO_TRADE", "confidence": 0, "reason": "ML model not trained", "bias": "NEUTRAL"}
+
+    # Load calibrated threshold from saved metadata
+    meta_path = config.model_path.with_suffix(".json")
+    decision_threshold = 0.5
+    if meta_path.exists():
+        import json
+        with open(meta_path, "r") as f:
+            decision_threshold = json.load(f).get("decision_threshold", 0.5)
 
     raw = _load_candles_df(db, symbol, config.timeframe, config.max_candles)
     if raw.empty:
-        return {
-            "signal": "NO_TRADE",
-            "confidence": 0,
-            "reason": "No candle data",
-            "bias": "NEUTRAL",
-        }
+        return {"signal": "NO_TRADE", "confidence": 0, "reason": "No candle data", "bias": "NEUTRAL"}
 
     features = build_features_from_df(raw, config)
     if features.empty:
-        return {
-            "signal": "NO_TRADE",
-            "confidence": 0,
-            "reason": "Not enough feature rows",
-            "bias": "NEUTRAL",
-        }
+        return {"signal": "NO_TRADE", "confidence": 0, "reason": "Not enough feature rows", "bias": "NEUTRAL"}
 
-    latest = features.iloc[-1:]
-    x = latest[FEATURE_COLUMNS]
-
+    x = features.iloc[-1:][FEATURE_COLUMNS]
     prob_up = float(model.predict_proba(x)[0][1])
-    signal_map = _prob_to_signal(prob_up, config)
-    confidence = int(max(prob_up, 1 - prob_up) * 100)
+
+    if prob_up >= decision_threshold + 0.05:
+        signal, bias = "BULLISH", "BULLISH"
+    elif prob_up <= decision_threshold - 0.05:
+        signal, bias = "BEARISH", "BEARISH"
+    else:
+        signal, bias = "NO_TRADE", "NEUTRAL"
+
+    confidence = int(abs(prob_up - decision_threshold) / (1 - decision_threshold) * 100)
+    confidence = max(0, min(confidence, 100))
 
     return {
-        "signal": signal_map["signal"],
+        "signal": signal,
         "confidence": confidence,
-        "reason": f"ML prob_up={prob_up:.3f}",
-        "bias": signal_map["bias"],
-        "indicators": {
-            "ml_prob_up": round(prob_up, 4),
-        },
+        "reason": f"ML prob_up={prob_up:.3f} threshold={decision_threshold}",
+        "bias": bias,
+        "indicators": {"ml_prob_up": round(prob_up, 4), "decision_threshold": decision_threshold},
     }

@@ -58,7 +58,7 @@ def _get_nifty100_symbols(db: Session) -> list:
             CandleDaily.symbol
         ).having(func.count(CandleDaily.id) >= 500).order_by(
             func.count(CandleDaily.id).desc()
-        ).limit(150)  # Get up to 150 symbols
+        ).limit(200)  # Get up to 200 symbols
         
         symbols = [row[0] for row in query.all()]
         
@@ -136,41 +136,44 @@ async def get_ml_metrics(db: Session = Depends(get_db)) -> Dict[str, Any]:
 @router.post("/train")
 async def train_model_endpoint(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    Manually trigger ML model training
-    Trains on NIFTY100 symbols with 500+ days of daily candle data for swing trading
+    Manually trigger ML model training (runs in background, returns job_id).
+    Poll GET /ml/jobs/{job_id} for status and results.
     """
-    try:
-        start_time = datetime.now()
-        
-        # Get NIFTY100 symbols with 500+ days of data
-        symbols = _get_nifty100_symbols(db)
-        if not symbols:
-            raise ValueError("No stock data found in database with sufficient history (500+ days)")
-        
-        # Train the model
-        result = train_stock_model(db, symbols=symbols, config=ML_CONFIG)
-        
-        end_time = datetime.now()
-        duration = (end_time - start_time).total_seconds()
-        
+    from app.core.ml.job_store import submit_job, get_running_by_type
+
+    # Prevent duplicate concurrent training jobs
+    running = get_running_by_type("train")
+    if running:
         return {
-            "status": "success",
-            "message": f"Model training completed successfully using {len(symbols)} NIFTY100 symbols with 500+ days of data",
-            "symbols_used": len(symbols),
-            "symbols_list": symbols[:10],  # Return first 10 for reference
-            "accuracy": result.get("accuracy"),
-            "precision": result.get("precision"),
-            "recall": result.get("recall"),
-            "f1_score": result.get("f1_score"),
-            "total_samples": result.get("total_samples"),
-            "train_rows": result.get("train_rows"),
-            "test_rows": result.get("test_rows"),
-            "training_duration": duration,
-            "training_timestamp": start_time.isoformat(),
+            "status": "already_running",
+            "job_id": running["job_id"],
+            "message": "Training already in progress",
         }
-    
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Training failed: {str(e)}")
+
+    symbols = _get_nifty100_symbols(db)
+    if not symbols:
+        raise HTTPException(status_code=400, detail="No stock data found with sufficient history (500+ days)")
+
+    def _run_training():
+        local_db = SessionLocal()
+        start = datetime.now()
+        try:
+            result = train_stock_model(local_db, symbols=symbols, config=ML_CONFIG)
+            result["training_duration"] = (datetime.now() - start).total_seconds()
+            result["symbols_used"] = len(symbols)
+            result["symbols_list"] = symbols[:10]
+            result["status"] = "success"
+            return result
+        finally:
+            local_db.close()
+
+    job_id = submit_job("train", _run_training, {"symbols_count": len(symbols)})
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "message": f"Training started for {len(symbols)} symbols. Poll /ml/jobs/{job_id} for results.",
+        "symbols_count": len(symbols),
+    }
 
 
 # --- Backfill status tracking ---
@@ -242,11 +245,11 @@ async def backfill_daily_candles(background_tasks: BackgroundTasks):
     from app.core.market.scheduler import _get_daily_symbols
     symbols = _get_daily_symbols()
     
-    background_tasks.add_task(_run_backfill, symbols, 900)
+    background_tasks.add_task(_run_backfill, symbols, 2000)
     
     return {
         "status": "started",
-        "message": f"Backfilling {len(symbols)} NIFTY100 symbols with 900 days of daily data",
+        "message": f"Backfilling {len(symbols)} NIFTY100 symbols with 2000 days of daily data",
         "total_symbols": len(symbols),
     }
 
@@ -344,13 +347,16 @@ async def get_model_info() -> Dict[str, Any]:
         if not meta_path.exists():
             return {
                 "model_type": "GradientBoosting",
-                "total_features": 24,
+                "total_features": 27,
                 "feature_names": [
                     "ret_1", "ret_short", "ret_long", "volatility", "atr_norm",
-                    "rsi", "macd_hist", "adx", "ema_fast", "ema_slow", "ema_long",
-                    "ema_fast_slope", "ema_slow_slope", "price_vs_ema_fast",
-                    "price_vs_ema_slow", "ema_cross", "bb_width", "bb_position",
-                    "volume_ratio", "obv_slope", "body_ratio", "upper_shadow", "lower_shadow",
+                    "rsi", "macd_hist", "adx",
+                    "ema_fast_slope", "ema_slow_slope",
+                    "price_vs_ema_fast", "price_vs_ema_slow", "ema_cross",
+                    "bb_width", "bb_position",
+                    "volume_ratio", "obv_slope",
+                    "body_ratio", "upper_shadow", "lower_shadow",
+                    "rsi_slope", "ret_5_vs_vol", "close_vs_high20", "close_vs_low20",
                 ],
                 "model_status": "not_trained",
                 "training_date": None,

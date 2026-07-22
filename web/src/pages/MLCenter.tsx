@@ -138,6 +138,7 @@ const OverviewTab: React.FC = () => {
   const [trainingLog, setTrainingLog] = useState<string>('');
   const [refreshing, setRefreshing] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const refreshingRef = React.useRef(false);
   
   // Backfill state
   const [isBackfilling, setIsBackfilling] = useState(false);
@@ -226,8 +227,10 @@ const OverviewTab: React.FC = () => {
   };
 
   const loadMLMetrics = async () => {
+    if (refreshingRef.current) return;  // debounce concurrent calls
+    refreshingRef.current = true;
+    setRefreshing(true);
     try {
-      setRefreshing(true);
       const response = await mlAPI.getMetrics();
       const data = response.data;
       if (data) {
@@ -246,6 +249,7 @@ const OverviewTab: React.FC = () => {
       console.error('Error loading ML metrics:', error);
       setMetrics(prev => ({ ...prev, model_status: 'error' }));
     } finally {
+      refreshingRef.current = false;
       setRefreshing(false);
     }
   };
@@ -288,15 +292,58 @@ const OverviewTab: React.FC = () => {
 
       const response = await mlAPI.train();
       const data = response.data;
-      if (data) {
-        setTrainingLog(prev => prev + `✓ Training completed\n${JSON.stringify(data, null, 2)}`);
-        loadMLMetrics();
+
+      if (data?.status === 'already_running') {
+        setTrainingLog(prev => prev + `⚠ Training already in progress (job: ${data.job_id})\n`);
+      } else if (data?.status !== 'started') {
+        setTrainingLog(prev => prev + `✗ Unexpected response: ${JSON.stringify(data)}`);
+        setIsTraining(false);
+        return;
+      } else {
+        setTrainingLog(prev => prev + `⏳ Training started (job: ${data.job_id}). Waiting for completion...\n`);
       }
+
+      const jobId = data.job_id;
+      let attempts = 0;
+      const MAX_ATTEMPTS = 120; // 6 minutes max (120 × 3s)
+
+      const poll = async (): Promise<void> => {
+        attempts++;
+        if (attempts > MAX_ATTEMPTS) {
+          setTrainingLog(prev => prev + `✗ Timed out waiting for training job`);
+          setIsTraining(false);
+          return;
+        }
+        try {
+          const jobRes = await mlAPI.getJobStatus(jobId);
+          const job = jobRes.data;
+          if (job.status === 'completed') {
+            const r = job.result || {};
+            setTrainingLog(prev => prev + `✓ Training completed\n` +
+              `  Accuracy: ${r.accuracy != null ? (r.accuracy * 100).toFixed(2) + '%' : '—'}\n` +
+              `  Precision: ${r.precision != null ? (r.precision * 100).toFixed(2) + '%' : '—'}\n` +
+              `  Recall: ${r.recall != null ? (r.recall * 100).toFixed(2) + '%' : '—'}\n` +
+              `  F1: ${r.f1_score != null ? (r.f1_score * 100).toFixed(2) + '%' : '—'}\n` +
+              `  Samples: ${r.total_samples ?? '—'}  |  Duration: ${r.training_duration?.toFixed(1) ?? '—'}s\n`);
+            setIsTraining(false);
+            loadMLMetrics();
+          } else if (job.status === 'failed') {
+            setTrainingLog(prev => prev + `✗ Training failed: ${job.error}`);
+            setIsTraining(false);
+          } else {
+            setTimeout(poll, 3000);
+          }
+        } catch (pollErr: any) {
+          // Network hiccup — keep polling
+          setTimeout(poll, 3000);
+        }
+      };
+
+      setTimeout(poll, 3000);
     } catch (error: any) {
       console.error('Error training model:', error);
       const detail = error?.response?.data?.detail || error?.message || 'Unknown error';
       setTrainingLog(prev => prev + `✗ Error: ${detail}`);
-    } finally {
       setIsTraining(false);
     }
   };
@@ -504,7 +551,7 @@ const OverviewTab: React.FC = () => {
         )}
 
         <p className="text-sm text-slate-400 mt-4">
-          Click "Backfill NIFTY100" to download 900 days of daily candles for ~100 NIFTY stocks. 
+          Click "Backfill NIFTY100" to download 2000 days of daily candles for ~100 NIFTY stocks.
           This enables the ML model to train on a much larger dataset.
           {dataSummary && dataSummary.total_symbols < 50 && (
             <span className="text-yellow-400 ml-1">
@@ -662,7 +709,7 @@ const OverviewTab: React.FC = () => {
         <ul className="space-y-2 text-sm text-slate-300">
           <li className="flex gap-2">
             <span className="text-green-400 font-bold">•</span>
-            <span>GradientBoosting model trained on 900+ days of daily data from NIFTY100 stocks</span>
+            <span>GradientBoosting model trained on 2000+ days of daily data from NIFTY100 stocks</span>
           </li>
           <li className="flex gap-2">
             <span className="text-blue-400 font-bold">•</span>
@@ -678,7 +725,7 @@ const OverviewTab: React.FC = () => {
           </li>
           <li className="flex gap-2">
             <span className="text-orange-400 font-bold">•</span>
-            <span>Large dataset (100 symbols × 600+ days = 40K+ samples) ensures robust predictions</span>
+            <span>Large dataset (100 symbols × 1400+ days = 106K+ samples) ensures robust predictions</span>
           </li>
           <li className="flex gap-2">
             <span className="text-cyan-400 font-bold">•</span>

@@ -552,7 +552,7 @@ def _get_candle_data(
             "5m": (fetch_5m_candles, 100),
             "15m": (fetch_15m_candles, 120),
             "1h": (fetch_1h_candles, 365),
-            "daily": (fetch_daily_candles, 400),
+            "daily": (fetch_daily_candles, 2000),
         }
 
         db = SessionLocal()

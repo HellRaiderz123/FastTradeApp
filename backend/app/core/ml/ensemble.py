@@ -63,7 +63,9 @@ class EnsembleModel:
         self.gbm = gbm
         self.rf = rf
         self.xgb = xgb
-        self.weights = weights
+        # Normalize weights so they always sum to 1.0
+        w = np.array(weights, dtype=float)
+        self.weights = tuple(w / w.sum())
         self.classes_ = np.array([0, 1])
 
     # -- Scikit-learn–compatible interface -----------------------------------
@@ -173,12 +175,19 @@ def train_ensemble(
     rf = _build_rf_pipeline()
     xgb = _build_xgb_pipeline()
 
+    # Compute sample weights to balance classes (GBM and XGBoost lack class_weight)
+    class_counts_train = y_train.value_counts()
+    total_train = len(y_train)
+    sample_weights = y_train.map(
+        lambda c: total_train / (len(class_counts_train) * class_counts_train[c])
+    ).values
+
     logger.info("🔧 Training GBM …")
-    gbm.fit(x_train, y_train)
+    gbm.fit(x_train, y_train, clf__sample_weight=sample_weights)
     logger.info("🔧 Training RandomForest …")
-    rf.fit(x_train, y_train)
+    rf.fit(x_train, y_train)  # RF uses class_weight='balanced' already
     logger.info("🔧 Training XGBoost …")
-    xgb.fit(x_train, y_train)
+    xgb.fit(x_train, y_train, clf__sample_weight=sample_weights)
 
     ensemble = EnsembleModel(gbm, rf, xgb)
 

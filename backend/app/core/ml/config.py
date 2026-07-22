@@ -39,15 +39,15 @@ class StockMLConfig:
     )
     model_name: str = os.getenv("STOCK_ML_MODEL_NAME", "stock_daily_model.joblib").strip()
 
-    max_candles: int = _int_env("STOCK_ML_MAX_CANDLES", 1200)
+    max_candles: int = _int_env("STOCK_ML_MAX_CANDLES", 2000)
     min_rows: int = _int_env("STOCK_ML_MIN_ROWS", 300)
 
     horizon: int = _int_env("STOCK_ML_HORIZON", 5)
-    return_threshold: float = _float_env("STOCK_ML_RETURN_THRESHOLD", 0.01)
+    return_threshold: float = _float_env("STOCK_ML_RETURN_THRESHOLD", 0.015)
 
     min_confidence: int = _int_env("STOCK_ML_MIN_CONFIDENCE", 60)
-    bullish_prob_threshold: float = _float_env("STOCK_ML_BULLISH_PROB", 0.55)
-    bearish_prob_threshold: float = _float_env("STOCK_ML_BEARISH_PROB", 0.45)
+    bullish_prob_threshold: float = _float_env("STOCK_ML_BULLISH_PROB", 0.58)
+    bearish_prob_threshold: float = _float_env("STOCK_ML_BEARISH_PROB", 0.42)
 
     rsi_period: int = _int_env("STOCK_ML_RSI_PERIOD", 14)
     adx_period: int = _int_env("STOCK_ML_ADX_PERIOD", 14)

@@ -332,12 +332,48 @@ def _get_daily_symbols() -> list[str]:
         "NAUKRI", "ETERNAL", "IRCTC", "JIOFIN", "PAYTM",
         # Telecom & Media
         "IDEA",
+        # NIFTY 200 — Banks & Finance
+        "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA", "MAHABANK",
+        "MUTHOOTFIN", "BAJAJHLDNG", "LICHSGFIN", "RECLTD", "PFC",
+        "HDFCAMC", "NIPPONLIFE", "ICICIGI", "NIACL",
+        # NIFTY 200 — IT & Tech
+        "LTIM", "COFORGE", "OFSS", "KPITTECH", "TATAELXSI",
+        "HEXAWARE", "CYIENT",
+        # NIFTY 200 — Auto & Auto Ancillary
+        "MOTHERSON", "BOSCHLTD", "BHARATFORG", "BALKRISIND",
+        "APOLLOTYRE", "CEATLTD", "EXIDEIND", "SUNDRMFAST",
+        # NIFTY 200 — Pharma & Healthcare
+        "AUROPHARMA", "ALKEM", "IPCALAB", "NATCOPHARM",
+        "GLAXO", "PFIZER", "ABBOTINDIA", "MAXHEALTH", "FORTIS",
+        # NIFTY 200 — FMCG & Consumer
+        "EMAMILTD", "RADICO", "UNITDSPR", "VBL", "BIKAJI",
+        # NIFTY 200 — Cement & Building Materials
+        "RAMCOCEM", "JKCEMENT", "HEIDELBERG", "STARCEMENT",
+        "SUPREMEIND", "ASTRAL", "PRINCEPIPE",
+        # NIFTY 200 — Metals & Mining
+        "SAIL", "JINDALSTEL", "WELCORP", "RATNAMANI",
+        "NATIONALUM", "HINDCOPPER",
+        # NIFTY 200 — Energy & Power
+        "ADANIGREEN", "ADANIPOWER", "TORNTPOWER", "CESC",
+        "SJVN", "NHPC", "IREDA",
+        # NIFTY 200 — Infra & Capital Goods
+        "CUMMINSIND", "THERMAX", "BHEL", "TIINDIA",
+        "AIAENG", "GRINDWELL", "SCHAEFFLER",
+        # NIFTY 200 — Consumer Durables & Retail
+        "WHIRLPOOL", "BLUESTARCO", "CROMPTON", "VGUARD",
+        "TATACOMM", "ZOMATO", "NYKAA", "POLICYBZR",
+        # NIFTY 200 — Chemicals & Specialty
+        "SRF", "AARTIIND", "DEEPAKNTR", "NAVINFLUOR",
+        "ALKYLAMINE", "CLEAN", "TATACHEM", "GNFC",
+        # NIFTY 200 — Real Estate & Misc
+        "DLF", "GODREJPROP", "OBEROIRLTY", "PRESTIGE",
+        "PHOENIXLTD", "BRIGADE",
     ]
 
 
 def _update_daily_candles():
     """Update daily candles for swing trading."""
-    days = int(os.getenv("DAILY_CANDLES_DAYS", "900"))
+    days = int(os.getenv("DAILY_CANDLES_DAYS", "2000"))
     symbols = _get_daily_symbols()
     logger.info("⏱️ Running daily candle update | symbols=%d | days=%d", len(symbols), days)
 

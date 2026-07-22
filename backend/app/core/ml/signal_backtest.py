@@ -201,9 +201,18 @@ def run_signal_backtest(
     avg_ret_bullish = float(np.mean([e.forward_return for e in bullish_events if e.forward_return is not None])) if bullish_events else 0
     avg_ret_bearish = float(np.mean([e.forward_return for e in bearish_events if e.forward_return is not None])) if bearish_events else 0
 
-    # Profit factor: gross gain / gross loss from actionable signals
-    gains = sum(e.forward_return for e in events if e.signal != "NO_TRADE" and e.forward_return and e.forward_return > 0)
-    losses = abs(sum(e.forward_return for e in events if e.signal != "NO_TRADE" and e.forward_return and e.forward_return < 0))
+    # Profit factor: gross gain / gross loss accounting for signal direction
+    gains = 0.0
+    losses = 0.0
+    for e in events:
+        if e.signal == "NO_TRADE" or e.forward_return is None:
+            continue
+        # Directional P&L: BULLISH profits when return > 0, BEARISH profits when return < 0
+        directional_return = e.forward_return if e.signal == "BULLISH" else -e.forward_return
+        if directional_return > 0:
+            gains += directional_return
+        else:
+            losses += abs(directional_return)
     pf = round(gains / losses, 2) if losses > 0 else None
 
     # Simulated equity curve (start at 100k, invest per signal)
