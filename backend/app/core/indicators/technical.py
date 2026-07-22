@@ -27,23 +27,10 @@ class TechnicalIndicators:
     
     @staticmethod
     def calculate_ema(prices: List[float], period: int) -> Optional[float]:
-        """Exponential Moving Average"""
+        """Exponential Moving Average — standard recursive formula (matches TradingView)."""
         try:
-            if len(prices) < period:
-                return None
-            
-            # Start with SMA for first value
-            prices_array = np.array(prices)
-            weights = np.exp(np.linspace(-1., 0., period))
-            weights /= weights.sum()
-            
-            ema_values = []
-            for i in range(period - 1, len(prices_array)):
-                window = prices_array[i - period + 1:i + 1]
-                ema = np.dot(window, weights)
-                ema_values.append(ema)
-            
-            return float(ema_values[-1]) if ema_values else None
+            series = TechnicalIndicators._calc_ema_series(prices, period)
+            return float(series[-1]) if series else None
         except Exception as e:
             logger.warning(f"Error calculating EMA: {e}")
             return None

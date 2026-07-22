@@ -36,13 +36,18 @@ def build_market_context(sig: Dict[str, Any]) -> Dict[str, Any]:
     indicators = sig.get("indicators", {}) or {}
 
     # ============================
-    # MARKET MODE (TREND / RANGE)
+    # MARKET MODE (TREND / RANGE / BREAKOUT_SETUP)
     # ============================
     market_mode = "RANGE"
     try:
         adx = float(indicators.get("adx", 0))
+        macd_hist = float(indicators.get("macd_hist", 0))
+        bias_val = sig.get("bias", "NEUTRAL")
         if adx >= 25:
             market_mode = "TRENDING"
+        elif adx >= 18 and bias_val != "NEUTRAL" and abs(macd_hist) > 0:
+            # ADX building momentum + directional bias → treat as breakout setup
+            market_mode = "BREAKOUT_SETUP"
     except (ValueError, TypeError):
         pass
 

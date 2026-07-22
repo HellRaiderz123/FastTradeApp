@@ -7,6 +7,8 @@ import logging
 from typing import List, Dict, Any
 from datetime import datetime
 import requests
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,10 @@ class NSERSSFeedService:
         'Connection': 'keep-alive',
     }
     
+    # Cache: (items, fetched_at)
+    _cache: tuple = (None, 0.0)
+    _CACHE_TTL = 120  # seconds
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
@@ -123,28 +129,37 @@ class NSERSSFeedService:
     
     def fetch_all_feeds(self, categories: List[str] = None) -> List[Dict[str, Any]]:
         """
-        Fetch multiple RSS feeds
-        
-        Args:
-            categories: List of feed categories to fetch. If None, fetches all.
-            
-        Returns:
-            Combined list of news items from all feeds
+        Fetch multiple RSS feeds in parallel with TTL cache.
+        All three endpoints (feed, trending, alerts) share one cached fetch.
         """
+        now = time.monotonic()
+        cached_items, fetched_at = NSERSSFeedService._cache
+        if cached_items is not None and (now - fetched_at) < self._CACHE_TTL:
+            return cached_items
+
         if categories is None:
             categories = list(self.NSE_FEEDS.keys())
-        
-        all_items = []
-        for category in categories:
-            if category in self.NSE_FEEDS:
-                feed_url = self.NSE_FEEDS[category]
-                logger.info(f"Fetching RSS feed: {category} from {feed_url}")
-                items = self.fetch_feed(feed_url, feed_source=category)
-                all_items.extend(items)
-        
-        # Sort by publication date (newest first)
+
+        all_items: List[Dict[str, Any]] = []
+        tasks = {
+            cat: self.NSE_FEEDS[cat]
+            for cat in categories
+            if cat in self.NSE_FEEDS
+        }
+
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            futures = {
+                executor.submit(self.fetch_feed, url, cat): cat
+                for cat, url in tasks.items()
+            }
+            for future in as_completed(futures):
+                try:
+                    all_items.extend(future.result())
+                except Exception as e:
+                    logger.warning("Feed fetch error: %s", e)
+
         all_items.sort(key=lambda x: x['published'], reverse=True)
-        
+        NSERSSFeedService._cache = (all_items, time.monotonic())
         return all_items
     
     def _categorize_news(self, title: str, description: str) -> str:
@@ -215,50 +230,9 @@ class NSERSSFeedService:
         max_items: int = 8,
     ) -> List[Dict[str, Any]]:
         """
-        Add LLM-scored market impact fields to news items (in-place).
-
-        Adds to each item (if LLM is available):
-          llm_impact    : "bullish" | "bearish" | "neutral"
-          llm_magnitude : "high" | "medium" | "low"
-          llm_symbols   : list of affected NSE symbols
-          llm_reason    : one-line rationale
-
-        Only processes the first *max_items* to stay within free-tier rate limits.
-        Items beyond that are returned unchanged.
+        LLM enrichment is intentionally disabled on the hot news-feed path.
+        Call this explicitly only from a background job, never on page load.
         """
-        try:
-            from app.services.llm_service import call_llm, extract_json, is_available
-        except ImportError:
-            return news_items
-
-        if not is_available():
-            return news_items
-
-        for item in news_items[:max_items]:
-            try:
-                title = item.get("title", "")
-                summary = (item.get("description") or item.get("summary") or "")[:200]
-                text = f"{title}. {summary}".strip()
-
-                prompt = (
-                    f"Score the market impact of this Indian financial news for NSE stocks.\n\n"
-                    f'News: "{text}"\n\n'
-                    f"Reply with ONLY this JSON (no extra text):\n"
-                    f'{{"impact": "bullish"|"bearish"|"neutral", '
-                    f'"magnitude": "high"|"medium"|"low", '
-                    f'"affected_symbols": ["NSE_SYMBOL", ...], '
-                    f'"reason": "<10 words>"}}'
-                )
-                response = call_llm(prompt, max_tokens=100, temperature=0.0)
-                data = extract_json(response or "")
-                if data:
-                    item["llm_impact"]     = data.get("impact", "neutral")
-                    item["llm_magnitude"]  = data.get("magnitude", "low")
-                    item["llm_symbols"]    = data.get("affected_symbols", [])
-                    item["llm_reason"]     = data.get("reason", "")
-            except Exception as e:
-                logger.debug("LLM news scoring failed for item: %s", e)
-
         return news_items
 
 

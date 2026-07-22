@@ -228,11 +228,22 @@ const COMPARATORS = [
   { id: 'crosses_below', label: 'crosses below' },
   { id: 'higher_than', label: 'higher than' },
   { id: 'lower_than', label: 'lower than' },
+  { id: 'equal_to', label: 'equal to' },
+  { id: 'between', label: 'between (lo,hi)' },
 ];
 
 const STRATEGY_TYPES = ['Equity Swing', 'Equity Intraday', 'Options Buying', 'Options Selling'];
 const TIMEFRAMES = ['1 Min', '5 Min', '15 Min', '1 Hour', 'Day'];
 const HTF_TIMEFRAME_OPTIONS = ['Auto', '5 Min', '15 Min', '1 Hour', 'Day'];
+const UNIVERSES = [
+  { value: 'NIFTY50', label: 'NIFTY 50' },
+  { value: 'NIFTY100', label: 'NIFTY 100' },
+  { value: 'NIFTY200', label: 'NIFTY 200' },
+  { value: 'NIFTYIT', label: 'NIFTY IT' },
+  { value: 'NIFTYBANK', label: 'NIFTY BANK' },
+  { value: 'MIDCAP', label: 'NIFTY MIDCAP 50' },
+  { value: 'SMALLCAP', label: 'NIFTY SMALLCAP 50' },
+];
 const DEFAULT_EXIT_CONFIG: ExitConfig = {
   sl_pct: 5,
   tp_pct: 10,
@@ -302,6 +313,8 @@ const CreateScanner: React.FC = () => {
   const [discoverySnapshot, setDiscoverySnapshot] = useState<DiscoverySnapshot | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filterType, setFilterType] = useState<string>('All');
+  const [filterDirection, setFilterDirection] = useState<string>('All');
+  const [filterSignals, setFilterSignals] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -704,9 +717,39 @@ const CreateScanner: React.FC = () => {
 
   // ── Add condition ─────────────────────────────────────────────────────
 
+  const duplicateStrategy = async () => {
+    if (!selectedId) return;
+    const src = strategies.find(s => s.id === selectedId);
+    if (!src) return;
+    setSaving(true);
+    try {
+      const res = await api.post('/condition-scanner/strategies', {
+        name: `${src.name} (Copy)`,
+        description: src.description,
+        strategy_type: src.strategy_type,
+        direction: src.direction,
+        timeframe: src.timeframe,
+        universe: src.universe,
+        instruments: src.instruments || [],
+        entry_conditions: src.entry_conditions,
+        exit_config: src.exit_config,
+        is_active: true,
+        auto_scan_enabled: false,
+        auto_amount: src.auto_amount || 10000,
+      });
+      showToast('success', 'Strategy duplicated');
+      await loadData();
+      setSelectedId(res.data.strategy.id);
+    } catch (err: any) {
+      showToast('error', err?.response?.data?.detail || 'Failed to duplicate');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const addCondition = () => {
-    if (editorConditions.length >= 5) {
-      showToast('warning', 'Max 5 conditions allowed');
+    if (editorConditions.length >= 8) {
+      showToast('warning', 'Max 8 conditions allowed');
       return;
     }
     setEditorConditions([...editorConditions, {
@@ -963,6 +1006,8 @@ const CreateScanner: React.FC = () => {
 
   const filteredStrategies = strategies.filter(s => {
     if (filterType !== 'All' && s.strategy_type !== filterType) return false;
+    if (filterDirection !== 'All' && s.direction !== filterDirection) return false;
+    if (filterSignals && !(s.last_signal_count && s.last_signal_count > 0)) return false;
     if (searchQuery && !s.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
@@ -999,7 +1044,7 @@ const CreateScanner: React.FC = () => {
           </div>
 
           {/* Type filters */}
-          <div className="flex flex-wrap gap-1.5 mb-3">
+          <div className="flex flex-wrap gap-1.5 mb-2">
             {['All', ...STRATEGY_TYPES].map(type => (
               <button
                 key={type}
@@ -1010,9 +1055,43 @@ const CreateScanner: React.FC = () => {
                     : 'bg-slate-800 text-slate-400 hover:text-white'
                 }`}
               >
-                {type}
+                {type === 'All' ? 'All Types' : type}
               </button>
             ))}
+          </div>
+          {/* Quick filters */}
+          <div className="flex items-center gap-2 mb-3">
+            <div className="flex rounded-lg overflow-hidden border border-slate-700">
+              {['All', 'BUY', 'SELL'].map(d => (
+                <button
+                  key={d}
+                  onClick={() => setFilterDirection(d)}
+                  className={`px-2.5 py-1 text-xs font-semibold transition ${
+                    filterDirection === d
+                      ? d === 'BUY' ? 'bg-green-600 text-white' : d === 'SELL' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {d === 'All' ? 'B+S' : d}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setFilterSignals(v => !v)}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition flex items-center gap-1 ${
+                filterSignals ? 'bg-green-600/20 text-green-300 border border-green-500/40' : 'bg-slate-800 text-slate-400 border border-transparent'
+              }`}
+            >
+              <Activity className="w-3 h-3" /> Has Signals
+            </button>
+            {(filterType !== 'All' || filterDirection !== 'All' || filterSignals) && (
+              <button
+                onClick={() => { setFilterType('All'); setFilterDirection('All'); setFilterSignals(false); }}
+                className="text-xs text-slate-500 hover:text-white ml-auto"
+              >
+                Clear
+              </button>
+            )}
           </div>
 
           {/* Search */}
@@ -1221,6 +1300,16 @@ const CreateScanner: React.FC = () => {
                 />
                 {selectedId && (
                   <button
+                    onClick={duplicateStrategy}
+                    disabled={saving}
+                    title="Duplicate this strategy"
+                    className="flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-slate-700/50 hover:bg-slate-700 border border-slate-600 text-slate-300 transition-colors disabled:opacity-50 shrink-0"
+                  >
+                    <Plus className="w-3 h-3" /> Duplicate
+                  </button>
+                )}
+                {selectedId && (
+                  <button
                     onClick={explainStrategy}
                     disabled={explaining}
                     title="Generate AI explanation using NVIDIA LLM"
@@ -1298,17 +1387,14 @@ const CreateScanner: React.FC = () => {
                       className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
                       title="Universe"
                     >
-                      <option value="NIFTY50">NIFTY 50</option>
-                      <option value="NIFTY100">NIFTY 100</option>
-                      <option value="NIFTYIT">NIFTY IT</option>
-                      <option value="NIFTYBANK">NIFTY BANK</option>
+                      {UNIVERSES.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
                     </select>
                   </div>
 
                   {/* Conditions */}
                   <div className="mb-4">
                     <p className="text-xs text-slate-500 mb-3 uppercase tracking-wider">
-                      Conditions ({editorConditions.length}/5)
+                      Conditions ({editorConditions.length}/8)
                     </p>
 
                     <div className="space-y-3">
@@ -1397,23 +1483,25 @@ const CreateScanner: React.FC = () => {
 
                     <button
                       onClick={addCondition}
-                      className="mt-3 px-4 py-2 border border-dashed border-slate-600 text-slate-400 hover:text-white hover:border-blue-500 rounded-lg text-sm flex items-center gap-2 transition"
+                      disabled={editorConditions.length >= 8}
+                      className="mt-3 px-4 py-2 border border-dashed border-slate-600 text-slate-400 hover:text-white hover:border-blue-500 rounded-lg text-sm flex items-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed"
                     >
-                      <Plus className="w-4 h-4" /> Add Another Condition
+                      <Plus className="w-4 h-4" /> Add Condition ({editorConditions.length}/8)
                     </button>
                   </div>
 
-                  {/* Pre-built setup chips */}
+                  {/* Quick-add indicator chips */}
                   <div>
-                    <p className="text-xs text-slate-500 mb-2">Pre built Setups</p>
+                    <p className="text-xs text-slate-500 mb-2">Quick Add Indicator</p>
                     <div className="flex flex-wrap gap-2">
-                      {indicators.slice(0, 8).map(ind => (
+                      {indicators.map(ind => (
                         <button
                           key={ind.id}
+                          title={ind.description}
                           onClick={() => {
                             const defaultParams: Record<string, any> = {};
                             ind.params.forEach(p => { defaultParams[p.name] = p.default; });
-                            if (editorConditions.length < 5) {
+                            if (editorConditions.length < 8) {
                               setEditorConditions([...editorConditions, {
                                 indicator: ind.id,
                                 params: defaultParams,

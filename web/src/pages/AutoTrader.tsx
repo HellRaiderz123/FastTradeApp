@@ -3,7 +3,7 @@ import {
   Bot, Play, Square, Pause, RefreshCw, Settings2, Activity,
   TrendingUp, TrendingDown, AlertTriangle, CheckCircle, XCircle,
   Clock, Zap, Shield, Eye, DollarSign, BarChart3, Trash2,
-  ChevronDown, ChevronUp, Info, ArrowUpDown
+  ChevronDown, ChevronUp, Info, ArrowUpDown, Brain
 } from 'lucide-react';
 import { autoTraderAPI } from '../lib/api';
 
@@ -30,6 +30,10 @@ interface AutoTraderConfig {
   market_hours_only: boolean;
   entry_start_time: string;
   entry_end_time: string;
+  use_ai_gate: boolean;
+  ai_gate_min_confidence: number;
+  trade_stocks: boolean;
+  stock_symbols: string[];
   status: string;
   last_scan_at: string | null;
   error_message: string | null;
@@ -420,6 +424,11 @@ const DashboardView: React.FC<{
         </div>
       )}
 
+      {/* Per-underlying performance breakdown (Tier 2) */}
+      {config && (status.underlyings || []).length > 0 && (
+        <UnderlyingBreakdown logs={logs} underlyings={status.underlyings} />
+      )}
+
       {/* Recent Activity */}
       <div className="card-glass p-5 rounded-xl">
         <div className="flex items-center justify-between mb-4">
@@ -584,6 +593,42 @@ const ConfigPanel: React.FC<{
         <p className="text-xs text-slate-500 mt-2">
           Set to 0 for auto-calculated values based on risk mode and capital.
         </p>
+      </Section>
+
+      {/* AI Gate */}
+      <Section title="AI Pipeline Gate" icon={Brain}>
+        <p className="text-xs text-slate-400 mb-3">
+          Require the 9-agent AI analysis pipeline to approve BUY/SELL before the auto-trader enters a position.
+        </p>
+        <ToggleField label="Enable AI Gate" checked={form.use_ai_gate ?? false}
+          onChange={(v) => update('use_ai_gate', v)}
+          description="Block entries unless AI pipeline confidence meets threshold" />
+        {form.use_ai_gate && (
+          <div className="mt-3">
+            <InputField label="Min AI Confidence (0.0 – 1.0)" type="number" value={form.ai_gate_min_confidence ?? 0.65}
+              onChange={(v) => update('ai_gate_min_confidence', Number(v))} />
+            <p className="text-xs text-slate-500 mt-1">Entries blocked unless AI confidence ≥ this value. Recommended: 0.65</p>
+          </div>
+        )}
+      </Section>
+
+      {/* Stock Universe */}
+      <Section title="Stock Universe" icon={BarChart3}>
+        <ToggleField label="Scan Stocks" checked={form.trade_stocks ?? false}
+          onChange={(v) => update('trade_stocks', v)}
+          description="Also scan individual stocks using momentum strategy" />
+        {form.trade_stocks && (
+          <div className="mt-3">
+            <label className="text-xs text-slate-400 mb-1 block">Stock Symbols (comma-separated)</label>
+            <input
+              type="text"
+              value={(form.stock_symbols || []).join(', ')}
+              onChange={(e) => update('stock_symbols', e.target.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean))}
+              placeholder="RELIANCE, TCS, INFY, HDFC"
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white text-sm focus:border-blue-500 focus:outline-none transition"
+            />
+          </div>
+        )}
       </Section>
 
       {/* Reversal handling */}
@@ -815,6 +860,45 @@ const LogRow: React.FC<{ log: LogEntry; compact?: boolean }> = ({ log, compact }
           </pre>
         </div>
       )}
+    </div>
+  );
+};
+
+const UnderlyingBreakdown: React.FC<{ logs: LogEntry[]; underlyings: string[] }> = ({ logs, underlyings }) => {
+  const stats = underlyings.map((u) => {
+    const uLogs = logs.filter(l => l.underlying === u);
+    const entries = uLogs.filter(l => l.action === 'ENTRY').length;
+    const exits = uLogs.filter(l => ['EXIT', 'REVERSAL_EXIT'].includes(l.action)).length;
+    const pnl = uLogs.reduce((s, l) => s + (l.pnl_impact || 0), 0);
+    const errors = uLogs.filter(l => l.action === 'ERROR').length;
+    return { underlying: u, entries, exits, pnl, errors };
+  });
+
+  return (
+    <div className="card-glass p-5 rounded-xl">
+      <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+        <BarChart3 className="w-4 h-4 text-slate-400" /> Per-Underlying Performance
+      </h3>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {stats.map(({ underlying, entries, exits, pnl, errors }) => (
+          <div key={underlying} className="bg-slate-800/50 border border-slate-700 rounded-lg p-3">
+            <p className="text-sm font-bold text-white mb-2">{underlying}</p>
+            <div className="grid grid-cols-2 gap-1 text-xs">
+              <span className="text-slate-400">Entries</span>
+              <span className="text-green-400 font-medium">{entries}</span>
+              <span className="text-slate-400">Exits</span>
+              <span className="text-red-400 font-medium">{exits}</span>
+              <span className="text-slate-400">P&L</span>
+              <span className={`font-medium ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {pnl >= 0 ? '+' : ''}₹{pnl.toFixed(0)}
+              </span>
+              {errors > 0 && (
+                <><span className="text-slate-400">Errors</span><span className="text-red-500">{errors}</span></>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };

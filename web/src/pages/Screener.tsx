@@ -9,8 +9,17 @@ import {
   Activity,
   BarChart3,
   Zap,
+  ArrowUpRight,
+  RotateCcw,
+  Star,
+  Shield,
+  DollarSign,
+  Flame,
+  Target,
+  Layers,
 } from 'lucide-react';
-import { screenerAPI } from '../lib/api';
+import { screenerAPI, autoTraderAPI } from '../lib/api';
+import { useToast } from '../components/Toast';
 
 interface ScreenerFilters {
   min_price?: number;
@@ -82,6 +91,7 @@ function saveCustomPresets(presets: Preset[]) {
 }
 
 const Screener: React.FC = () => {
+  const { showToast } = useToast();
   const [filters, setFilters] = useState<ScreenerFilters>({
     sort_by: 'change_percent',
     sort_order: 'desc',
@@ -96,7 +106,21 @@ const Screener: React.FC = () => {
   const [totalScanned, setTotalScanned] = useState<number>(0);
   const [savePresetName, setSavePresetName] = useState<string>('');
   const [showSavePreset, setShowSavePreset] = useState<boolean>(false);
+  const [sendingToAutoTrader, setSendingToAutoTrader] = useState(false);
 
+  const sendToAutoTrader = async () => {
+    if (!results.length) return;
+    setSendingToAutoTrader(true);
+    try {
+      const symbols = results.slice(0, 20).map(r => r.symbol);
+      await autoTraderAPI.addStockSymbols(symbols);
+      showToast('success', 'Sent to AutoTrader', `${symbols.length} symbols added to AutoTrader stock universe`);
+    } catch {
+      showToast('error', 'Failed', 'Could not send symbols to AutoTrader');
+    } finally {
+      setSendingToAutoTrader(false);
+    }
+  };
   // Fetch presets on mount
   useEffect(() => {
     fetchPresets();
@@ -210,45 +234,87 @@ const Screener: React.FC = () => {
         </div>
 
         {/* Quick Presets */}
-        <div className="flex flex-wrap gap-2">
-          {presets.map((preset) => (
-            <button
-              key={preset.id}
-              onClick={() => applyPreset(preset)}
-              className="px-4 py-2 bg-slate-800 hover:bg-blue-600 rounded-lg text-sm text-white transition-colors group"
-              title={preset.description}
-            >
-              <div className="flex items-center gap-2">
-                {preset.id === 'breakout' && <TrendingUp size={16} />}
-                {preset.id === 'oversold' && <TrendingDown size={16} />}
-                {preset.id === 'high_volume' && <BarChart3 size={16} />}
-                {preset.id === 'trending_up' && <Zap size={16} />}
-                {!['breakout', 'oversold', 'high_volume', 'trending_up'].includes(preset.id) && (
-                  <Activity size={16} />
-                )}
-                {preset.name}
-              </div>
-            </button>
-          ))}
-          {customPresets.map((preset) => (
-            <div key={preset.id} className="flex items-center gap-1">
-              <button
-                onClick={() => applyPreset(preset)}
-                className="px-4 py-2 bg-purple-900/50 hover:bg-purple-700 border border-purple-700 rounded-lg text-sm text-white transition-colors"
-                title={preset.description}
-              >
-                <div className="flex items-center gap-2">
-                  <Activity size={16} />
-                  {preset.name}
+        <div className="space-y-3">
+          {/* Preset category map */}
+          {(() => {
+            const PRESET_META: Record<string, { icon: React.ReactNode; color: string; bg: string; border: string; category: string }> = {
+              breakout:               { icon: <ArrowUpRight size={14} />, color: 'text-green-400',  bg: 'bg-green-500/10',  border: 'border-green-500/30',  category: 'Momentum' },
+              momentum_surge:         { icon: <Flame size={14} />,        color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/30', category: 'Momentum' },
+              pre_market_gap:         { icon: <Zap size={14} />,          color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', category: 'Momentum' },
+              trending_up:            { icon: <TrendingUp size={14} />,   color: 'text-emerald-400',bg: 'bg-emerald-500/10',border: 'border-emerald-500/30',category: 'Momentum' },
+              '52w_high_breakout':    { icon: <Target size={14} />,       color: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-500/30',   category: 'Breakout' },
+              oversold:               { icon: <TrendingDown size={14} />, color: 'text-red-400',    bg: 'bg-red-500/10',    border: 'border-red-500/30',    category: 'Reversal' },
+              reversal_watch:         { icon: <RotateCcw size={14} />,    color: 'text-pink-400',   bg: 'bg-pink-500/10',   border: 'border-pink-500/30',   category: 'Reversal' },
+              overbought:             { icon: <Activity size={14} />,     color: 'text-amber-400',  bg: 'bg-amber-500/10',  border: 'border-amber-500/30',  category: 'Caution' },
+              value_picks:            { icon: <Star size={14} />,         color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30', category: 'Fundamental' },
+              dividend_yield:         { icon: <DollarSign size={14} />,   color: 'text-teal-400',   bg: 'bg-teal-500/10',   border: 'border-teal-500/30',   category: 'Fundamental' },
+              quality_growth:         { icon: <Shield size={14} />,       color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/30', category: 'Fundamental' },
+              low_volatility:         { icon: <Layers size={14} />,       color: 'text-slate-300',  bg: 'bg-slate-500/10',  border: 'border-slate-500/30',  category: 'Defensive' },
+              large_cap:              { icon: <BarChart3 size={14} />,    color: 'text-cyan-400',   bg: 'bg-cyan-500/10',   border: 'border-cyan-500/30',   category: 'Defensive' },
+              high_volume:            { icon: <BarChart3 size={14} />,    color: 'text-blue-300',   bg: 'bg-blue-500/10',   border: 'border-blue-500/30',   category: 'Volume' },
+              sector_rotation_finance:{ icon: <Activity size={14} />,     color: 'text-green-300',  bg: 'bg-green-500/10',  border: 'border-green-500/30',  category: 'Sector' },
+              it_sector:              { icon: <Zap size={14} />,          color: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-500/30',   category: 'Sector' },
+              pharma_momentum:        { icon: <Shield size={14} />,       color: 'text-rose-400',   bg: 'bg-rose-500/10',   border: 'border-rose-500/30',   category: 'Sector' },
+            };
+
+            const categories = ['Momentum', 'Breakout', 'Reversal', 'Caution', 'Fundamental', 'Defensive', 'Volume', 'Sector'];
+            const byCategory: Record<string, typeof presets> = {};
+            for (const p of presets) {
+              const cat = PRESET_META[p.id]?.category || 'Other';
+              if (!byCategory[cat]) byCategory[cat] = [];
+              byCategory[cat].push(p);
+            }
+
+            return categories.filter(c => byCategory[c]?.length).map(cat => (
+              <div key={cat}>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5">{cat}</p>
+                <div className="flex flex-wrap gap-2">
+                  {byCategory[cat].map((preset) => {
+                    const meta = PRESET_META[preset.id];
+                    return (
+                      <button
+                        key={preset.id}
+                        onClick={() => applyPreset(preset)}
+                        title={preset.description}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition hover:brightness-125 ${
+                          meta ? `${meta.bg} ${meta.border} ${meta.color}` : 'bg-slate-800 border-slate-700 text-slate-300'
+                        }`}
+                      >
+                        {meta?.icon}
+                        {preset.name}
+                      </button>
+                    );
+                  })}
                 </div>
-              </button>
-              <button
-                onClick={() => deleteCustomPreset(preset.id)}
-                className="px-2 py-2 bg-slate-800 hover:bg-red-900/50 rounded-lg text-slate-400 hover:text-red-400 transition-colors text-xs"
-                title="Delete preset"
-              >✕</button>
+              </div>
+            ));
+          })()}
+
+          {/* Custom presets */}
+          {customPresets.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5">Saved</p>
+              <div className="flex flex-wrap gap-2">
+                {customPresets.map((preset) => (
+                  <div key={preset.id} className="flex items-center gap-1">
+                    <button
+                      onClick={() => applyPreset(preset)}
+                      title={preset.description}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-500/10 border border-purple-500/30 text-purple-300 rounded-lg text-xs font-medium transition hover:brightness-125"
+                    >
+                      <Star size={12} />
+                      {preset.name}
+                    </button>
+                    <button
+                      onClick={() => deleteCustomPreset(preset.id)}
+                      className="px-1.5 py-1.5 bg-slate-800 hover:bg-red-900/40 rounded-lg text-slate-500 hover:text-red-400 transition text-xs"
+                      title="Delete preset"
+                    >✕</button>
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
+          )}
         </div>
       </div>
 
@@ -541,15 +607,27 @@ const Screener: React.FC = () => {
       {/* Results Stats */}
       {results.length > 0 && (
         <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4 mb-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="text-white">
               <span className="text-2xl font-bold">{results.length}</span>
               <span className="text-slate-400 ml-2">
                 stocks matched out of {totalScanned} scanned
               </span>
             </div>
-            <div className="text-slate-400 text-sm">
-              Last updated: {new Date().toLocaleTimeString()}
+            <div className="flex items-center gap-3">
+              <div className="text-slate-400 text-sm">
+                Last updated: {new Date().toLocaleTimeString()}
+              </div>
+              {/* Tier 2: Screener → AutoTrader pipeline button */}
+              <button
+                onClick={sendToAutoTrader}
+                disabled={sendingToAutoTrader}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded-lg text-white text-sm font-medium transition"
+                title="Push top 20 results to AutoTrader stock universe"
+              >
+                <Zap size={16} />
+                {sendingToAutoTrader ? 'Sending...' : 'Send to AutoTrader'}
+              </button>
             </div>
           </div>
         </div>

@@ -220,6 +220,15 @@ def _run_scan(db: Session):
              reason=f"Executor init failed ({cfg.mode}), using Paper fallback: {str(exc)[:150]}",
              severity="WARNING")
 
+    # Stock universe scan (Tier 1 feature)
+    if getattr(cfg, "trade_stocks", False):
+        stock_symbols: List[str] = getattr(cfg, "stock_symbols", None) or []
+        for sym in stock_symbols:
+            try:
+                _scan_stock(db, cfg, sym, executor)
+            except Exception as exc:
+                logger.warning("Auto-trader stock scan error for %s: %s", sym, exc)
+
     for underlying in underlyings:
         try:
             _scan_underlying(db, cfg, underlying, executor)
@@ -249,6 +258,22 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
         strategy = intent.strategy
         if not strategy:
             continue
+
+        # ── SL / TP check against live MTM ────────────────────────
+        if intent.sl is not None or intent.tp is not None:
+            try:
+                from app.core.execution.paper import PaperExecutionAdapter
+                current_pnl = PaperExecutionAdapter().mtm(intent)
+                intent.pnl = current_pnl
+                db.commit()
+                sl_hit = intent.sl is not None and current_pnl <= intent.sl
+                tp_hit = intent.tp is not None and current_pnl >= intent.tp
+                if sl_hit or tp_hit:
+                    reason = "SL hit" if sl_hit else "TP hit"
+                    _auto_exit_position(db, cfg, intent, executor, {"reason": reason})
+                    continue
+            except Exception as _e:
+                logger.debug("SL/TP check failed for %s: %s", intent.intent_id, _e)
 
         # Use position_advisor to check conflict
         advice = advise_position(
@@ -308,8 +333,17 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
              severity="INFO")
         return
 
-    # Skip if we already have an auto-trader position for this underlying
-    auto_intents = [i for i in open_intents if (i.strategy or "") != "DIRECT_ZERODHA"]
+    # Re-query to avoid stale session cache — check for existing position for this underlying
+    auto_intents = (
+        db.query(ExecutionIntent)
+        .filter(
+            ExecutionIntent.underlying == underlying,
+            ExecutionIntent.status == "EXECUTED",
+            ExecutionIntent.closed_at.is_(None),
+            ExecutionIntent.strategy != "DIRECT_ZERODHA",
+        )
+        .all()
+    )
     if auto_intents:
         _log(db, cfg.id,
              action="SKIP", underlying=underlying,
@@ -366,8 +400,146 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
     if not approved or strategy == "NO_TRADE" or not ticket:
         return
 
+    # ── AI Gate (optional) ────────────────────────────────────────
+    if getattr(cfg, "use_ai_gate", False):
+        if not _ai_gate_allows_entry(db, cfg, underlying, strategy):
+            return
+
     # ── Create intent + execute ───────────────────────────────────
     _auto_enter_position(db, cfg, underlying, strategy, ticket, result, executor)
+
+
+# ─── AI Gate ─────────────────────────────────────────────────────────
+
+def _ai_gate_allows_entry(
+    db: Session,
+    cfg: AutoTraderConfig,
+    underlying: str,
+    strategy: str,
+) -> bool:
+    """
+    Check the latest AI pipeline decision for this underlying.
+    Returns True only if the AI approved a BUY/SELL with sufficient confidence.
+    Falls back to True (allow) if no AI decision exists yet.
+    """
+    try:
+        from app.db.models_ai_decisions import AIDecision
+        from sqlalchemy import desc
+
+        row = (
+            db.query(AIDecision)
+            .filter(AIDecision.symbol == underlying)
+            .order_by(desc(AIDecision.analysed_at))
+            .first()
+        )
+        if row is None:
+            # No AI analysis yet — allow entry (don't block on missing data)
+            logger.debug("AI gate: no decision for %s, allowing entry", underlying)
+            return True
+
+        min_conf = float(getattr(cfg, "ai_gate_min_confidence", 0.65) or 0.65)
+        ai_action = (row.action or "").upper()
+        ai_conf = float(row.confidence or 0)
+        execution_allowed = bool(row.execution_allowed)
+
+        if not execution_allowed or ai_action not in ("BUY", "SELL") or ai_conf < min_conf:
+            _log(db, cfg.id,
+                 action="SKIP", underlying=underlying,
+                 strategy=strategy,
+                 reason=(
+                     f"AI gate blocked: action={ai_action} conf={ai_conf:.2f} "
+                     f"execution_allowed={execution_allowed} min_conf={min_conf:.2f}"
+                 ),
+                 severity="INFO")
+            return False
+
+        logger.info(
+            "AI gate: %s approved for %s (action=%s conf=%.2f)",
+            underlying, strategy, ai_action, ai_conf,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("AI gate check failed for %s: %s — allowing entry", underlying, exc)
+        return True  # fail-open
+
+
+# ─── Stock scan ───────────────────────────────────────────────────────
+
+def _scan_stock(db: Session, cfg: AutoTraderConfig, symbol: str, executor):
+    """
+    Run the momentum stock strategy for a single symbol.
+    Creates an intent and executes if signal is strong enough.
+    """
+    open_for_symbol = _open_positions_for(db, symbol)
+    auto_open = [i for i in open_for_symbol if (i.strategy or "") != "DIRECT_ZERODHA"]
+    if auto_open:
+        return  # already have a position
+
+    total_open = (
+        db.query(ExecutionIntent)
+        .filter(
+            ExecutionIntent.status == "EXECUTED",
+            ExecutionIntent.closed_at.is_(None),
+            ExecutionIntent.strategy != "DIRECT_ZERODHA",
+        )
+        .count()
+    )
+    if total_open >= (cfg.max_open_positions or 3):
+        return
+
+    if not _is_within_entry_window(cfg):
+        return
+
+    try:
+        from app.core.signals.signals import generate_signal
+        sig_dict = generate_signal(db=db, symbol=symbol, use_ml=False)
+        confidence = float(sig_dict.get("confidence", 0))
+        if confidence < (cfg.min_confidence or 70):
+            return
+
+        action = str(sig_dict.get("recommendation", "NO_TRADE")).upper()
+        if action not in ("BUY", "SELL"):
+            return
+
+        # Build a minimal ticket compatible with _auto_enter_position
+        from app.services.market_data import get_spot
+        spot = get_spot(symbol)
+        risk_pct = 2.0
+        sl_price = spot * (1 - risk_pct / 100) if action == "BUY" else spot * (1 + risk_pct / 100)
+        tp_price = spot * (1 + risk_pct * 1.5 / 100) if action == "BUY" else spot * (1 - risk_pct * 1.5 / 100)
+
+        ticket = {
+            "strategy": "STOCK_MOMENTUM",
+            "underlying": symbol,
+            "lot_size": 1,
+            "lots": cfg.lots or 1,
+            "legs": [{
+                "side": action,
+                "strike": spot,
+                "type": "STOCK",
+                "symbol": symbol,
+                "price": spot,
+            }],
+            "stop_loss": sl_price,
+            "take_profit": tp_price,
+        }
+        result = {
+            "strategy": "STOCK_MOMENTUM",
+            "approved": True,
+            "signal": sig_dict,
+            "context": {},
+            "run_id": None,
+        }
+    except Exception as exc:
+        logger.warning("Stock strategy error for %s: %s", symbol, exc)
+        return
+
+    # AI gate check for stocks too
+    if getattr(cfg, "use_ai_gate", False):
+        if not _ai_gate_allows_entry(db, cfg, symbol, "STOCK_MOMENTUM"):
+            return
+
+    _auto_enter_position(db, cfg, symbol, "STOCK_MOMENTUM", ticket, result, executor)
 
 
 # ─── Entry logic ──────────────────────────────────────────────────────
@@ -423,6 +595,7 @@ def _auto_enter_position(
     try:
         exec_result = executor.execute(intent)
         intent.status = "EXECUTED"
+        intent.executed = True
         intent.execution_result = exec_result
         intent.entry_credit = exec_result.get("entry_credit", 0)
         intent.margin_required = exec_result.get("margin_required") or intent.margin_required
@@ -634,6 +807,10 @@ def get_or_create_config(db: Session) -> AutoTraderConfig:
             market_hours_only=True,
             entry_start_time=DEFAULT_ENTRY_START,
             entry_end_time=DEFAULT_ENTRY_END,
+            use_ai_gate=False,
+            ai_gate_min_confidence=0.65,
+            trade_stocks=False,
+            stock_symbols=[],
         )
         db.add(cfg)
         db.commit()

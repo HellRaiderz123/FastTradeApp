@@ -1846,14 +1846,19 @@ def run_watchlist_analysis(exchange: str = "NSE") -> int:
     return count
 
 
+# Semaphore caps concurrent LLM threads to avoid rate-limiting
+_BULK_ANALYSIS_SEMAPHORE = threading.Semaphore(5)
+
+
 def _queue_symbol_analysis(symbols: list[str], exchange: str = "NSE", debate_rounds: int = 2, *, desk_key: str) -> int:
+    """Queue async analysis jobs for a list of symbols with max-5 concurrency."""
     count = 0
     try:
         with _jobs_lock:
             _desk_state[desk_key] = {
                 "status": "running",
                 "last_run_at": datetime.utcnow().isoformat(),
-                "queued": 0,
+                "queued": len(symbols),
                 "running": 0,
                 "completed": 0,
                 "failed": 0,
@@ -1873,52 +1878,48 @@ def _queue_symbol_analysis(symbols: list[str], exchange: str = "NSE", debate_rou
                 },
             }
 
-        for sym in symbols:
-            try:
-                start_analysis(sym, exchange, debate_rounds=debate_rounds, desk_key=desk_key, run_async=False)
-                count += 1
-            except Exception as e:
-                logger.warning("%s queue: skipping %s: %s", desk_key, sym, e)
-                with _jobs_lock:
-                    state = _desk_state.get(desk_key) or {}
-                    by_symbol = state.get("by_symbol") or {}
-                    if sym in by_symbol:
-                        by_symbol[sym].update(
-                            {
+        def _run_with_semaphore(sym: str) -> None:
+            with _BULK_ANALYSIS_SEMAPHORE:
+                try:
+                    start_analysis(sym, exchange, debate_rounds=debate_rounds, desk_key=desk_key, run_async=False)
+                except Exception as e:
+                    logger.warning("%s queue: skipping %s: %s", desk_key, sym, e)
+                    with _jobs_lock:
+                        state = _desk_state.get(desk_key) or {}
+                        by_symbol = state.get("by_symbol") or {}
+                        if sym in by_symbol:
+                            by_symbol[sym].update({
                                 "status": "FAILED",
                                 "error": str(e),
                                 "updated_at": datetime.utcnow().isoformat(),
-                            }
-                        )
-                    state["last_error"] = str(e)
-                    _desk_state[desk_key] = state
-                    statuses = [str((item or {}).get("status") or "").upper() for item in by_symbol.values()]
-                    total = int(state.get("symbol_count") or len(by_symbol) or 0)
-                    running = sum(1 for s in statuses if s == "RUNNING")
-                    completed = sum(1 for s in statuses if s == "COMPLETED")
-                    failed = sum(1 for s in statuses if s == "FAILED")
-                    queued = max(0, total - completed - failed - running)
-                    state["running"] = running
-                    state["completed"] = completed
-                    state["failed"] = failed
-                    state["remaining"] = queued
-                    state["processed"] = completed + failed
-                    state["queued"] = queued
+                            })
+                        state["last_error"] = str(e)
+
+        threads = []
+        for sym in symbols:
+            t = threading.Thread(
+                target=_run_with_semaphore,
+                args=(sym,),
+                name=f"{desk_key}-{sym}",
+                daemon=True,
+            )
+            t.start()
+            threads.append(t)
+            count += 1
 
         with _jobs_lock:
             state = _desk_state.get(desk_key, {})
-            status = str(state.get("status") or "").lower()
-            if status == "running":
-                state["status"] = "queued"
-            state["queued"] = int(state.get("remaining", max(0, len(symbols) - count)))
+            state["status"] = "queued"
+            state["queued"] = len(symbols)
             _desk_state[desk_key] = state
+
     except Exception as e:
         with _jobs_lock:
             _desk_state[desk_key]["status"] = "failed"
             _desk_state[desk_key]["last_error"] = str(e)
         raise
 
-    logger.info("%s: processed %d symbols", desk_key, count)
+    logger.info("%s: launched %d async jobs (max 5 concurrent)", desk_key, count)
     return count
 
 

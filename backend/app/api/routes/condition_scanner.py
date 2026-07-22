@@ -331,9 +331,94 @@ def _compute_indicator(
             return TechnicalIndicators.calculate_ema(closes, period)
         return TechnicalIndicators.calculate_sma(closes, period)
 
+    elif ind in ("CCI",):
+        return _calculate_cci(closes, highs, lows, period)
+
+    elif ind in ("ROC",):
+        if len(closes) < period + 1:
+            return None
+        prev = closes[-(period + 1)]
+        return ((closes[-1] - prev) / prev) * 100 if prev != 0 else None
+
+    elif ind in ("WILLIAMS_R", "WILLIAMSR", "WILLR"):
+        return _calculate_williams_r(highs, lows, closes, period)
+
+    elif ind in ("OBV",):
+        return _calculate_obv(closes, volumes)
+
+    elif ind in ("VWAP",):
+        return _calculate_vwap(closes, highs, lows, volumes, period)
+
+    elif ind in ("SUPERTREND",):
+        multiplier = float(params.get("multiplier", 3.0))
+        return _calculate_supertrend(closes, highs, lows, period, multiplier)
+
     else:
         logger.warning(f"Unknown indicator: {indicator}")
         return None
+
+
+def _calculate_cci(closes: List[float], highs: List[float], lows: List[float], period: int) -> Optional[float]:
+    """Commodity Channel Index."""
+    if len(closes) < period:
+        return None
+    typical = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+    window = typical[-period:]
+    mean = sum(window) / period
+    mad = sum(abs(x - mean) for x in window) / period
+    return (typical[-1] - mean) / (0.015 * mad) if mad != 0 else 0.0
+
+
+def _calculate_williams_r(highs: List[float], lows: List[float], closes: List[float], period: int) -> Optional[float]:
+    """Williams %R."""
+    if len(closes) < period:
+        return None
+    highest_high = max(highs[-period:])
+    lowest_low = min(lows[-period:])
+    if highest_high == lowest_low:
+        return -50.0
+    return ((highest_high - closes[-1]) / (highest_high - lowest_low)) * -100
+
+
+def _calculate_obv(closes: List[float], volumes: List[float]) -> Optional[float]:
+    """On-Balance Volume — returns last value in thousands."""
+    if len(closes) < 2:
+        return None
+    obv = 0.0
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv += volumes[i]
+        elif closes[i] < closes[i - 1]:
+            obv -= volumes[i]
+    return obv / 1000.0
+
+
+def _calculate_vwap(closes: List[float], highs: List[float], lows: List[float], volumes: List[float], period: int) -> Optional[float]:
+    """Rolling VWAP over `period` bars."""
+    if len(closes) < period:
+        return None
+    tp = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+    window_tp = tp[-period:]
+    window_vol = volumes[-period:]
+    total_vol = sum(window_vol)
+    if total_vol == 0:
+        return closes[-1]
+    return sum(t * v for t, v in zip(window_tp, window_vol)) / total_vol
+
+
+def _calculate_supertrend(closes: List[float], highs: List[float], lows: List[float], period: int, multiplier: float) -> Optional[float]:
+    """
+    Simplified Supertrend — returns +1 if price is above the lower band (bullish)
+    or -1 if below (bearish). Use comparator 'higher_than 0' for buy signals.
+    """
+    if len(closes) < period + 1:
+        return None
+    atr = TechnicalIndicators.calculate_atr(highs, lows, closes, period)
+    if atr is None:
+        return None
+    mid = (highs[-1] + lows[-1]) / 2
+    lower = mid - multiplier * atr
+    return 1.0 if closes[-1] > lower else -1.0
 
 
 def _calculate_tema(prices: List[float], period: int) -> Optional[float]:
@@ -537,6 +622,14 @@ def _evaluate_condition(
         return curr_val > target
     elif comparator == "below":
         return curr_val < target
+    elif comparator == "between":
+        # value_str expected as "lo,hi" e.g. "30,70"
+        try:
+            parts = value_str.split(",")
+            lo, hi = float(parts[0]), float(parts[1])
+            return lo <= curr_val <= hi
+        except Exception:
+            return False
     else:
         logger.warning(f"Unknown comparator: {comparator}")
         return False
@@ -661,6 +754,151 @@ def _scan_symbol(
 # ── Pre-built strategy templates ────────────────────────────────────────────
 
 PREBUILT_STRATEGIES: Dict[str, dict] = {
+    "volume_breakout": {
+        "name": "Volume Breakout",
+        "description": "Enters long when price is above its 20-bar close with RSI above 50, confirming genuine breakout interest backed by momentum.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "Day",
+        "entry_conditions": [
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "50"},
+            {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "25"},
+            {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "higher_than", "value": "0"},
+        ],
+        "exit_config": {"sl_pct": 4, "tp_pct": 12, "tsl_pct": 2, "exit_mode": "percentage"},
+    },
+    "gap_up_momentum": {
+        "name": "Gap Up Momentum",
+        "description": "Captures stocks with strong intraday momentum. RSI above 55 confirms momentum, MACD histogram positive ensures trend alignment, ADX above 20 confirms trend strength.",
+        "strategy_type": "Equity Intraday",
+        "direction": "BUY",
+        "timeframe": "15 Min",
+        "entry_conditions": [
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "55"},
+            {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "higher_than", "value": "0"},
+            {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "20"},
+        ],
+        "exit_config": {"sl_pct": 1.5, "tp_pct": 3, "tsl_pct": 0.5, "exit_mode": "percentage"},
+    },
+    "supertrend_buy": {
+        "name": "Supertrend Bullish",
+        "description": "Enters long when Supertrend is bullish (returns +1) with RSI above 50 and ADX above 20 confirming trend strength. A clean trend-following setup.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "1 Hour",
+        "entry_conditions": [
+            {"indicator": "Supertrend", "params": {"period": 10, "multiplier": 3.0}, "comparator": "higher_than", "value": "0"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "50"},
+            {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "20"},
+        ],
+        "exit_config": {"sl_pct": 3, "tp_pct": 9, "tsl_pct": 1.5, "exit_mode": "percentage"},
+    },
+    "cci_oversold_reversal": {
+        "name": "CCI Oversold Reversal",
+        "description": "Buys when CCI crosses above -100 from oversold territory, signalling a mean-reversion bounce. EMA(50) below price confirms the broader uptrend.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "Day",
+        "entry_conditions": [
+            {"indicator": "CCI", "params": {"period": 20}, "comparator": "crosses_above", "value": "-100"},
+            {"indicator": "EMA", "params": {"period": 50}, "comparator": "lower_than", "value": "Close(0)"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "35"},
+        ],
+        "exit_config": {"sl_pct": 4, "tp_pct": 10, "tsl_pct": 2, "exit_mode": "percentage"},
+    },
+    "williams_r_oversold": {
+        "name": "Williams %R Oversold Bounce",
+        "description": "Enters long when Williams %R crosses above -80 (leaving oversold zone) with price above EMA(20). Effective for short-term mean-reversion trades.",
+        "strategy_type": "Equity Intraday",
+        "direction": "BUY",
+        "timeframe": "15 Min",
+        "entry_conditions": [
+            {"indicator": "Williams_R", "params": {"period": 14}, "comparator": "crosses_above", "value": "-80"},
+            {"indicator": "EMA", "params": {"period": 20}, "comparator": "lower_than", "value": "Close(0)"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "40"},
+        ],
+        "exit_config": {"sl_pct": 1.5, "tp_pct": 3.5, "tsl_pct": 0.5, "exit_mode": "percentage"},
+    },
+    "roc_momentum_burst": {
+        "name": "ROC Momentum Burst",
+        "description": "Captures stocks with strong price acceleration. Rate of Change above 5% over 10 days with RSI in the 50-70 zone indicates a momentum burst without being overbought.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "Day",
+        "entry_conditions": [
+            {"indicator": "ROC", "params": {"period": 10}, "comparator": "higher_than", "value": "5"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "50"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "lower_than", "value": "70"},
+            {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "25"},
+        ],
+        "exit_config": {"sl_pct": 4, "tp_pct": 10, "tsl_pct": 2, "exit_mode": "percentage"},
+    },
+    "vwap_pullback_buy": {
+        "name": "VWAP Pullback Buy",
+        "description": "Buys when price is above VWAP and RSI is above 45 with positive MACD histogram. Ideal for intraday trend continuation after a brief pullback.",
+        "strategy_type": "Equity Intraday",
+        "direction": "BUY",
+        "timeframe": "5 Min",
+        "entry_conditions": [
+            {"indicator": "VWAP", "params": {"period": 20}, "comparator": "lower_than", "value": "Close(0)"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "45"},
+            {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "higher_than", "value": "0"},
+        ],
+        "exit_config": {"sl_pct": 1, "tp_pct": 2, "tsl_pct": 0.5, "exit_mode": "percentage"},
+    },
+    "bb_mean_reversion_sell": {
+        "name": "Bollinger Band Mean Reversion Short",
+        "description": "Short signal when price closes above the upper Bollinger Band (%B > 1) and RSI is overbought above 70. Expects a reversion back to the mean.",
+        "strategy_type": "Equity Swing",
+        "direction": "SELL",
+        "timeframe": "Day",
+        "entry_conditions": [
+            {"indicator": "BB", "params": {"period": 20, "std_dev": 2.0, "band": "percent_b"}, "comparator": "higher_than", "value": "1"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "70"},
+            {"indicator": "ADX", "params": {"period": 14}, "comparator": "lower_than", "value": "30"},
+        ],
+        "exit_config": {"sl_pct": 3, "tp_pct": 6, "tsl_pct": 1.5, "exit_mode": "percentage"},
+    },
+    "triple_ema_trend": {
+        "name": "Triple EMA Trend Filter",
+        "description": "Enters long only when EMA(9) > EMA(21) > EMA(50), confirming a strong multi-timeframe uptrend. ADX above 25 ensures the trend has sufficient strength.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "1 Hour",
+        "entry_conditions": [
+            {"indicator": "EMA", "params": {"period": 9}, "comparator": "higher_than", "value": "EMA(21)"},
+            {"indicator": "EMA", "params": {"period": 21}, "comparator": "higher_than", "value": "EMA(50)"},
+            {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "25"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "50"},
+        ],
+        "exit_config": {"sl_pct": 3, "tp_pct": 9, "tsl_pct": 1.5, "exit_mode": "percentage"},
+    },
+    "stoch_rsi_combo": {
+        "name": "Stochastic + RSI Combo",
+        "description": "Dual-oscillator confirmation: Stochastic %K crosses above 20 while RSI simultaneously crosses above 30. Both must fire together for a high-confidence entry.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "Day",
+        "entry_conditions": [
+            {"indicator": "Stochastic", "params": {"k_period": 14, "smoothing": "%k"}, "comparator": "crosses_above", "value": "20"},
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "crosses_above", "value": "30"},
+            {"indicator": "EMA", "params": {"period": 50}, "comparator": "lower_than", "value": "Close(0)"},
+        ],
+        "exit_config": {"sl_pct": 4, "tp_pct": 10, "tsl_pct": 2, "exit_mode": "percentage"},
+    },
+    "intraday_opening_range": {
+        "name": "Intraday Opening Range Breakout",
+        "description": "Classic ORB: enters when RSI is above 55 and MACD histogram crosses above 0 with ADX confirming trend. Tight SL/TP for quick intraday moves.",
+        "strategy_type": "Equity Intraday",
+        "direction": "BUY",
+        "timeframe": "5 Min",
+        "entry_conditions": [
+            {"indicator": "RSI", "params": {"period": 14}, "comparator": "higher_than", "value": "55"},
+            {"indicator": "MACD", "params": {"fast": 12, "slow": 26, "signal": 9, "component": "histogram"}, "comparator": "crosses_above", "value": "0"},
+            {"indicator": "ADX", "params": {"period": 14}, "comparator": "higher_than", "value": "20"},
+        ],
+        "exit_config": {"sl_pct": 0.8, "tp_pct": 1.6, "tsl_pct": 0.4, "exit_mode": "percentage"},
+    },
     "tema_stochastic_rebound": {
         "name": "TEMA Stochastic Rebound",
         "description": "Takes a buy position when the closing price crosses above the 50-period TEMA, signaling a potential shift in trend. This is supported by the Stochastic %K crossing above 20, indicating early bullish momentum from oversold territory.",
@@ -990,12 +1228,53 @@ async def list_indicators():
                 ],
                 "icon": "〰️"
             },
+            {
+                "id": "CCI", "name": "CCI",
+                "description": "Commodity Channel Index — >100 overbought, <-100 oversold",
+                "params": [{"name": "period", "type": "int", "default": 20}],
+                "icon": "🌀"
+            },
+            {
+                "id": "ROC", "name": "ROC",
+                "description": "Rate of Change — % price change over N bars",
+                "params": [{"name": "period", "type": "int", "default": 10}],
+                "icon": "🚀"
+            },
+            {
+                "id": "Williams_R", "name": "Williams %R",
+                "description": "Williams Percent Range — 0 to -100; below -80 oversold, above -20 overbought",
+                "params": [{"name": "period", "type": "int", "default": 14}],
+                "icon": "📡"
+            },
+            {
+                "id": "VWAP", "name": "VWAP",
+                "description": "Volume Weighted Average Price over N bars",
+                "params": [{"name": "period", "type": "int", "default": 20}],
+                "icon": "⚖️"
+            },
+            {
+                "id": "OBV", "name": "OBV",
+                "description": "On-Balance Volume — cumulative volume flow (in thousands)",
+                "params": [],
+                "icon": "📦"
+            },
+            {
+                "id": "Supertrend", "name": "Supertrend",
+                "description": "Returns +1 (bullish) or -1 (bearish). Use 'higher than 0' for buy signals.",
+                "params": [
+                    {"name": "period", "type": "int", "default": 10},
+                    {"name": "multiplier", "type": "float", "default": 3.0}
+                ],
+                "icon": "🔱"
+            },
         ],
         "comparators": [
             {"id": "crosses_above", "label": "crosses above"},
             {"id": "crosses_below", "label": "crosses below"},
             {"id": "higher_than", "label": "higher than"},
             {"id": "lower_than", "label": "lower than"},
+            {"id": "equal_to", "label": "equal to"},
+            {"id": "between", "label": "between (lo,hi)"},
         ]
     }
 

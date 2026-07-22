@@ -7,7 +7,6 @@ import asyncio
 import json
 from typing import Set, Dict, Any
 from fastapi import WebSocket, WebSocketDisconnect
-from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -117,65 +116,69 @@ async def broadcast_daily_pnl(data: Dict[str, Any]):
 # BACKGROUND TASKS
 # ============================
 
-async def periodic_mtm_updates(db: Session):
-    """Send periodic MTM updates (every 5 seconds)"""
+async def periodic_mtm_updates():
+    """Send periodic MTM updates (every 5 seconds). Opens a fresh DB session per iteration."""
+    from app.db.session import SessionLocal
     while True:
         try:
             if manager.get_connection_count() > 0:
-                # Get latest MTM data
                 from app.core.execution.paper_mtm import update_paper_mtm
-                
-                update_paper_mtm(db)
-                
-                # Fetch updated positions
                 from app.db.models_intent import ExecutionIntent
-                
-                positions = db.query(ExecutionIntent).filter(
-                    ExecutionIntent.status == "EXECUTED"
-                ).all()
-                
-                mtm_data = {
-                    "positions": [
-                        {
-                            "intent_id": p.intent_id,
-                            "strategy": p.strategy,
-                            "underlying": p.underlying,
-                            "pnl": p.pnl,
-                            "last_updated": p.last_mtm_at.isoformat() if p.last_mtm_at else None
-                        }
-                        for p in positions
-                    ],
-                    "timestamp": asyncio.get_event_loop().time()
-                }
-                
+
+                db = SessionLocal()
+                try:
+                    update_paper_mtm(db)
+                    positions = db.query(ExecutionIntent).filter(
+                        ExecutionIntent.status == "EXECUTED"
+                    ).all()
+                    mtm_data = {
+                        "positions": [
+                            {
+                                "intent_id": p.intent_id,
+                                "strategy": p.strategy,
+                                "underlying": p.underlying,
+                                "pnl": p.pnl,
+                                "last_updated": p.last_mtm_at.isoformat() if p.last_mtm_at else None
+                            }
+                            for p in positions
+                        ],
+                        "timestamp": asyncio.get_event_loop().time()
+                    }
+                finally:
+                    db.close()
+
                 await broadcast_mtm_update(mtm_data)
-            
-            await asyncio.sleep(5)  # Update every 5 seconds
-            
+
+            await asyncio.sleep(5)
+
         except Exception as e:
             logger.error(f"Error in periodic MTM updates: {e}", exc_info=True)
             await asyncio.sleep(5)
 
 
-async def periodic_system_health(db: Session):
-    """Send periodic system health updates (every 10 seconds)"""
+async def periodic_system_health():
+    """Send periodic system health updates (every 10 seconds). Opens a fresh DB session per iteration."""
+    from app.db.session import SessionLocal
     while True:
         try:
             if manager.get_connection_count() > 0:
                 from app.db.models_control import SystemControl
-                
-                system = db.query(SystemControl).first()
-                
-                health_data = {
-                    "trading_enabled": system.trading_enabled if system else False,
-                    "connected_clients": manager.get_connection_count(),
-                    "timestamp": asyncio.get_event_loop().time()
-                }
-                
+
+                db = SessionLocal()
+                try:
+                    system = db.query(SystemControl).first()
+                    health_data = {
+                        "trading_enabled": system.trading_enabled if system else False,
+                        "connected_clients": manager.get_connection_count(),
+                        "timestamp": asyncio.get_event_loop().time()
+                    }
+                finally:
+                    db.close()
+
                 await broadcast_system_status(health_data)
-            
-            await asyncio.sleep(10)  # Update every 10 seconds
-            
+
+            await asyncio.sleep(10)
+
         except Exception as e:
             logger.error(f"Error in system health updates: {e}", exc_info=True)
             await asyncio.sleep(10)

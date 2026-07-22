@@ -230,6 +230,9 @@ export const autoTraderAPI = {
   getLogs: (params?: { limit?: number; action?: string; underlying?: string; severity?: string }) =>
     api.get('/auto-trader/logs', { params }),
   clearLogs: () => api.delete('/auto-trader/logs'),
+  // Tier 2: push screener symbols into auto-trader stock_symbols list
+  addStockSymbols: (symbols: string[]) =>
+    api.put('/auto-trader/config', { trade_stocks: true, stock_symbols: symbols }),
 };
 
 export const schedulerAPI = {

@@ -163,21 +163,30 @@ def decide_strategy(
     # RANGE + LOW/NORMAL IV → DIRECTIONAL SPREADS OR BUTTERFLY
     # ================================================
     if market_mode == "RANGE" and iv_regime in ["LOW", "NORMAL"]:
-        # If neutral (no strong bias) → Butterfly
-        if confidence < 60 and quality_score >= 5:
-            return (
-                "BUTTERFLY_SPREAD",
-                f"Range-bound with neutral bias and low volatility expected (conf={confidence:.0f}%)"
-            )
-        
-        # If directional bias → spreads
+        # Directional bias with enough confidence → spreads first
         if confidence >= spread_min_conf:
             if take_bull:
                 return "BULL_PUT", f"Range but bullish bias (conf={confidence:.0f}%)"
             if take_bear:
                 return "BEAR_CALL", f"Range but bearish bias (conf={confidence:.0f}%)"
-        
-        return "NO_TRADE", "Range + low/normal IV without strong bias"
+
+        # Weak directional bias (confidence 55-65) → still use spreads, lower bar
+        if confidence >= 55 and quality_score >= 5:
+            if take_bull:
+                return "BULL_PUT", f"Range with moderate bullish bias (conf={confidence:.0f}%)"
+            if take_bear:
+                return "BEAR_CALL", f"Range with moderate bearish bias (conf={confidence:.0f}%)"
+
+        # Truly neutral (no bias, low confidence) + days_to_expiry context needed
+        # Butterfly only makes sense near expiry when pinning is likely
+        # For intraday 15m system, prefer Iron Condor over Butterfly
+        if confidence < 55 and quality_score >= 5:
+            return (
+                "IRON_CONDOR",
+                f"Range-bound with neutral bias and low/normal IV — Iron Condor preferred over Butterfly for intraday (conf={confidence:.0f}%)"
+            )
+
+        return "NO_TRADE", "Range + low/normal IV without sufficient conviction"
 
     # ================================================
     # FALLBACK

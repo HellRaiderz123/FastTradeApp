@@ -76,6 +76,10 @@ def get_config(db: Session = Depends(get_db)):
         "market_hours_only": cfg.market_hours_only,
         "entry_start_time": cfg.entry_start_time,
         "entry_end_time": cfg.entry_end_time,
+        "use_ai_gate": getattr(cfg, "use_ai_gate", False),
+        "ai_gate_min_confidence": getattr(cfg, "ai_gate_min_confidence", 0.65),
+        "trade_stocks": getattr(cfg, "trade_stocks", False),
+        "stock_symbols": getattr(cfg, "stock_symbols", []) or [],
         "status": cfg.status,
         "last_scan_at": cfg.last_scan_at,
         "error_message": cfg.error_message,
@@ -106,6 +110,10 @@ def update_config(
     market_hours_only: Optional[bool] = Body(None),
     entry_start_time: Optional[str] = Body(None),
     entry_end_time: Optional[str] = Body(None),
+    use_ai_gate: Optional[bool] = Body(None),
+    ai_gate_min_confidence: Optional[float] = Body(None),
+    trade_stocks: Optional[bool] = Body(None),
+    stock_symbols: Optional[List[str]] = Body(None),
     db: Session = Depends(get_db),
 ):
     """Update auto-trader configuration. Only provided fields are changed."""
@@ -153,6 +161,14 @@ def update_config(
         cfg.entry_start_time = _validate_hhmm(entry_start_time, "entry_start_time")
     if entry_end_time is not None:
         cfg.entry_end_time = _validate_hhmm(entry_end_time, "entry_end_time")
+    if use_ai_gate is not None:
+        cfg.use_ai_gate = use_ai_gate
+    if ai_gate_min_confidence is not None:
+        cfg.ai_gate_min_confidence = max(0.0, min(1.0, ai_gate_min_confidence))
+    if trade_stocks is not None:
+        cfg.trade_stocks = trade_stocks
+    if stock_symbols is not None:
+        cfg.stock_symbols = [s.strip().upper() for s in stock_symbols if s.strip()]
 
     effective_start = cfg.entry_start_time or "10:00"
     effective_end = cfg.entry_end_time or "15:15"

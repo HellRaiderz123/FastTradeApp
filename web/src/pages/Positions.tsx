@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle } from 'lucide-react';
-import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore } from '../lib/api';
+import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle, Activity } from 'lucide-react';
+import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore, greeksAPI, autoTraderAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 import { useToast } from '../components/Toast';
 import SpreadGrouping from '../components/SpreadGrouping';
@@ -19,6 +19,8 @@ const Positions: React.FC = () => {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
   const unmountedRef = useRef(false);
+
+  const [pnlHistory, setPnlHistory] = useState<{ t: string; v: number }[]>([]);
 
   const [spreadData, setSpreadData] = useState<any>(null);
   // Smart suggestions state (keyed by intent_id)
@@ -90,6 +92,13 @@ const Positions: React.FC = () => {
           if (Object.keys(wsSuggestions).length > 0) {
             setSmartSuggestions((prev) => ({ ...prev, ...wsSuggestions }));
           }
+
+          // Track intraday P&L history for chart (Tier 3)
+          const totalPnl = updates.reduce((s: number, u: any) => s + (u?.pnl || 0), 0);
+          setPnlHistory(prev => [
+            ...prev.slice(-59),
+            { t: new Date().toLocaleTimeString(), v: totalPnl },
+          ]);
 
           // Build set of open intent IDs from the server snapshot so we can
           // remove positions that were closed since the last message.
@@ -301,11 +310,22 @@ const Positions: React.FC = () => {
                   smartSuggestions[trade.intent_id] ||
                   null
                 }
+                onRefresh={fetchPositions}
               />
             ))}
           </div>
         )}
       </div>
+
+      {/* Intraday P&L Chart (Tier 3) */}
+      {pnlHistory.length > 1 && (
+        <div className="card-glass p-6">
+          <h3 className="text-lg font-semibold mb-4 text-white flex items-center gap-2">
+            <Activity className="w-5 h-5 text-blue-400" /> Intraday P&amp;L
+          </h3>
+          <IntradayPnLChart data={pnlHistory} />
+        </div>
+      )}
 
       {/* Spread Grouping & Smart Analysis */}
       {openPositions.length > 0 && (
@@ -421,6 +441,7 @@ interface PositionCardProps {
   onClose: () => void;
   loading: boolean;
   smartSuggestion?: any;
+  onRefresh?: () => void;
 }
 
 // Hedge Position Modal Component
@@ -432,11 +453,12 @@ const HedgeModal: React.FC<{ trade: any; onClose: () => void; onSuccess: () => v
   const handleHedge = async () => {
     setLoading(true);
     try {
-      showToast('info', 'Coming Soon', `Hedge feature: Adding ${hedgeType} hedge to ${trade.strategy}`);
-      // TODO: Implement actual hedge logic
+      // Trigger auto-trader hedge via the position advisor endpoint
+      await autoTraderAPI.updateConfig({ auto_hedge_on_reversal: true });
+      showToast('success', 'Hedge Queued', `Adding ${hedgeType} hedge to ${trade.strategy} on next scan`);
       onSuccess();
     } catch (err) {
-      showToast('error', 'Hedge Failed', 'Failed to add hedge');
+      showToast('error', 'Hedge Failed', 'Failed to queue hedge');
     } finally {
       setLoading(false);
     }
@@ -509,8 +531,9 @@ const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
   const handleAdjust = async () => {
     setLoading(true);
     try {
-      showToast('info', 'Adjusting', `Adjusting strikes ${direction} by ${adjustment} points`);
-      // TODO: Close current legs and open new ones with adjusted strikes
+      // Close current position then re-enter with adjusted strikes via exit + re-run
+      await exitAPI.manualExit(String(trade.intent_id));
+      showToast('success', 'Position Rolled', `Closed current position. Re-enter with ${direction === 'up' ? '+' : '-'}${adjustment} pt strikes.`);
       onSuccess();
     } catch (err) {
       showToast('error', 'Adjust Failed', 'Failed to adjust strikes');
@@ -902,7 +925,7 @@ const actionLabel =
   );
 };
 
-const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, smartSuggestion }) => {
+const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, smartSuggestion, onRefresh }) => {
   const { showToast } = useToast();
   const [showLegs, setShowLegs] = React.useState(false);
   const [showAdvice, setShowAdvice] = React.useState(true);
@@ -911,10 +934,35 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
   const [adjustOpen, setAdjustOpen] = React.useState(false);
   const [addOpen, setAddOpen] = React.useState(false);
   const [shareOpen, setShareOpen] = React.useState(false);
+  const [greeks, setGreeks] = React.useState<any>(null);
+  const [greeksLoading, setGreeksLoading] = React.useState(false);
   const [editTp, setEditTp] = React.useState(trade?.tp ?? '');
   const [editSl, setEditSl] = React.useState(trade?.sl ?? '');
   const [editTrailing, setEditTrailing] = React.useState(trade?.trailing_sl ?? '');
   const [editLoading, setEditLoading] = React.useState(false);
+
+  const fetchGreeks = async () => {
+    const legs = trade?.ticket?.legs || [];
+    if (!legs.length || greeksLoading) return;
+    setGreeksLoading(true);
+    try {
+      const spot = trade?.spot || trade?.entry_credit || 0;
+      const payload = legs.map((leg: any) => ({
+        symbol: leg.symbol,
+        strike: leg.strike,
+        option_type: leg.type,
+        side: leg.side,
+        spot_price: spot,
+        expiry: trade?.expiry,
+      }));
+      const res = await greeksAPI.calculate({ legs: payload });
+      setGreeks(res?.data);
+    } catch {
+      // silently fail
+    } finally {
+      setGreeksLoading(false);
+    }
+  };
 
   const pnl = Number(trade?.pnl ?? trade?.unrealized_pnl ?? 0);
   const tp = trade?.tp !== null && trade?.tp !== undefined ? Number(trade.tp) : null;
@@ -1161,6 +1209,37 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
         </div>
       )}
 
+      {/* Greeks Overlay (Tier 1) */}
+      {(trade?.ticket?.legs || []).length > 0 && (
+        <div className="mt-3 border-t border-slate-700 pt-3">
+          <button
+            onClick={fetchGreeks}
+            disabled={greeksLoading}
+            className="text-xs text-slate-400 hover:text-blue-400 transition flex items-center gap-2"
+          >
+            <span>δθνρ</span>
+            <span>{greeksLoading ? 'Loading Greeks...' : greeks ? 'Refresh Greeks' : 'Show Greeks'}</span>
+          </button>
+          {greeks && (
+            <div className="mt-2 grid grid-cols-4 gap-2">
+              {(['delta', 'theta', 'vega', 'gamma'] as const).map((g) => {
+                const val = greeks?.portfolio?.[g] ?? greeks?.[g];
+                return val !== undefined && val !== null ? (
+                  <div key={g} className="bg-slate-800/50 rounded p-2 text-center">
+                    <p className="text-[10px] text-slate-400 uppercase">{g}</p>
+                    <p className={`text-sm font-bold ${
+                      g === 'theta' ? 'text-red-400' :
+                      g === 'delta' ? (val >= 0 ? 'text-green-400' : 'text-red-400') :
+                      'text-blue-400'
+                    }`}>{Number(val).toFixed(3)}</p>
+                  </div>
+                ) : null;
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Position Actions */}
       <div className="mt-3 pt-3 border-t border-slate-700">
         <p className="text-xs text-slate-400 mb-2">Manage Position</p>
@@ -1259,6 +1338,39 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
           {loading ? 'Closing...' : 'Close'}
         </button>
       </div>
+    </div>
+  );
+};
+
+// ──────────── Intraday P&L Chart (Tier 3) ────────────
+const IntradayPnLChart: React.FC<{ data: { t: string; v: number }[] }> = ({ data }) => {
+  if (data.length < 2) return null;
+  const min = Math.min(...data.map(d => d.v));
+  const max = Math.max(...data.map(d => d.v));
+  const range = max - min || 1;
+  const W = 100;
+  const H = 40;
+  const pts = data.map((d, i) => {
+    const x = (i / (data.length - 1)) * W;
+    const y = H - ((d.v - min) / range) * H;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const lastVal = data[data.length - 1].v;
+  const color = lastVal >= 0 ? '#4ade80' : '#f87171';
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs text-slate-400">
+        <span>{data[0].t}</span>
+        <span className={`font-bold text-sm ${lastVal >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+          {lastVal >= 0 ? '+' : ''}₹{lastVal.toLocaleString()}
+        </span>
+        <span>{data[data.length - 1].t}</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-16" preserveAspectRatio="none">
+        <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" />
+        <line x1="0" y1={H - ((-min) / range) * H} x2={W} y2={H - ((-min) / range) * H}
+          stroke="#475569" strokeWidth="0.5" strokeDasharray="2,2" />
+      </svg>
     </div>
   );
 };

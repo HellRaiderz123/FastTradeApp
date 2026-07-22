@@ -6,7 +6,7 @@ Advanced filtering for NIFTY 50 stocks with technical & fundamental criteria
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 
 from app.services.zerodha import KiteConnectService
@@ -15,6 +15,40 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/screener", tags=["screener"])
 
 kite_service = KiteConnectService()
+
+
+def _get_real_indicators(symbol: str) -> dict:
+    """
+    Compute RSI, EMA20, EMA50 from actual CandleDaily rows.
+    Returns dict with rsi, ma_20, ma_50, or empty dict on failure.
+    """
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models_candles import CandleDaily
+        from app.services.trading_agents import _compute_indicators
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(CandleDaily)
+                .filter(CandleDaily.symbol == symbol)
+                .order_by(CandleDaily.date.desc())
+                .limit(60)
+                .all()
+            )
+            if not rows:
+                return {}
+            candles = [
+                {"close": r.close, "high": r.high, "low": r.low, "volume": r.volume}
+                for r in reversed(rows)
+            ]
+            ind = _compute_indicators(candles)
+            return ind if ind.get("available") else {}
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug("screener: indicator fetch failed for %s: %s", symbol, e)
+        return {}
 
 
 class ScreenerFilters(BaseModel):
@@ -173,20 +207,26 @@ async def filter_stocks(filters: ScreenerFilters):
         # Get all symbols
         symbols = [stock["symbol"] for stock in NIFTY50_STOCKS]
         
-        # Fetch bulk quotes
-        from app.api.routes.market import kite_service as market_kite
+        # Fetch all quotes in a single bulk API call (fixes O(N) latency)
+        symbols = [s["symbol"] for s in NIFTY50_STOCKS]
+        nse_symbols = [f"NSE:{sym}" for sym in symbols]
+        bulk_data = kite_service.get_bulk_quotes(nse_symbols) or {}
+
         results = []
-        
+
         for stock_meta in NIFTY50_STOCKS:
             symbol = stock_meta["symbol"]
-            
+
             try:
-                # Get current quote
-                quote_data = market_kite.get_full_quote(symbol)
-                
-                if not quote_data or "last_price" not in quote_data:
-                    logger.warning(f"No data for {symbol}, skipping")
+                raw = bulk_data.get(f"NSE:{symbol}") or bulk_data.get(symbol)
+                if not raw or "last_price" not in raw:
+                    logger.debug("screener: no quote for %s, skipping", symbol)
                     continue
+                quote_data = {
+                    "last_price": raw["last_price"],
+                    "ohlc": raw.get("ohlc", {}),
+                    "volume": raw.get("volume", 0),
+                }
                 
                 ltp = float(quote_data["last_price"])
                 ohlc = quote_data.get("ohlc", {})
@@ -222,28 +262,21 @@ async def filter_stocks(filters: ScreenerFilters):
                 if filters.max_market_cap and stock_meta["market_cap"] > filters.max_market_cap:
                     continue
                 
-                # Calculate RSI (simplified - would need historical data)
-                # For now, generate synthetic RSI based on change%
-                rsi = None
-                if change_percent > 2:
-                    rsi = 65 + (change_percent * 2)
-                elif change_percent < -2:
-                    rsi = 35 + (change_percent * 2)
-                else:
-                    rsi = 50 + (change_percent * 5)
-                
-                rsi = max(0, min(100, rsi))  # Clamp to 0-100
-                
+                # Real indicators from candle DB
+                ind = _get_real_indicators(symbol)
+                rsi = ind.get("rsi14") or (50 + change_percent * 2)
+                rsi = max(0.0, min(100.0, rsi))
+                ma_20 = ind.get("ema20") or ltp * 0.98
+                ma_50 = ind.get("ema50") or ltp * 0.96
+                ma_200 = ltp * 0.92  # 200-day EMA not computed yet; keep approximation
+
                 # RSI filters
                 if filters.rsi_min and rsi < filters.rsi_min:
                     continue
                 if filters.rsi_max and rsi > filters.rsi_max:
                     continue
-                
-                # Moving average filters (simplified)
-                ma_20 = ltp * 0.98  # Simplified MA
-                ma_50 = ltp * 0.96
-                ma_200 = ltp * 0.92
+
+                # Moving average filters
                 
                 if filters.price_above_ma:
                     if filters.price_above_ma == 20 and ltp < ma_20:
@@ -481,6 +514,132 @@ async def get_presets():
                 "sectors": ["IT"],
                 "min_change_percent": 0,
                 "sort_by": "change_percent"
+            }
+        },
+        {
+            "id": "momentum_surge",
+            "name": "Momentum Surge",
+            "description": "Strong intraday move with RSI confirming momentum — ideal for trend-following entries",
+            "filters": {
+                "min_change_percent": 2.5,
+                "rsi_min": 60,
+                "rsi_max": 80,
+                "price_above_ma": 20,
+                "sort_by": "change_percent",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "reversal_watch",
+            "name": "Reversal Watch",
+            "description": "Stocks down 2–6% today with RSI near oversold — potential intraday bounce setups",
+            "filters": {
+                "min_change_percent": -6.0,
+                "max_change_percent": -2.0,
+                "rsi_min": 25,
+                "rsi_max": 40,
+                "sort_by": "rsi",
+                "sort_order": "asc"
+            }
+        },
+        {
+            "id": "52w_high_breakout",
+            "name": "52-Week High Breakout",
+            "description": "Stocks trading near their 52-week high with positive momentum — continuation candidates",
+            "filters": {
+                "near_52w_high": True,
+                "min_change_percent": 0.5,
+                "rsi_min": 55,
+                "sort_by": "change_percent",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "value_picks",
+            "name": "Value Picks",
+            "description": "Low P/E, low P/B stocks with decent ROE — fundamentally cheap quality names",
+            "filters": {
+                "max_pe_ratio": 20.0,
+                "max_pb_ratio": 3.0,
+                "min_roe": 12.0,
+                "max_debt_to_equity": 1.0,
+                "sort_by": "market_cap",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "dividend_yield",
+            "name": "High Dividend Yield",
+            "description": "Stocks paying 3%+ dividend yield — income-focused portfolio candidates",
+            "filters": {
+                "min_dividend_yield": 3.0,
+                "max_debt_to_equity": 1.5,
+                "sort_by": "market_cap",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "quality_growth",
+            "name": "Quality Growth",
+            "description": "High ROE, low debt, above 50-MA — compounders in an uptrend",
+            "filters": {
+                "min_roe": 20.0,
+                "max_debt_to_equity": 0.5,
+                "price_above_ma": 50,
+                "rsi_min": 50,
+                "sort_by": "market_cap",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "pre_market_gap",
+            "name": "Gap Up Candidates",
+            "description": "Stocks up 1.5–4% with volume spike — gap-and-go momentum plays",
+            "filters": {
+                "min_change_percent": 1.5,
+                "max_change_percent": 4.0,
+                "min_volume": 500000,
+                "rsi_min": 55,
+                "sort_by": "volume",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "sector_rotation_finance",
+            "name": "Finance Sector Rotation",
+            "description": "Banking & finance stocks with positive price action and low P/B",
+            "filters": {
+                "sectors": ["Finance"],
+                "min_change_percent": 0.5,
+                "max_pb_ratio": 4.0,
+                "sort_by": "change_percent",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "low_volatility",
+            "name": "Low Volatility Steady",
+            "description": "Stable stocks with RSI 45–60, above 50-MA — low-risk positional holds",
+            "filters": {
+                "rsi_min": 45,
+                "rsi_max": 60,
+                "price_above_ma": 50,
+                "max_change_percent": 2.0,
+                "min_change_percent": -1.0,
+                "sort_by": "market_cap",
+                "sort_order": "desc"
+            }
+        },
+        {
+            "id": "pharma_momentum",
+            "name": "Pharma & Healthcare",
+            "description": "Defensive pharma and healthcare stocks with upward momentum",
+            "filters": {
+                "sectors": ["Pharma", "Healthcare"],
+                "min_change_percent": 0,
+                "rsi_min": 50,
+                "sort_by": "change_percent",
+                "sort_order": "desc"
             }
         }
     ]

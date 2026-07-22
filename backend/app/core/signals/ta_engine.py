@@ -111,7 +111,7 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
         "vix_ok": True,  # Will be fetched separately if needed
         "bb_confirm": is_bb_confirming(last),
         "iv_trade_ok": False,  # Will be set from external IV data
-        "vol_strong": True if float(df["volume"].fillna(0).sum()) == 0.0 else float(last["volume_ratio"]) > 1.5,
+        "vol_strong": True if float(df["volume"].fillna(0).sum()) == 0.0 else float(last["volume_ratio"]) > 1.2,
         "sr_confirm": True,  # Will be set from support/resistance
     }
 
@@ -163,7 +163,8 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     else:
         signal = "RANGE"
         bias = "NEUTRAL"
-        confidence = 45
+        # Use quality score to differentiate a clean range from a noisy one
+        confidence = 35 + min(15, quality_score * 2)
         reason = "No directional edge or ADX weak"
 
     # ================================================================

@@ -46,6 +46,14 @@ class AutoTraderConfig(Base):
     auto_hedge_on_reversal = Column(Boolean, default=False)  # hedge instead of exit
     reversal_confidence_threshold = Column(Float, default=65) # min confidence to act on reversal
 
+    # AI Gate
+    use_ai_gate = Column(Boolean, default=False)          # require AI pipeline BUY/SELL approval before entry
+    ai_gate_min_confidence = Column(Float, default=0.65)  # min AI confidence (0-1) to allow entry
+
+    # Stock universe support
+    trade_stocks = Column(Boolean, default=False)         # also scan stock universe (not just options)
+    stock_symbols = Column(JSON, default=[])              # explicit stock symbols to scan
+
     # Schedule
     scan_interval_sec = Column(Integer, default=30)       # how often to scan (seconds)
     market_hours_only = Column(Boolean, default=True)     # only trade 9:15-15:15
@@ -107,7 +115,16 @@ def ensure_auto_trader_schema(bind) -> None:
                 "ALTER TABLE auto_trader_config ADD COLUMN entry_end_time VARCHAR(5) DEFAULT '15:15'"
             )
 
-        if not statements and {"entry_start_time", "entry_end_time"}.issubset(columns):
+        if "use_ai_gate" not in columns:
+            statements.append("ALTER TABLE auto_trader_config ADD COLUMN use_ai_gate BOOLEAN DEFAULT FALSE")
+        if "ai_gate_min_confidence" not in columns:
+            statements.append("ALTER TABLE auto_trader_config ADD COLUMN ai_gate_min_confidence FLOAT DEFAULT 0.65")
+        if "trade_stocks" not in columns:
+            statements.append("ALTER TABLE auto_trader_config ADD COLUMN trade_stocks BOOLEAN DEFAULT FALSE")
+        if "stock_symbols" not in columns:
+            statements.append("ALTER TABLE auto_trader_config ADD COLUMN stock_symbols JSON DEFAULT '[]'")
+
+        if not statements and {"entry_start_time", "entry_end_time", "use_ai_gate", "trade_stocks"}.issubset(columns):
             return
 
         with bind.begin() as conn:

@@ -189,6 +189,22 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"⚠️ Condition scanner resume failed: {e}")
 
+        # Schedule AI job cleanup every 30 minutes (fix 7: unbounded in-memory job store)
+        try:
+            from apscheduler.triggers.interval import IntervalTrigger
+            from app.core.market.scheduler import _scheduler
+            from app.services.trading_agents import cleanup_expired_jobs
+
+            _scheduler.add_job(
+                cleanup_expired_jobs,
+                trigger=IntervalTrigger(minutes=30),
+                id="ai_job_cleanup",
+                replace_existing=True,
+            )
+            logger.info("✅ AI job cleanup scheduled (every 30 min)")
+        except Exception as e:
+            logger.warning(f"⚠️ AI job cleanup scheduler failed: {e}")
+
         # Schedule daily AI outcome evaluation
         try:
             from apscheduler.triggers.interval import IntervalTrigger
@@ -221,18 +237,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ TradingAgents event loop wiring failed: {e}")
     
-    # Start WebSocket background tasks
+    # Start WebSocket background tasks (fix 8: each task owns its own DB session per iteration)
     mtm_task = None
     health_task = None
-    db = None
     try:
         from app.services.websocket import periodic_mtm_updates, periodic_system_health
-        from app.db.session import SessionLocal
-        
-        db = SessionLocal()
-        mtm_task = asyncio.create_task(periodic_mtm_updates(db))
-        health_task = asyncio.create_task(periodic_system_health(db))
-        
+
+        mtm_task = asyncio.create_task(periodic_mtm_updates())
+        health_task = asyncio.create_task(periodic_system_health())
+
         logger.info("✅ WebSocket background tasks started")
     except Exception as e:
         logger.warning(f"⚠️ WebSocket tasks failed to start: {e}")
@@ -250,11 +263,6 @@ async def lifespan(app: FastAPI):
         health_task.cancel()
     if mtm_task or health_task:
         logger.info("✅ Background tasks cancelled")
-
-    # FIX: Always close the DB session opened at startup
-    if db:
-        db.close()
-        logger.info("✅ Startup DB session closed")
 
 
 app = FastAPI(
