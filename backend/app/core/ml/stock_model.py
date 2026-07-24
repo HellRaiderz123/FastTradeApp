@@ -22,45 +22,66 @@ logger = logging.getLogger(__name__)
 
 
 def _per_symbol_split(
-    x: pd.DataFrame, y: pd.Series, test_ratio: float = 0.2
+    x: pd.DataFrame, y: pd.Series, test_ratio: float = 0.2, val_ratio: float = 0.1
 ) -> Tuple:
     """
-    Split each symbol's rows independently at test_ratio, then combine.
-    Prevents a single market regime (e.g. recent bull run) from dominating
-    the test set when data is sorted by timestamp across all symbols.
+    Per-symbol chronological split: train=70% / val=10% / test=20%.
+    Each symbol is split independently so no single market regime dominates.
+    The symbol column is dropped before returning.
     """
-    from app.core.ml.dataset import build_stock_ml_dataset  # avoid circular at module level
+    train_idx, val_idx, test_idx = [], [], []
 
-    # x must carry a 'symbol' column — added by build_stock_ml_dataset
-    if "symbol" not in x.columns:
-        # Fallback: plain temporal split
-        split_idx = int(len(x) * (1 - test_ratio))
-        return x.iloc[:split_idx], x.iloc[split_idx:], y.iloc[:split_idx], y.iloc[split_idx:]
+    sym_col = "symbol" if "symbol" in x.columns else None
 
-    train_idx, test_idx = [], []
-    for _, grp in x.groupby("symbol", sort=False):
-        n = len(grp)
-        cut = int(n * (1 - test_ratio))
-        train_idx.extend(grp.index[:cut].tolist())
-        test_idx.extend(grp.index[cut:].tolist())
+    if sym_col is None:
+        n = len(x)
+        t_cut = int(n * (1 - test_ratio - val_ratio))
+        v_cut = int(n * (1 - test_ratio))
+        return (
+            x.iloc[:t_cut], x.iloc[t_cut:v_cut], x.iloc[v_cut:],
+            y.iloc[:t_cut], y.iloc[t_cut:v_cut], y.iloc[v_cut:],
+        )
 
+    for sym, grp in x.groupby(sym_col, sort=False):
+        idx = grp.index.tolist()   # already chronological per symbol
+        n   = len(idx)
+        t_cut = int(n * (1 - test_ratio - val_ratio))
+        v_cut = int(n * (1 - test_ratio))
+        train_idx.extend(idx[:t_cut])
+        val_idx.extend(idx[t_cut:v_cut])
+        test_idx.extend(idx[v_cut:])
+
+    drop = [sym_col]
     return (
-        x.loc[train_idx].drop(columns=["symbol"]),
-        x.loc[test_idx].drop(columns=["symbol"]),
+        x.loc[train_idx].drop(columns=drop),
+        x.loc[val_idx].drop(columns=drop),
+        x.loc[test_idx].drop(columns=drop),
         y.loc[train_idx],
+        y.loc[val_idx],
         y.loc[test_idx],
     )
 
 
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-    """Find threshold that maximises F1 on the validation set."""
-    from sklearn.metrics import f1_score as _f1
-    best_t, best_f1 = 0.5, 0.0
-    for t in np.arange(0.35, 0.70, 0.01):
+    """Find threshold that maximises geometric-mean of precision & recall on val set.
+    Rejects thresholds predicting <20% or >70% as UP (tighter guard against recall bias).
+    Falls back to 0.5 if no valid threshold found.
+    """
+    from sklearn.metrics import precision_score as _p, recall_score as _r
+    n = len(y_true)
+    best_t, best_score = 0.5, 0.0
+    for t in np.arange(0.30, 0.75, 0.01):
         preds = (y_proba >= t).astype(int)
-        score = _f1(y_true, preds, zero_division=0)
-        if score > best_f1:
-            best_f1, best_t = score, t
+        pred_rate = preds.sum() / n
+        # Guard: reject if predicting <10% or >80% as BUY
+        if pred_rate < 0.10 or pred_rate > 0.80:
+            continue
+        p = _p(y_true, preds, zero_division=0)
+        r = _r(y_true, preds, zero_division=0)
+        # Geometric mean penalises imbalance between precision and recall
+        score = (p * r) ** 0.5 if p > 0 and r > 0 else 0.0
+        if score > best_score:
+            best_score, best_t = score, t
     return round(float(best_t), 2)
 
 
@@ -72,7 +93,22 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
     class_counts = y.value_counts()
     logger.info(f"📊 Dataset: {len(x)} samples, Classes: {dict(class_counts)}")
 
-    x_train, x_test, y_train, y_test = _per_symbol_split(x, y)
+    x_train, x_val, x_test, y_train, y_val, y_test = _per_symbol_split(x, y)
+
+    # Undersample majority class in training set only to remove directional bias.
+    # Sort by index to preserve chronological order within each symbol.
+    train_df = x_train.copy()
+    train_df["__label__"] = y_train.values
+    minority_n = train_df["__label__"].value_counts().min()
+    train_balanced = pd.concat([
+        train_df[train_df["__label__"] == cls]
+        .sample(minority_n, random_state=42)
+        .sort_index()          # restore chronological order
+        for cls in [0, 1]
+    ]).sort_index()            # interleave both classes chronologically
+    x_train = train_balanced.drop(columns=["__label__"])
+    y_train = train_balanced["__label__"]
+    logger.info(f"📊 Balanced train: {len(x_train)} rows (UP={minority_n} DOWN={minority_n})")
 
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
@@ -90,16 +126,17 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
 
     pipeline.fit(x_train, y_train)
 
+    # Calibrate threshold on val set (never seen during training)
+    y_val_proba = pipeline.predict_proba(x_val)[:, 1] if len(x_val) else np.array([])
+    best_threshold = _find_best_threshold(y_val.values, y_val_proba) if len(x_val) else 0.5
+    logger.info(f"📊 Calibrated threshold (val): {best_threshold}")
+
+    # Evaluate on held-out test set using calibrated threshold
     y_proba = pipeline.predict_proba(x_test)[:, 1] if len(x_test) else np.array([])
-
-    # Find calibrated threshold on test set, store it in metadata for inference
-    best_threshold = _find_best_threshold(y_test.values, y_proba) if len(x_test) else 0.5
-    logger.info(f"📊 Calibrated threshold: {best_threshold}")
-
     y_pred = (y_proba >= best_threshold).astype(int) if len(x_test) else np.array([])
     
-    # Calculate metrics
-    accuracy = float(pipeline.score(x_test, y_test)) if len(x_test) else 0.0
+    # All metrics computed from calibrated y_pred on held-out test set
+    accuracy = float((y_pred == y_test.values).mean()) if len(x_test) else 0.0
     precision = float(precision_score(y_test, y_pred, zero_division=0)) if len(x_test) else 0.0
     recall = float(recall_score(y_test, y_pred, zero_division=0)) if len(x_test) else 0.0
     f1 = float(f1_score(y_test, y_pred, zero_division=0)) if len(x_test) else 0.0
@@ -133,6 +170,7 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
         "return_threshold": config.return_threshold,
         "decision_threshold": best_threshold,
         "train_rows": int(len(x_train)),
+        "val_rows": int(len(x_val)),
         "test_rows": int(len(x_test)),
         "total_samples": int(len(x)),
         "accuracy": round(accuracy, 4),

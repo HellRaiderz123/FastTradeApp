@@ -40,6 +40,11 @@ FEATURE_COLUMNS: List[str] = [
     "ret_5_vs_vol",
     "close_vs_high20",
     "close_vs_low20",
+    # Regime features (binary market condition flags)
+    "high_vol_regime",
+    "low_vol_regime",
+    "trend_up",
+    "trend_strength",
 ]
 
 
@@ -116,6 +121,24 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     rolling_low = data["low"].rolling(20).min()
     data["close_vs_high20"] = (data["close"] - rolling_high) / rolling_high  # proximity to 20d high
     data["close_vs_low20"] = (data["close"] - rolling_low) / rolling_low    # proximity to 20d low
+
+    # --- Regime features (from reference: high_vol, low_vol, trend_up, trend_strength) ---
+    # These binary regime flags help the model separate market conditions
+    vol_mean = data["volatility"].rolling(30).mean()
+    vol_std = data["volatility"].rolling(30).std()
+    vol_z = (data["volatility"] - vol_mean) / (vol_std + 1e-9)
+    data["high_vol_regime"] = (vol_z > 0.5).astype(float)
+    data["low_vol_regime"] = (vol_z < -0.5).astype(float)
+    data["trend_up"] = (
+        (data["price_vs_ema_slow"] > 0) &
+        (data["ema_fast_slope"] > 0) &
+        (data["macd_hist"] > 0)
+    ).astype(float)
+    data["trend_strength"] = (
+        data["price_vs_ema_slow"].clip(-0.05, 0.05) +
+        data["ema_fast_slope"].clip(-0.02, 0.02) +
+        data["macd_hist"].clip(-0.5, 0.5) / 10
+    )
 
     if float(data["volume"].fillna(0).sum()) == 0.0:
         data["volume_ratio"] = 1.0

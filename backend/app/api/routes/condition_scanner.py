@@ -1758,13 +1758,10 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
         log = AutoTraderLog(
             strategy=strategy_name,
             action="ENTRY",
-            symbol=symbol,
-            direction=direction,
-            price=ltp,
-            quantity=quantity,
-            execution_mode=mode,
-            details=json.dumps(order),
-            timestamp=datetime.now(),
+            underlying=symbol,
+            reason=f"{direction} @ {ltp} qty={quantity} mode={mode}",
+            details=order,
+            severity="SUCCESS" if "FAILED" not in str(order.get("status", "")) else "ERROR",
         )
         db.add(log)
         db.commit()
@@ -2166,6 +2163,12 @@ def _backtest_symbol(
                         candidates.append(("TP", tp_level))
                     if candidates:
                         exit_reason, exit_price = min(candidates, key=lambda item: item[1])
+
+                # Conditional exit: fires only if SL/TP/TSL haven't already triggered
+                if not exit_reason:
+                    cond_exits = exit_config.get("exit_conditions") or []
+                    if cond_exits and all(_evaluate_condition(ec, closes, highs, lows, volumes) for ec in cond_exits):
+                        exit_reason, exit_price = "COND_EXIT", bar_open
             else:
                 trough_price = min(trough_price, bar_low)
                 sl_level = entry_price * (1 + sl_pct) if sl_pct > 0 else None
@@ -2192,6 +2195,12 @@ def _backtest_symbol(
                         candidates.append(("TP", tp_level))
                     if candidates:
                         exit_reason, exit_price = max(candidates, key=lambda item: item[1])
+
+                # Conditional exit: fires only if SL/TP/TSL haven't already triggered
+                if not exit_reason:
+                    cond_exits = exit_config.get("exit_conditions") or []
+                    if cond_exits and all(_evaluate_condition(ec, closes, highs, lows, volumes) for ec in cond_exits):
+                        exit_reason, exit_price = "COND_EXIT", bar_open
 
             if exit_reason and exit_price is not None:
                 raw_exit_price = float(exit_price)
@@ -2538,7 +2547,8 @@ def _run_backtest_for_strategy_payload(
 
     total_return = ((capital - req.initial_capital) / req.initial_capital) * 100
     days_span = (end_date - start_date).days or 1
-    annual_return = total_return * (365 / days_span)
+    _tr = total_return / 100.0
+    annual_return = ((1 + _tr) ** (365.0 / days_span) - 1) * 100 if _tr > -1 else -100.0
 
     gross_profit = sum(t["pnl_pct"] for t in winners)
     gross_loss = abs(sum(t["pnl_pct"] for t in losers))

@@ -13,6 +13,9 @@ class MarketUniverse(str, Enum):
     NIFTY50 = "NIFTY50"
     NIFTY100 = "NIFTY100"
     NIFTY500 = "NIFTY500"
+    NIFTY_MIDCAP_50 = "NIFTY MIDCAP 50"
+    NIFTY_MIDCAP_150 = "NIFTY MIDCAP 150"
+    NIFTY_SMALLCAP_50 = "NIFTY SMALLCAP 50"
     BANKNIFTY = "BANKNIFTY"
     FINNIFTY = "FINNIFTY"
     NIFTY_IT = "NIFTY_IT"
@@ -32,6 +35,42 @@ MARKET_SYMBOLS = {
         "POWERGRID", "RELIANCE", "SBILIFE", "SHRIRAMFIN", "SBIN",
         "SUNPHARMA", "TCS", "TATACONSUM", "TATAMOTORS", "TATASTEEL",
         "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO"
+    ],
+    "NIFTY MIDCAP 50": [
+        "ABCAPITAL", "ABFRL", "ALKEM", "ASHOKLEY", "ASTRAL",
+        "AUROPHARMA", "BALKRISIND", "BANDHANBNK", "BANKBARODA", "BHARATFORG",
+        "BHEL", "BIOCON", "CANBK", "CHOLAFIN", "COFORGE",
+        "CONCOR", "CROMPTON", "CUMMINSIND", "DELHIVERY", "DIXON",
+        "FEDERALBNK", "GMRINFRA", "GODREJPROP", "HDFCAMC", "HINDPETRO",
+        "IDFCFIRSTB", "INDHOTEL", "INDUSTOWER", "IRCTC", "JINDALSTEL",
+        "JUBLFOOD", "KPITTECH", "LICHSGFIN", "LUPIN", "MFSL",
+        "MPHASIS", "MRF", "NMDC", "OBEROIRLTY", "OFSS",
+        "PAGEIND", "PERSISTENT", "PETRONET", "PFC", "PIIND",
+        "PNB", "RECLTD", "SAIL", "SUPREMEIND", "TATACOMM"
+    ],
+    "NIFTY MIDCAP 150": [
+        "ABCAPITAL", "ABFRL", "ALKEM", "ASHOKLEY", "ASTRAL",
+        "AUROPHARMA", "BALKRISIND", "BANDHANBNK", "BANKBARODA", "BHARATFORG",
+        "BHEL", "BIOCON", "CANBK", "CHOLAFIN", "COFORGE",
+        "CONCOR", "CROMPTON", "CUMMINSIND", "DELHIVERY", "DIXON",
+        "FEDERALBNK", "GMRINFRA", "GODREJPROP", "HDFCAMC", "HINDPETRO",
+        "IDFCFIRSTB", "INDHOTEL", "INDUSTOWER", "IRCTC", "JINDALSTEL",
+        "JUBLFOOD", "KPITTECH", "LICHSGFIN", "LUPIN", "MFSL",
+        "MPHASIS", "MRF", "NMDC", "OBEROIRLTY", "OFSS",
+        "PAGEIND", "PERSISTENT", "PETRONET", "PFC", "PIIND",
+        "PNB", "RECLTD", "SAIL", "SUPREMEIND", "TATACOMM"
+    ],
+    "NIFTY SMALLCAP 50": [
+        "APLAPOLLO", "APTUS", "BALAMINES", "BASF", "BSOFT",
+        "CAMPUS", "CANFINHOME", "CDSL", "CLEAN", "CMSINFO",
+        "DATAPATTNS", "DEEPAKNTR", "DOMS", "ELGIEQUIP", "EMAMILTD",
+        "FINEORG", "FLUOROCHEM", "GLAND", "GLAXO", "GPPL",
+        "GRINDWELL", "HAPPSTMNDS", "HSCL", "IDEAFORGE", "IIFL",
+        "INOXWIND", "JKCEMENT", "JYOTHYLAB", "KALYANKJIL", "KFINTECH",
+        "LATENTVIEW", "LXCHEM", "MAPMYINDIA", "MEDANTA", "METROBRAND",
+        "MFSL", "NATCOPHARM", "NAUKRI", "NETWORK18", "NUVOCO",
+        "OLECTRA", "PNBHOUSING", "POLYMED", "RAINBOW", "RKFORGE",
+        "ROUTE", "SAFARI", "SENCO", "SIGNATURE", "TIPSINDLTD"
     ],
     "BANKNIFTY": [
         "HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK",
@@ -178,8 +217,16 @@ INDICATOR_DEFAULTS = {
 
 
 def get_symbols(universe: str = "NIFTY50") -> List[str]:
-    """Get symbol list for a market universe"""
-    return MARKET_SYMBOLS.get(universe, MARKET_SYMBOLS["NIFTY50"])
+    """Get symbol list for a market universe. Returns NIFTY50 as fallback with a warning."""
+    import logging
+    symbols = MARKET_SYMBOLS.get(universe)
+    if symbols is None:
+        logging.getLogger(__name__).warning(
+            f"Unknown universe '{universe}' — falling back to NIFTY50. "
+            f"Available: {list(MARKET_SYMBOLS.keys())}"
+        )
+        return MARKET_SYMBOLS["NIFTY50"]
+    return symbols
 
 
 def get_scanner_strategies() -> Dict:

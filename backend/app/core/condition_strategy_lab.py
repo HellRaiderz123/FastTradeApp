@@ -7,9 +7,9 @@ from typing import Any, Dict, List
 
 _TIMEFRAME_PROFILES: Dict[str, Dict[str, Any]] = {
     "Day": {
-        "sl_pct": 3.2,
-        "tp_pct": 9.5,
-        "tsl_pct": 1.8,
+        "sl_pct": 2.5,
+        "tp_pct": 12.0,
+        "tsl_pct": 2.0,
         "require_htf_confirm": False,
         "htf_timeframe": None,
         "atr_period": 14,
@@ -650,7 +650,11 @@ def generate_candidate_strategies(
 
 
 def score_backtest_summary(summary: Dict[str, Any]) -> float:
-    """Score backtest summary with ROI-first, risk-aware, robustness-aware weighting."""
+    """Score backtest summary — ROI-first ranking.
+    Primary: annual_return and total_return.
+    Secondary: drawdown control and trade quality.
+    Penalties: tiny samples, catastrophic drawdown, zero-edge trades.
+    """
     total_return = float(summary.get("total_return_pct") or 0.0)
     annual_return = float(summary.get("annual_return_pct") or 0.0)
     sharpe = float(summary.get("sharpe_ratio") or 0.0)
@@ -667,34 +671,45 @@ def score_backtest_summary(summary: Dict[str, Any]) -> float:
     if total_trades <= 0 or symbols_traded <= 0:
         return -1e9
 
+    # Reject strategies with negative returns outright
+    if annual_return <= 0 or total_return <= 0:
+        return -1e9
+
     capped_pf = min(profit_factor, 10.0)
+
+    # Return/drawdown ratio — rewards high return with controlled drawdown
     return_drawdown_ratio = annual_return / max(1.0, max_drawdown)
+
+    # Expectancy per trade
     expectancy = 0.0
     if avg_loss > 0:
         expectancy = (win_rate / 100.0) * avg_win - (1.0 - win_rate / 100.0) * avg_loss
 
-    trade_bonus = min(total_trades, 80) * 0.25
-    breadth_bonus = min(symbols_traded, 12) * 1.25
-    walk_forward_bonus = walk_forward_pass_rate * 0.35
-    small_sample_penalty = max(0, 25 - total_trades) * 2.0
-    high_drawdown_penalty = max(0.0, max_drawdown - 25.0) * 1.3
-    low_win_rate_penalty = max(0.0, 45.0 - win_rate) * 0.4
-    slippage_penalty = min(total_slippage_cost / 250.0, 25.0)
+    # Bonuses
+    trade_bonus = min(total_trades, 100) * 0.2          # more trades = more confidence
+    breadth_bonus = min(symbols_traded, 15) * 1.0       # works across symbols
+    walk_forward_bonus = walk_forward_pass_rate * 0.5   # out-of-sample robustness
+
+    # Penalties
+    small_sample_penalty = max(0, 20 - total_trades) * 3.0   # harsh on <20 trades
+    high_drawdown_penalty = max(0.0, max_drawdown - 20.0) * 2.0  # penalise >20% DD
+    slippage_penalty = min(total_slippage_cost / 200.0, 30.0)
 
     score = (
-        total_return * 0.6
-        + annual_return * 2.8
-        + return_drawdown_ratio * 12.0
-        + sharpe * 10.0
-        + capped_pf * 5.0
-        + expectancy * 4.0
-        + max(0.0, win_rate - 45.0) * 0.15
+        # ROI is the primary driver
+        annual_return * 5.0
+        + total_return * 1.0
+        + return_drawdown_ratio * 15.0   # best single metric for risk-adjusted ROI
+        # Quality multipliers
+        + sharpe * 8.0
+        + capped_pf * 6.0
+        + expectancy * 5.0
+        + walk_forward_bonus
         + trade_bonus
         + breadth_bonus
-        + walk_forward_bonus
+        # Penalties
         - small_sample_penalty
         - high_drawdown_penalty
-        - low_win_rate_penalty
         - slippage_penalty
     )
     return round(score, 2)
@@ -742,8 +757,8 @@ def select_diverse_top(
     ranked_results: List[Dict[str, Any]],
     *,
     top_n: int,
-    max_per_family: int = 2,
-    fill_remaining: bool = False,
+    max_per_family: int = 3,
+    fill_remaining: bool = True,
 ) -> List[Dict[str, Any]]:
     """Pick top-ranked strategies with family diversity constraints."""
     if top_n <= 0:

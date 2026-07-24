@@ -49,6 +49,7 @@ interface ExitConfig {
   walk_forward_enabled?: boolean;
   walk_forward_windows?: number;
   walk_forward_train_pct?: number;
+  exit_conditions?: Condition[];
 }
 
 interface Strategy {
@@ -238,12 +239,68 @@ const HTF_TIMEFRAME_OPTIONS = ['Auto', '5 Min', '15 Min', '1 Hour', 'Day'];
 const UNIVERSES = [
   { value: 'NIFTY50', label: 'NIFTY 50' },
   { value: 'NIFTY100', label: 'NIFTY 100' },
-  { value: 'NIFTY200', label: 'NIFTY 200' },
-  { value: 'NIFTYIT', label: 'NIFTY IT' },
-  { value: 'NIFTYBANK', label: 'NIFTY BANK' },
-  { value: 'MIDCAP', label: 'NIFTY MIDCAP 50' },
-  { value: 'SMALLCAP', label: 'NIFTY SMALLCAP 50' },
+  { value: 'NIFTY MIDCAP 50', label: 'NIFTY MIDCAP 50' },
+  { value: 'NIFTY MIDCAP 150', label: 'NIFTY MIDCAP 150' },
+  { value: 'NIFTY SMALLCAP 50', label: 'NIFTY SMALLCAP 50' },
+  { value: 'BANKNIFTY', label: 'NIFTY BANK' },
+  { value: 'NIFTY_IT', label: 'NIFTY IT' },
+  { value: 'FINNIFTY', label: 'FINNIFTY' },
 ];
+
+// All symbols per universe for the stock picker
+const UNIVERSE_SYMBOLS: Record<string, string[]> = {
+  'NIFTY50': [
+    'ADANIENT','ADANIPORTS','APOLLOHOSP','ASIANPAINT','AXISBANK',
+    'BAJAJ-AUTO','BAJFINANCE','BAJAJFINSV','BEL','BHARTIARTL',
+    'CIPLA','COALINDIA','DRREDDY','EICHERMOT','ETERNAL',
+    'GRASIM','HCLTECH','HDFCBANK','HDFCLIFE','HEROMOTOCO',
+    'HINDALCO','HINDUNILVR','ICICIBANK','ITC','INDUSINDBK',
+    'INFY','JSWSTEEL','JIOFIN','KOTAKBANK','LT',
+    'M&M','MARUTI','NESTLEIND','NTPC','ONGC',
+    'POWERGRID','RELIANCE','SBILIFE','SHRIRAMFIN','SBIN',
+    'SUNPHARMA','TCS','TATACONSUM','TATAMOTORS','TATASTEEL',
+    'TECHM','TITAN','TRENT','ULTRACEMCO','WIPRO',
+  ],
+  'NIFTY MIDCAP 50': [
+    'ABCAPITAL','ABFRL','ALKEM','ASHOKLEY','ASTRAL',
+    'AUROPHARMA','BALKRISIND','BANDHANBNK','BANKBARODA','BHARATFORG',
+    'BHEL','BIOCON','CANBK','CHOLAFIN','COFORGE',
+    'CONCOR','CROMPTON','CUMMINSIND','DELHIVERY','DIXON',
+    'FEDERALBNK','GMRINFRA','GODREJPROP','HDFCAMC','HINDPETRO',
+    'IDFCFIRSTB','INDHOTEL','INDUSTOWER','IRCTC','JINDALSTEL',
+    'JUBLFOOD','KPITTECH','LICHSGFIN','LUPIN','MFSL',
+    'MPHASIS','MRF','NMDC','OBEROIRLTY','OFSS',
+    'PAGEIND','PERSISTENT','PETRONET','PFC','PIIND',
+    'PNB','RECLTD','SAIL','SUPREMEIND','TATACOMM',
+  ],
+  'NIFTY MIDCAP 150': [
+    'ABCAPITAL','ABFRL','ALKEM','ASHOKLEY','ASTRAL',
+    'AUROPHARMA','BALKRISIND','BANDHANBNK','BANKBARODA','BHARATFORG',
+    'BHEL','BIOCON','CANBK','CHOLAFIN','COFORGE',
+    'CONCOR','CROMPTON','CUMMINSIND','DELHIVERY','DIXON',
+    'FEDERALBNK','GMRINFRA','GODREJPROP','HDFCAMC','HINDPETRO',
+    'IDFCFIRSTB','INDHOTEL','INDUSTOWER','IRCTC','JINDALSTEL',
+    'JUBLFOOD','KPITTECH','LICHSGFIN','LUPIN','MFSL',
+    'MPHASIS','MRF','NMDC','OBEROIRLTY','OFSS',
+    'PAGEIND','PERSISTENT','PETRONET','PFC','PIIND',
+    'PNB','RECLTD','SAIL','SUPREMEIND','TATACOMM',
+  ],
+  'NIFTY SMALLCAP 50': [
+    'APLAPOLLO','APTUS','BALAMINES','BASF','BSOFT',
+    'CAMPUS','CANFINHOME','CDSL','CLEAN','CMSINFO',
+    'DATAPATTNS','DEEPAKNTR','DOMS','ELGIEQUIP','EMAMILTD',
+    'FINEORG','FLUOROCHEM','GLAND','GLAXO','GPPL',
+    'GRINDWELL','HAPPSTMNDS','HSCL','IDEAFORGE','IIFL',
+    'INOXWIND','JKCEMENT','JYOTHYLAB','KALYANKJIL','KFINTECH',
+    'LATENTVIEW','LXCHEM','MAPMYINDIA','MEDANTA','METROBRAND',
+    'MFSL','NATCOPHARM','NAUKRI','NETWORK18','NUVOCO',
+    'OLECTRA','PNBHOUSING','POLYMED','RAINBOW','RKFORGE',
+    'ROUTE','SAFARI','SENCO','SIGNATURE','TIPSINDLTD',
+  ],
+  'BANKNIFTY': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSINDBK','BANDHANBNK','FEDERALBNK','IDFCFIRSTB','PNB','BANKBARODA','AUBANK'],
+  'NIFTY_IT': ['TCS','INFY','WIPRO','HCLTECH','TECHM','LTI','COFORGE','PERSISTENT','MPHASIS'],
+  'FINNIFTY': ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','BAJFINANCE','BAJAJFINSV','HDFCLIFE','SBILIFE','ICICIGI','BAJAJHLDNG','PFC','RECLTD','MUTHOOTFIN','CHOLAFIN'],
+};
 const DEFAULT_EXIT_CONFIG: ExitConfig = {
   sl_pct: 5,
   tp_pct: 10,
@@ -260,6 +317,7 @@ const DEFAULT_EXIT_CONFIG: ExitConfig = {
   walk_forward_enabled: false,
   walk_forward_windows: 3,
   walk_forward_train_pct: 67,
+  exit_conditions: [],
 };
 
 const TYPE_COLORS: Record<string, string> = {
@@ -327,6 +385,10 @@ const CreateScanner: React.FC = () => {
   const [editorTimeframe, setEditorTimeframe] = useState('1 Hour');
   const [editorUniverse, setEditorUniverse] = useState('NIFTY50');
   const [editorConditions, setEditorConditions] = useState<Condition[]>([]);
+  // Stock picker
+  const [showStockPicker, setShowStockPicker] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState('');
+  const [selectedStocks, setSelectedStocks] = useState<string[]>([]);
   const [editorExit, setEditorExit] = useState<ExitConfig>(DEFAULT_EXIT_CONFIG);
   const [saving, setSaving] = useState(false);
 
@@ -351,7 +413,7 @@ const CreateScanner: React.FC = () => {
     return d.toISOString().slice(0, 10);
   });
   const [btEndDate, setBtEndDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [btTab, setBtTab] = useState<'summary' | 'symbols' | 'trades'>('summary');
+  const [btTab, setBtTab] = useState<'summary' | 'symbols' | 'trades' | 'monthly'>('summary');
   const [showBacktestPanel, setShowBacktestPanel] = useState(false);
   const [candleRange, setCandleRange] = useState<{
     min_date: string | null; max_date: string | null;
@@ -419,6 +481,7 @@ const CreateScanner: React.FC = () => {
     setEditorDirection((strategy.direction as 'BUY' | 'SELL') || 'BUY');
     setEditorTimeframe(strategy.timeframe || '1 Hour');
     setEditorUniverse(strategy.universe || 'NIFTY50');
+    setSelectedStocks(strategy.instruments || []);
     setEditorConditions([...(strategy.entry_conditions || [])]);
     setEditorExit({ ...DEFAULT_EXIT_CONFIG, ...(strategy.exit_config || {}) });
     setEditorAutoScan(strategy.auto_scan_enabled || false);
@@ -616,7 +679,8 @@ const CreateScanner: React.FC = () => {
     const losers = adjustedTrades.filter(t => t.pnl_pct <= 0);
     const totalTrades = adjustedTrades.length;
     const totalReturn = ((capital - backtestResult.initial_capital) / backtestResult.initial_capital) * 100;
-    const annualReturn = totalReturn * (365 / daysSpan);
+    const _tr = totalReturn / 100;
+    const annualReturn = (_tr > -1 ? (Math.pow(1 + _tr, 365 / daysSpan) - 1) : -1) * 100;
     const grossProfit = winners.reduce((sum, t) => sum + t.pnl_pct, 0);
     const grossLoss = Math.abs(losers.reduce((sum, t) => sum + t.pnl_pct, 0));
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 999 : 0);
@@ -700,6 +764,7 @@ const CreateScanner: React.FC = () => {
     setEditorDirection('BUY');
     setEditorTimeframe('1 Hour');
     setEditorUniverse('NIFTY50');
+    setSelectedStocks([]);
     setEditorConditions([{
       indicator: 'RSI',
       params: { period: 14 },
@@ -813,7 +878,7 @@ const CreateScanner: React.FC = () => {
         direction: editorDirection,
         timeframe: editorTimeframe,
         universe: editorUniverse,
-        instruments: [],
+        instruments: selectedStocks,
         entry_conditions: editorConditions,
         exit_config: editorExit,
         is_active: true,
@@ -1383,13 +1448,85 @@ const CreateScanner: React.FC = () => {
                     </select>
                     <select
                       value={editorUniverse}
-                      onChange={e => setEditorUniverse(e.target.value)}
+                      onChange={e => { setEditorUniverse(e.target.value); setSelectedStocks([]); setShowStockPicker(true); setPickerSearch(''); }}
                       className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:border-blue-500 focus:outline-none"
                       title="Universe"
                     >
                       {UNIVERSES.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
                     </select>
+                    {/* Stock picker button */}
+                    <button
+                      onClick={() => setShowStockPicker(v => !v)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition flex items-center gap-1.5 ${
+                        selectedStocks.length > 0
+                          ? 'bg-blue-600/20 border-blue-500/50 text-blue-300'
+                          : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                      }`}
+                      title="Pick specific stocks from this universe"
+                    >
+                      <Filter className="w-3.5 h-3.5" />
+                      {selectedStocks.length > 0 ? `${selectedStocks.length} stocks` : 'All stocks'}
+                    </button>
                   </div>
+
+                  {/* Stock Picker Panel */}
+                  {showStockPicker && (
+                    <div className="mb-4 rounded-xl border border-blue-500/30 bg-slate-950/80 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <p className="text-sm font-semibold text-white">Pick Stocks</p>
+                          <p className="text-[11px] text-slate-500">
+                            {selectedStocks.length === 0
+                              ? `Scanning all ${UNIVERSE_SYMBOLS[editorUniverse]?.length ?? '?'} stocks in ${editorUniverse}`
+                              : `Scanning ${selectedStocks.length} selected stock${selectedStocks.length > 1 ? 's' : ''}`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setSelectedStocks(UNIVERSE_SYMBOLS[editorUniverse] || [])}
+                            className="text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:text-white"
+                          >Select All</button>
+                          <button
+                            onClick={() => setSelectedStocks([])}
+                            className="text-[11px] px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:text-white"
+                          >Clear</button>
+                          <button
+                            onClick={() => setShowStockPicker(false)}
+                            className="text-slate-500 hover:text-white text-xs px-1"
+                          >✕</button>
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Search symbol..."
+                        value={pickerSearch}
+                        onChange={e => setPickerSearch(e.target.value.toUpperCase())}
+                        className="w-full mb-3 px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+                      />
+                      <div className="grid grid-cols-4 gap-1.5 max-h-52 overflow-y-auto custom-scrollbar">
+                        {(UNIVERSE_SYMBOLS[editorUniverse] || [])
+                          .filter(s => !pickerSearch || s.includes(pickerSearch))
+                          .map(sym => {
+                            const checked = selectedStocks.includes(sym);
+                            return (
+                              <button
+                                key={sym}
+                                onClick={() => setSelectedStocks(prev =>
+                                  prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]
+                                )}
+                                className={`px-2 py-1.5 rounded-lg text-[11px] font-medium border transition text-left ${
+                                  checked
+                                    ? 'bg-blue-600/30 border-blue-500/60 text-blue-200'
+                                    : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white hover:border-slate-500'
+                                }`}
+                              >
+                                {checked && <span className="text-blue-400 mr-0.5">✓</span>}{sym}
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Conditions */}
                   <div className="mb-4">
@@ -1730,6 +1867,118 @@ const CreateScanner: React.FC = () => {
                       </p>
                     </div>
                   </div>
+
+                  {/* Conditional Exit */}
+                  <div className="mt-4 rounded-lg border border-orange-500/20 bg-orange-500/5 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <p className="text-sm font-medium text-orange-300">Conditional Exit</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Exit when ALL conditions fire — checked only after SL/TP/TSL. Set SL/TP to 0 to use conditions as sole exit.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setEditorExit(prev => ({
+                          ...prev,
+                          exit_conditions: [...(prev.exit_conditions || []), { indicator: 'Supertrend', params: { period: 10, multiplier: 3.0 }, comparator: 'lower_than', value: '0' }],
+                        }))}
+                        disabled={(editorExit.exit_conditions?.length ?? 0) >= 4}
+                        className="px-2.5 py-1 bg-orange-600/30 hover:bg-orange-600/50 border border-orange-500/40 text-orange-300 text-xs rounded-lg flex items-center gap-1 disabled:opacity-40"
+                      >
+                        <Plus className="w-3 h-3" /> Add
+                      </button>
+                    </div>
+                    {(editorExit.exit_conditions || []).length === 0 && (
+                      <p className="text-[11px] text-slate-600 italic">No conditional exit — only SL/TP/TSL active.</p>
+                    )}
+                    <div className="space-y-2">
+                      {(editorExit.exit_conditions || []).map((cond, idx) => {
+                        const meta = indicators.find(i => i.id === cond.indicator);
+                        return (
+                          <div key={idx} className="flex items-start gap-2 bg-slate-900/60 rounded-lg p-2 border border-slate-700/50">
+                            <span className="text-[10px] text-orange-400 mt-2 w-6 flex-shrink-0">{idx === 0 ? 'If' : 'And'}</span>
+                            <div className="flex-1 flex flex-wrap gap-1.5 items-center">
+                              <select
+                                value={cond.indicator}
+                                onChange={e => {
+                                  const m = indicators.find(i => i.id === e.target.value);
+                                  const dp: Record<string, any> = {};
+                                  m?.params.forEach(p => { dp[p.name] = p.default; });
+                                  const updated = [...(editorExit.exit_conditions || [])];
+                                  updated[idx] = { indicator: e.target.value, params: dp, comparator: cond.comparator, value: cond.value };
+                                  setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                }}
+                                className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white min-w-[120px]"
+                              >
+                                {indicators.map(ind => <option key={ind.id} value={ind.id}>{ind.icon} {ind.name}</option>)}
+                              </select>
+                              {meta?.params.map(p => (
+                                <div key={p.name}>
+                                  {p.type === 'select' ? (
+                                    <select
+                                      value={cond.params[p.name] ?? p.default}
+                                      onChange={e => {
+                                        const updated = [...(editorExit.exit_conditions || [])];
+                                        updated[idx] = { ...updated[idx], params: { ...updated[idx].params, [p.name]: e.target.value } };
+                                        setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                      }}
+                                      className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white"
+                                    >
+                                      {p.options?.map(o => <option key={o} value={o}>{o}</option>)}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="number"
+                                      value={cond.params[p.name] ?? p.default}
+                                      onChange={e => {
+                                        const updated = [...(editorExit.exit_conditions || [])];
+                                        updated[idx] = { ...updated[idx], params: { ...updated[idx].params, [p.name]: parseFloat(e.target.value) || 0 } };
+                                        setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                      }}
+                                      className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white w-14 text-center"
+                                      title={p.name}
+                                    />
+                                  )}
+                                </div>
+                              ))}
+                              <select
+                                value={cond.comparator}
+                                onChange={e => {
+                                  const updated = [...(editorExit.exit_conditions || [])];
+                                  updated[idx] = { ...updated[idx], comparator: e.target.value };
+                                  setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                }}
+                                className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white"
+                              >
+                                {COMPARATORS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                              </select>
+                              <input
+                                type="text"
+                                value={cond.value}
+                                onChange={e => {
+                                  const updated = [...(editorExit.exit_conditions || [])];
+                                  updated[idx] = { ...updated[idx], value: e.target.value };
+                                  setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                }}
+                                placeholder="0"
+                                className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white w-16"
+                              />
+                            </div>
+                            <button
+                              onClick={() => {
+                                const updated = (editorExit.exit_conditions || []).filter((_, i) => i !== idx);
+                                setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                              }}
+                              className="p-1 hover:bg-red-500/20 rounded mt-1"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                 </div>
 
                 {/* Auto-Scan Section */}
@@ -2147,12 +2396,12 @@ const CreateScanner: React.FC = () => {
                       </div>
                     )}
 
-                    {/* Tabs: symbols / trades */}
+                    {/* Tabs: summary / symbols / trades / monthly */}
                     <div className="flex border-b border-slate-700 mb-3">
-                      {(['summary', 'symbols', 'trades'] as const).map(tab => (
+                      {(['summary', 'symbols', 'trades', 'monthly'] as const).map(tab => (
                         <button
                           key={tab}
-                          onClick={() => setBtTab(tab)}
+                          onClick={() => setBtTab(tab as any)}
                           className={`px-3 py-1.5 text-[11px] font-medium capitalize transition ${
                             btTab === tab
                               ? 'text-purple-300 border-b-2 border-purple-400'
@@ -2229,6 +2478,78 @@ const CreateScanner: React.FC = () => {
                       </div>
                     )}
 
+                    {/* Tab: Monthly P&L Heatmap */}
+                    {btTab === 'monthly' && (() => {
+                      const trades = displayedBacktestResult!.all_trades;
+                      if (!trades.length) return <p className="text-xs text-slate-500 text-center py-4">No trades</p>;
+
+                      // Aggregate pnl_pct sum by YYYY-MM
+                      const map: Record<string, number> = {};
+                      for (const t of trades) {
+                        const key = (t.exit_date || '').slice(0, 7);
+                        if (key) map[key] = (map[key] || 0) + t.pnl_pct;
+                      }
+                      const months = Object.keys(map).sort();
+                      if (!months.length) return null;
+
+                      // Group by year
+                      const byYear: Record<string, string[]> = {};
+                      for (const m of months) {
+                        const y = m.slice(0, 4);
+                        if (!byYear[y]) byYear[y] = [];
+                        byYear[y].push(m);
+                      }
+                      const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                      const maxAbs = Math.max(...Object.values(map).map(Math.abs), 1);
+
+                      const cellColor = (v: number) => {
+                        const intensity = Math.min(Math.abs(v) / maxAbs, 1);
+                        if (v > 0) return `rgba(74,222,128,${0.15 + intensity * 0.55})`;
+                        if (v < 0) return `rgba(248,113,113,${0.15 + intensity * 0.55})`;
+                        return 'rgba(100,116,139,0.15)';
+                      };
+
+                      return (
+                        <div className="space-y-3">
+                          {Object.entries(byYear).map(([year, yrMonths]) => {
+                            const yearTotal = yrMonths.reduce((s, m) => s + (map[m] || 0), 0);
+                            return (
+                              <div key={year}>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-[10px] font-semibold text-slate-400">{year}</span>
+                                  <span className={`text-[10px] font-bold ${yearTotal >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    {yearTotal >= 0 ? '+' : ''}{yearTotal.toFixed(1)}%
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-6 gap-0.5">
+                                  {MONTH_LABELS.map((label, mi) => {
+                                    const key = `${year}-${String(mi + 1).padStart(2, '0')}`;
+                                    const val = map[key];
+                                    return (
+                                      <div
+                                        key={label}
+                                        title={val !== undefined ? `${label} ${year}: ${val >= 0 ? '+' : ''}${val.toFixed(1)}%` : `${label} ${year}: no trades`}
+                                        className="rounded px-1 py-1 text-center"
+                                        style={{ background: val !== undefined ? cellColor(val) : 'rgba(30,41,59,0.4)' }}
+                                      >
+                                        <div className="text-[8px] text-slate-500">{label}</div>
+                                        <div className={`text-[9px] font-semibold leading-tight ${
+                                          val === undefined ? 'text-slate-700'
+                                          : val >= 0 ? 'text-green-300' : 'text-red-300'
+                                        }`}>
+                                          {val !== undefined ? `${val >= 0 ? '+' : ''}${val.toFixed(0)}%` : '—'}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+
                     {/* Tab: Trade Log */}
                     {btTab === 'trades' && (
                       <div className="max-h-[400px] overflow-y-auto custom-scrollbar space-y-1">
@@ -2246,6 +2567,7 @@ const CreateScanner: React.FC = () => {
                                 t.exit_reason === 'TP' ? 'bg-green-500/20 text-green-300' :
                                 t.exit_reason === 'SL' ? 'bg-red-500/20 text-red-300' :
                                 t.exit_reason === 'TSL' ? 'bg-yellow-500/20 text-yellow-300' :
+                                t.exit_reason === 'COND_EXIT' ? 'bg-orange-500/20 text-orange-300' :
                                 'bg-blue-500/20 text-blue-300'
                               }`}>{t.exit_reason}</span>
                             </div>

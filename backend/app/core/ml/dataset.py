@@ -87,9 +87,9 @@ def build_stock_ml_dataset(
         return pd.DataFrame(), pd.Series(dtype=int)
 
     dataset = pd.concat(frames, ignore_index=True)
-    # Sort by timestamp so temporal split is valid across all symbols
-    if "timestamp" in dataset.columns:
-        dataset = dataset.sort_values("timestamp").reset_index(drop=True)
+    # Do NOT sort globally by timestamp — that causes regime bias in splits.
+    # Each symbol's rows are already chronological; _per_symbol_split handles
+    # the train/val/test cut per symbol independently.
 
     # Keep symbol in x so per-symbol split works; it's dropped before training
     x = dataset[FEATURE_COLUMNS + ["symbol"]]

@@ -342,13 +342,10 @@ def _auto_execute_signal(
         log = AutoTraderLog(
             strategy=strategy_name,
             action="AUTO_ENTRY",
-            symbol=symbol,
-            direction=direction,
-            price=ltp,
-            quantity=quantity,
-            execution_mode=mode,
-            details=json.dumps(order),
-            timestamp=datetime.now(),
+            underlying=symbol,
+            reason=f"{direction} @ {ltp} qty={quantity} mode={mode}",
+            details=order,
+            severity="SUCCESS" if "FAILED" not in str(order.get("status", "")) else "ERROR",
         )
         db.add(log)
         db.commit()
