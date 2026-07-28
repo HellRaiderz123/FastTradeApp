@@ -40,6 +40,8 @@ export default function WatchlistsScreen() {
   const [newSymbol, setNewSymbol] = useState('');
   const addRef = useRef(false);
 
+  const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const load = useCallback(async () => {
     try {
       const res = await watchlistAPI.list();
@@ -53,6 +55,15 @@ export default function WatchlistsScreen() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (expandedId !== null) {
+      autoRefreshRef.current = setInterval(() => loadQuotes(expandedId), 30000);
+    } else {
+      if (autoRefreshRef.current) { clearInterval(autoRefreshRef.current); autoRefreshRef.current = null; }
+    }
+    return () => { if (autoRefreshRef.current) { clearInterval(autoRefreshRef.current); autoRefreshRef.current = null; } };
+  }, [expandedId]);
 
   const onRefresh = () => {
     setRefreshing(true);

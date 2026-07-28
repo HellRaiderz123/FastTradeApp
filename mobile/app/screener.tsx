@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -13,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { screenerAPI } from '../lib/api';
+import { screenerAPI, watchlistAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
 
@@ -40,6 +41,37 @@ export default function ScreenerScreen() {
   const [results, setResults] = useState<ScreenerResult[]>([]);
   const [presets, setPresets] = useState<any[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>('');
+
+  const addToWatchlist = useCallback(async (symbol: string) => {
+    try {
+      const res = await watchlistAPI.list();
+      const lists: any[] = res.data?.watchlists || res.data || [];
+      if (lists.length === 0) {
+        Alert.alert('No Watchlists', 'Create a watchlist first from the Watchlists screen.');
+        return;
+      }
+      Alert.alert(
+        `Add ${symbol}`,
+        'Choose a watchlist:',
+        [
+          ...lists.map((wl: any) => ({
+            text: wl.name,
+            onPress: async () => {
+              try {
+                await watchlistAPI.addSymbol(wl.id, symbol);
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              } catch (err: any) {
+                Alert.alert('Error', err?.response?.data?.detail || 'Add failed');
+              }
+            },
+          })),
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+    } catch {
+      Alert.alert('Error', 'Could not load watchlists.');
+    }
+  }, []);
 
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
@@ -199,6 +231,9 @@ export default function ScreenerScreen() {
                     />
                     <Text style={styles.meta}>Vol: {Number(item.volume || 0).toLocaleString('en-IN')}</Text>
                     <Text style={styles.meta}>RSI: {Number(item.rsi || 0).toFixed(1)}</Text>
+                    <TouchableOpacity onPress={() => addToWatchlist(item.symbol)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Ionicons name="bookmark-outline" size={16} color={Colors.accent} />
+                    </TouchableOpacity>
                   </View>
                 </GlassCard>
               );

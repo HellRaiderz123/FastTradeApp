@@ -106,6 +106,8 @@ export default function Layout() {
       <Tabs.Screen name="mlCenter" options={{ href: null }} />
       <Tabs.Screen name="calendar" options={{ href: null }} />
       <Tabs.Screen name="aiAgents" options={{ href: null }} />
+      <Tabs.Screen name="news" options={{ href: null }} />
+      <Tabs.Screen name="account" options={{ href: null }} />
     </Tabs>
   );
 }

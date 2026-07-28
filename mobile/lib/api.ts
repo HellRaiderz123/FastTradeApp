@@ -484,8 +484,30 @@ export const aiAgentsAPI = {
     api.get(`/ai-analysis/status/${jobId}`),
   history: (symbol: string, limit = 10) =>
     api.get(`/ai-analysis/history/${symbol}`, { params: { limit } }),
-  evaluateOutcomes: () =>
-    api.post('/ai-analysis/evaluate-outcomes'),
+  evaluateOutcomes: (symbol?: string) =>
+    api.post('/ai-analysis/evaluate-outcomes', symbol ? { symbol } : {}),
+};
+
+export const newsAPI = {
+  getFeed: (params?: { limit?: number; category?: string; sentiment?: string }) =>
+    api.get('/news/feed', { params }),
+  getTrending: () => api.get('/news/trending'),
+  getAlerts: () => api.get('/news/alerts'),
+};
+
+export const accountAPI = {
+  getProfile: () => api.get('/account/profile'),
+  getCapital: () => api.get('/account/capital'),
+  getDailyCapitalHistory: (days = 30) => api.get('/account/daily-capital', { params: { days } }),
+};
+
+export const safetyAPI = {
+  getStatus: (underlying?: string) =>
+    api.get('/safety/status', underlying ? { params: { underlying } } : {}),
+  getDrawdown: () => api.get('/safety/drawdown'),
+  getCircuitBreaker: (underlying?: string) =>
+    api.get('/safety/circuit-breaker', underlying ? { params: { underlying } } : {}),
+  getExpiryWarnings: () => api.get('/safety/expiry-warnings'),
 };
 
 export const settingsAPI = {

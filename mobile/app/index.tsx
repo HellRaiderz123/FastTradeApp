@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [systemEnabled, setSystemEnabled] = useState(false);
   const [autoTrader, setAutoTrader] = useState<any>(null);
   const [niftyLtp, setNiftyLtp] = useState<number | null>(null);
+  const [bankniftyLtp, setBankniftyLtp] = useState<number | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const ltpPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -48,8 +49,12 @@ export default function Dashboard() {
   useEffect(() => {
     ltpPollRef.current = setInterval(async () => {
       try {
-        const res = await marketAPI.getLTP('NIFTY');
-        if (res.data?.ltp) setNiftyLtp(res.data.ltp);
+        const [niftyRes, bnRes] = await Promise.allSettled([
+          marketAPI.getLTP('NIFTY'),
+          marketAPI.getLTP('BANKNIFTY'),
+        ]);
+        if (niftyRes.status === 'fulfilled' && niftyRes.value.data?.ltp) setNiftyLtp(niftyRes.value.data.ltp);
+        if (bnRes.status === 'fulfilled' && bnRes.value.data?.ltp) setBankniftyLtp(bnRes.value.data.ltp);
         setLastUpdated(new Date());
       } catch {}
     }, 5000);
@@ -222,8 +227,12 @@ export default function Dashboard() {
               <Text style={[styles.heroPnLValue, { color: totalPnL >= 0 ? Colors.green : Colors.red }]}>
                 {totalPnL >= 0 ? '+' : ''}₹{Math.abs(totalPnL).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
               </Text>
-              {niftyLtp && (
-                <Text style={styles.niftyLtp}>NIFTY ₹{niftyLtp.toLocaleString('en-IN')}{lastUpdated ? `  ·  ${lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</Text>
+              {(niftyLtp || bankniftyLtp) && (
+                <View style={styles.ltpRow}>
+                  {niftyLtp ? <Text style={styles.niftyLtp}>NIFTY ₹{niftyLtp.toLocaleString('en-IN')}</Text> : null}
+                  {bankniftyLtp ? <Text style={styles.niftyLtp}>BANKNIFTY ₹{bankniftyLtp.toLocaleString('en-IN')}</Text> : null}
+                  {lastUpdated ? <Text style={styles.ltpTime}>{lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</Text> : null}
+                </View>
               )}
             </View>
 
@@ -248,6 +257,8 @@ export default function Dashboard() {
               <QuickAction label="Reconcile" value="Sync" icon="sync-outline" onPress={() => router.push('/brokerReconciliation')} />
               <QuickAction label="ML Center" value="Models" icon="analytics-outline" onPress={() => router.push('/mlCenter')} />
               <QuickAction label="Calendar" value="Events" icon="calendar-outline" onPress={() => router.push('/calendar')} />
+              <QuickAction label="News" value="Feed" icon="newspaper-outline" onPress={() => router.push('/news')} />
+              <QuickAction label="Account" value="Funds" icon="wallet-outline" onPress={() => router.push('/account')} />
             </ScrollView>
           </SafeAreaView>
         </LinearGradient>
@@ -482,7 +493,9 @@ const styles = StyleSheet.create({
   heroPnL: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.xl },
   heroPnLLabel: { fontSize: 13, color: Colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
   heroPnLValue: { fontSize: 42, fontWeight: '700', letterSpacing: -1, marginTop: 4 },
-  niftyLtp: { fontSize: 13, color: Colors.textMuted, marginTop: 6 },
+  ltpRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 6, alignItems: 'center' },
+  niftyLtp: { fontSize: 13, color: Colors.textMuted },
+  ltpTime: { fontSize: 11, color: Colors.textFaint },
   quickActionsRow: {
     marginTop: Spacing.md,
     paddingLeft: Spacing.lg,

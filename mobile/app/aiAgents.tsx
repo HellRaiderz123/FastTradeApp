@@ -472,6 +472,25 @@ export default function AIAgentsScreen() {
           </GlassCard>
         )}
 
+        {/* Evaluate outcomes */}
+        {history.length > 0 && (
+          <TouchableOpacity
+            style={styles.evaluateBtn}
+            onPress={async () => {
+              try {
+                await aiAgentsAPI.evaluateOutcomes(symbol);
+                await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                loadHistory(symbol);
+              } catch {
+                Alert.alert('Error', 'Could not evaluate outcomes. Try again.');
+              }
+            }}
+          >
+            <Ionicons name="checkmark-done-outline" size={14} color={Colors.accent} />
+            <Text style={styles.evaluateBtnText}>Evaluate Outcomes</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Decision history */}
         <View style={styles.historySectionHeader}>
           <Text style={styles.sectionTitle}>Decision History — {symbol}</Text>
@@ -585,6 +604,16 @@ const styles = StyleSheet.create({
   reportTitle: { color: Colors.textPrimary, fontSize: 12, fontWeight: '700', marginBottom: 3 },
   reportSummary: { color: Colors.textSecondary, fontSize: 12, lineHeight: 17 },
 
+  evaluateBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-end',
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: Radius.sm,
+    borderWidth: 1, borderColor: Colors.accentSoft,
+    backgroundColor: Colors.bgElevated,
+    marginBottom: 8,
+  },
+  evaluateBtnText: { color: Colors.accent, fontSize: 12, fontWeight: '600' },
   // History
   historySectionHeader: {
     flexDirection: 'row', justifyContent: 'space-between',

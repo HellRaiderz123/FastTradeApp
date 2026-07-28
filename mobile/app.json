@@ -59,6 +59,8 @@
       ]
     ],
     "extra": {
+      "apiBaseUrl": "https://9a50-182-72-8-182.ngrok-free.app",
+      "aiApiBaseUrl": "https://9a50-182-72-8-182.ngrok-free.app",
       "router": {},
       "eas": {
         "projectId": "3e227c6f-e553-4318-bc3b-516040b3843a"

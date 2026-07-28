@@ -140,6 +140,8 @@ const BacktestScreen = () => {
           max_open_trades: Number(maxOpenTrades) || 5,
           start_date: startDate,
           end_date: endDate,
+          apply_slippage: false,
+          slippage_pct: 0,
           ...(slPct.trim() ? { sl_pct: Number(slPct) } : {}),
           ...(tpPct.trim() ? { tp_pct: Number(tpPct) } : {}),
           ...(tslPct.trim() ? { tsl_pct: Number(tslPct) } : {}),
@@ -163,7 +165,11 @@ const BacktestScreen = () => {
             max_drawdown_pct: summary.max_drawdown_pct,
             win_rate_pct: summary.win_rate,
             total_trades: summary.total_trades,
+            profit_factor: summary.profit_factor,
+            avg_win_pct: summary.avg_win_pct,
+            avg_loss_pct: summary.avg_loss_pct,
             equity_curve: normalizedEquity,
+            all_trades: data.all_trades || [],
             raw: data,
           } as any);
         }
@@ -202,6 +208,9 @@ const BacktestScreen = () => {
       { label: 'Max Drawdown', value: `${Number(data.max_drawdown_pct || 0).toFixed(2)}%`, negative: true },
       { label: 'Win Rate', value: `${Number(data.win_rate_pct || 0).toFixed(2)}%`, positive: Number(data.win_rate_pct || 0) >= 50 },
       { label: 'Total Trades', value: `${data.total_trades || 0}` },
+      ...(data.profit_factor != null ? [{ label: 'Profit Factor', value: `${Number(data.profit_factor).toFixed(2)}` }] : []),
+      ...(data.avg_win_pct != null ? [{ label: 'Avg Win', value: `+${Number(data.avg_win_pct).toFixed(2)}%`, positive: true }] : []),
+      ...(data.avg_loss_pct != null ? [{ label: 'Avg Loss', value: `${Number(data.avg_loss_pct).toFixed(2)}%`, negative: true }] : []),
     ];
   }, [result]);
 
@@ -419,6 +428,37 @@ const BacktestScreen = () => {
                       </Text>
                     </View>
                   ))}
+                  {/* Trade log */}
+                  {Array.isArray((result as any).all_trades) && (result as any).all_trades.length > 0 && (
+                    <View style={{ marginTop: 16 }}>
+                      <Text style={[styles.sectionTitle, { fontSize: 14, marginBottom: 8 }]}>Trade Log</Text>
+                      {(result as any).all_trades.slice(0, 20).map((t: any, i: number) => {
+                        const exitColor =
+                          t.exit_reason === 'TP' ? Colors.green :
+                          t.exit_reason === 'SL' ? Colors.red :
+                          t.exit_reason === 'TSL' ? Colors.amber :
+                          t.exit_reason === 'COND_EXIT' ? '#fb923c' :
+                          Colors.accent;
+                        return (
+                          <View key={i} style={styles.tradeRow}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.tradeSymbol}>{t.symbol}</Text>
+                              <Text style={styles.tradeMeta}>₹{t.entry_price} → ₹{t.exit_price} · {t.holding_bars} bars</Text>
+                            </View>
+                            <View style={{ alignItems: 'flex-end' }}>
+                              <Text style={[styles.tradePnl, { color: t.pnl_pct >= 0 ? Colors.green : Colors.red }]}>
+                                {t.pnl_pct >= 0 ? '+' : ''}{Number(t.pnl_pct).toFixed(2)}%
+                              </Text>
+                              <Text style={[styles.tradeExit, { color: exitColor }]}>{t.exit_reason}</Text>
+                            </View>
+                          </View>
+                        );
+                      })}
+                      {(result as any).all_trades.length > 20 && (
+                        <Text style={styles.helperText}>Showing 20 of {(result as any).all_trades.length} trades</Text>
+                      )}
+                    </View>
+                  )}
                 </>
               )}
             </GlassCard>
@@ -486,6 +526,11 @@ const styles = StyleSheet.create({
   metricValue: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   helperText: { marginTop: -4, marginBottom: 10, fontSize: 11, color: Colors.textMuted },
   error: { color: Colors.red, fontWeight: '700', fontSize: 14 },
+  tradeRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  tradeSymbol: { fontSize: 13, fontWeight: '700', color: Colors.textPrimary },
+  tradeMeta: { fontSize: 10, color: Colors.textMuted, marginTop: 2 },
+  tradePnl: { fontSize: 13, fontWeight: '700' },
+  tradeExit: { fontSize: 10, fontWeight: '600', marginTop: 2 },
 });
 
 function EquityChart({ data, initial }: { data: number[]; initial: number }) {

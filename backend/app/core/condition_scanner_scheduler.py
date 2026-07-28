@@ -270,7 +270,7 @@ def _auto_execute_signal(
         "timestamp": datetime.now().isoformat(),
     }
 
-    if is_paper_mode(mode):
+    if is_paper_mode(mode) or mode == "ZERODHA_DRY_RUN":
         order["status"] = "FILLED_PAPER"
         order["order_id"] = f"AUTO-PAPER-{datetime.now().strftime('%Y%m%d%H%M%S')}-{symbol}"
         order["fill_price"] = ltp
@@ -299,6 +299,7 @@ def _auto_execute_signal(
             order["error"] = str(e)
             logger.error(f"    ❌ Auto live order failed: {e}")
     else:
+        # Fallback — should not reach here
         order["status"] = "DRY_RUN"
         order["order_id"] = f"AUTO-DRY-{datetime.now().strftime('%Y%m%d%H%M%S')}-{symbol}"
         order["fill_price"] = ltp

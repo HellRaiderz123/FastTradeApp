@@ -8,21 +8,44 @@ import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PnLBadge, ScreenHeader, Tag } from '../components/ui';
 
 type FilterMode = 'all' | 'wins' | 'losses';
+type JournalTab = 'trades' | 'signals';
 
 const EXCLUDED = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
 
+function groupByMonth(entries: any[]): { label: string; entries: any[] }[] {
+  const map = new Map<string, any[]>();
+  for (const e of entries) {
+    const d = e.closed_at || e.created_at;
+    const key = d ? new Date(d).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : 'Unknown';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(e);
+  }
+  return Array.from(map.entries()).map(([label, entries]) => ({ label, entries }));
+}
+
 export default function JournalScreen() {
   const [entries, setEntries] = useState<any[]>([]);
+  const [signals, setSignals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterMode>('all');
+  const [journalTab, setJournalTab] = useState<JournalTab>('trades');
 
   const load = useCallback(async () => {
     try {
-      const response = await journalAPI.getExecutionIntents(100);
-      const all = Array.isArray(response.data) ? response.data : [];
-      setEntries(all.filter((entry) => !EXCLUDED.includes(entry.strategy)));
+      const [tradesRes, signalsRes] = await Promise.allSettled([
+        journalAPI.getExecutionIntents(100),
+        journalAPI.getSignalDiagnostics({ limit: 50 }),
+      ]);
+      if (tradesRes.status === 'fulfilled') {
+        const all = Array.isArray(tradesRes.value.data) ? tradesRes.value.data : [];
+        setEntries(all.filter((entry) => !EXCLUDED.includes(entry.strategy)));
+      }
+      if (signalsRes.status === 'fulfilled') {
+        const s = signalsRes.value.data;
+        setSignals(Array.isArray(s) ? s : s?.signals || []);
+      }
     } catch {
       setEntries([]);
     }
@@ -35,14 +58,12 @@ export default function JournalScreen() {
   }, [load]);
 
   const filteredEntries = useMemo(() => {
-    if (filter === 'wins') {
-      return entries.filter((entry) => (entry.pnl || 0) > 0);
-    }
-    if (filter === 'losses') {
-      return entries.filter((entry) => (entry.pnl || 0) < 0);
-    }
+    if (filter === 'wins') return entries.filter((entry) => (entry.pnl || 0) > 0);
+    if (filter === 'losses') return entries.filter((entry) => (entry.pnl || 0) < 0);
     return entries;
   }, [entries, filter]);
+
+  const monthlyGroups = useMemo(() => groupByMonth(filteredEntries), [filteredEntries]);
 
   const closedEntries = entries.filter((entry) => entry.closed_at);
   const totalPnL = closedEntries.reduce((sum, entry) => sum + (entry.pnl || 0), 0);
@@ -131,119 +152,161 @@ export default function JournalScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}
           showsVerticalScrollIndicator={false}
         >
-          {/* Clear closed trades button */}
-          {closedEntries.length > 0 && (
-            <TouchableOpacity style={styles.clearBtn} onPress={clearClosed} activeOpacity={0.8}>
-              <Ionicons name="trash-outline" size={14} color={Colors.red} />
-              <Text style={styles.clearBtnText}>Clear Closed ({closedEntries.length})</Text>
-            </TouchableOpacity>
-          )}
-
-          <View style={styles.filterRow}>
-            {(['all', 'wins', 'losses'] as FilterMode[]).map((mode) => {
-              const active = filter === mode;
-              const count = mode === 'all' ? filteredEntries.length : mode === 'wins' ? wins : losses;
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  style={[styles.filterChip, active && styles.filterChipActive]}
-                  onPress={() => {
-                    Haptics.selectionAsync();
-                    setFilter(mode);
-                  }}
-                >
-                  <Text style={[styles.filterText, active && styles.filterTextActive]}>{mode.toUpperCase()} ({count})</Text>
-                </TouchableOpacity>
-              );
-            })}
+          {/* Tab bar */}
+          <View style={styles.tabRow}>
+            {(['trades', 'signals'] as JournalTab[]).map((t) => (
+              <TouchableOpacity
+                key={t}
+                style={[styles.tabBtn, journalTab === t && styles.tabBtnActive]}
+                onPress={() => { Haptics.selectionAsync(); setJournalTab(t); }}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.tabText, journalTab === t && styles.tabTextActive]}>
+                  {t === 'trades' ? 'Trades' : 'Signals'}
+                </Text>
+              </TouchableOpacity>
+            ))}
           </View>
 
-          {filteredEntries.length === 0 ? (
-            <EmptyState
-              icon="📚"
-              title={filter === 'all' ? 'No Journal Entries' : `No ${filter} yet`}
-              subtitle={filter === 'all' ? 'Executed trades will appear here once they close.' : 'Try switching filter or pull to refresh.'}
-            />
-          ) : (
-            filteredEntries.map((entry) => {
-              const expanded = expandedId === entry.intent_id;
-              const pnl = Number(entry?.pnl ?? 0) || 0;
-              const entryPrice = Number(entry?.entry_credit ?? 0) || 0;
-              const pct = entryPrice ? (pnl / entryPrice) * 100 : 0;
-              const profitable = pnl >= 0;
-              return (
-                <TouchableOpacity
-                  key={entry.intent_id}
-                  activeOpacity={0.9}
-                  onPress={() => {
-                    Haptics.selectionAsync();
-                    setExpandedId(expanded ? null : entry.intent_id);
-                  }}
-                >
-                  <GlassCard style={styles.entryCard}>
-                    <View style={styles.entryTop}>
-                      <View style={styles.entryLeft}>
-                        <Text style={styles.entryTitle}>{entry.underlying || 'Unknown'}</Text>
-                        <Text style={styles.entrySub}>{entry.strategy || 'Unknown Strategy'}</Text>
-                      </View>
-                      <View style={styles.entryRight}>
-                        <PnLBadge value={pnl} />
-                        <Text style={[styles.entryPct, { color: profitable ? Colors.greenLight : Colors.redLight }]}>
-                          {profitable ? '+' : ''}{pct.toFixed(2)}%
+          {journalTab === 'trades' && (
+            <>
+              {/* Clear closed trades button */}
+              {closedEntries.length > 0 && (
+                <TouchableOpacity style={styles.clearBtn} onPress={clearClosed} activeOpacity={0.8}>
+                  <Ionicons name="trash-outline" size={14} color={Colors.red} />
+                  <Text style={styles.clearBtnText}>Clear Closed ({closedEntries.length})</Text>
+                </TouchableOpacity>
+              )}
+
+              <View style={styles.filterRow}>
+                {(['all', 'wins', 'losses'] as FilterMode[]).map((mode) => {
+                  const active = filter === mode;
+                  const count = mode === 'all' ? filteredEntries.length : mode === 'wins' ? wins : losses;
+                  return (
+                    <TouchableOpacity
+                      key={mode}
+                      style={[styles.filterChip, active && styles.filterChipActive]}
+                      onPress={() => { Haptics.selectionAsync(); setFilter(mode); }}
+                    >
+                      <Text style={[styles.filterText, active && styles.filterTextActive]}>{mode.toUpperCase()} ({count})</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {filteredEntries.length === 0 ? (
+                <EmptyState
+                  icon="📚"
+                  title={filter === 'all' ? 'No Journal Entries' : `No ${filter} yet`}
+                  subtitle={filter === 'all' ? 'Executed trades will appear here once they close.' : 'Try switching filter or pull to refresh.'}
+                />
+              ) : (
+                monthlyGroups.map(({ label, entries: groupEntries }) => {
+                  const groupPnL = groupEntries.filter(e => e.closed_at).reduce((s, e) => s + (e.pnl || 0), 0);
+                  return (
+                    <View key={label}>
+                      <View style={styles.monthHeader}>
+                        <Text style={styles.monthLabel}>{label}</Text>
+                        <Text style={[styles.monthPnL, { color: groupPnL >= 0 ? Colors.green : Colors.red }]}>
+                          {groupPnL >= 0 ? '+' : ''}₹{Math.abs(groupPnL).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                         </Text>
                       </View>
+                      {groupEntries.map((entry) => {
+                        const expanded = expandedId === entry.intent_id;
+                        const pnl = Number(entry?.pnl ?? 0) || 0;
+                        const entryPrice = Number(entry?.entry_credit ?? 0) || 0;
+                        const pct = entryPrice ? (pnl / entryPrice) * 100 : 0;
+                        const profitable = pnl >= 0;
+                        return (
+                          <TouchableOpacity
+                            key={entry.intent_id}
+                            activeOpacity={0.9}
+                            onPress={() => { Haptics.selectionAsync(); setExpandedId(expanded ? null : entry.intent_id); }}
+                          >
+                            <GlassCard style={styles.entryCard}>
+                              <View style={styles.entryTop}>
+                                <View style={styles.entryLeft}>
+                                  <Text style={styles.entryTitle}>{entry.underlying || 'Unknown'}</Text>
+                                  <Text style={styles.entrySub}>{entry.strategy || 'Unknown Strategy'}</Text>
+                                </View>
+                                <View style={styles.entryRight}>
+                                  <PnLBadge value={pnl} />
+                                  <Text style={[styles.entryPct, { color: profitable ? Colors.greenLight : Colors.redLight }]}>
+                                    {profitable ? '+' : ''}{pct.toFixed(2)}%
+                                  </Text>
+                                </View>
+                              </View>
+                              <View style={styles.metaRow}>
+                                <Tag label={entry.status || 'CLOSED'} color={Colors.textSecondary} />
+                                <Text style={styles.metaText}>
+                                  {entry.closed_at
+                                    ? new Date(entry.closed_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                                    : 'Open'}
+                                </Text>
+                              </View>
+                              {expanded && (
+                                <View style={styles.expanded}>
+                                  <View style={styles.detailRow}><Text style={styles.detailLabel}>Entry</Text><Text style={styles.detailValue}>₹{entryPrice.toLocaleString('en-IN')}</Text></View>
+                                  <View style={styles.detailRow}><Text style={styles.detailLabel}>Exit Reason</Text><Text style={styles.detailValue}>{entry.exit_reason || 'Manual / n.a.'}</Text></View>
+                                  <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Opened</Text>
+                                    <Text style={styles.detailValue}>{entry.created_at ? new Date(entry.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'n.a.'}</Text>
+                                  </View>
+                                  <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Closed</Text>
+                                    <Text style={styles.detailValue}>{entry.closed_at ? new Date(entry.closed_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Still open'}</Text>
+                                  </View>
+                                  <TouchableOpacity style={styles.deleteEntryBtn} onPress={() => deleteEntry(entry.intent_id)} activeOpacity={0.8}>
+                                    <Ionicons name="trash-outline" size={14} color={Colors.red} />
+                                    <Text style={styles.deleteEntryText}>Delete Entry</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              )}
+                            </GlassCard>
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
+                  );
+                })
+              )}
+            </>
+          )}
 
+          {journalTab === 'signals' && (
+            signals.length === 0 ? (
+              <EmptyState icon="📊" title="No Signal Diagnostics" subtitle="Signal history will appear here after scanner runs." />
+            ) : (
+              signals.map((sig: any, i: number) => {
+                const passed = (sig.passed ?? false) || sig.signal === 'BUY' || sig.signal === 'SELL';
+                return (
+                  <GlassCard key={i} style={styles.entryCard}>
+                    <View style={styles.entryTop}>
+                      <View style={styles.entryLeft}>
+                        <Text style={styles.entryTitle}>{sig.symbol || sig.underlying || 'Unknown'}</Text>
+                        <Text style={styles.entrySub}>{sig.strategy_name || sig.strategy || '—'}</Text>
+                      </View>
+                      <Tag
+                        label={sig.signal || (passed ? 'PASS' : 'FAIL')}
+                        color={passed ? Colors.green : Colors.red}
+                        bg={passed ? Colors.greenBg : Colors.redBg}
+                      />
+                    </View>
                     <View style={styles.metaRow}>
-                      <Tag label={entry.status || 'CLOSED'} color={Colors.textSecondary} />
+                      <Text style={styles.metaText}>{sig.timeframe || '—'}</Text>
                       <Text style={styles.metaText}>
-                        {entry.closed_at
-                          ? new Date(entry.closed_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-                          : 'Open'}
+                        {sig.scanned_at || sig.created_at
+                          ? new Date(sig.scanned_at || sig.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                          : ''}
                       </Text>
                     </View>
-
-                    {expanded && (
-                      <View style={styles.expanded}>
-                        <View style={styles.detailRow}>
-                          <Text style={styles.detailLabel}>Entry</Text>
-                          <Text style={styles.detailValue}>₹{entryPrice.toLocaleString('en-IN')}</Text>
-                        </View>
-                        <View style={styles.detailRow}>
-                          <Text style={styles.detailLabel}>Exit Reason</Text>
-                          <Text style={styles.detailValue}>{entry.exit_reason || 'Manual / n.a.'}</Text>
-                        </View>
-                        <View style={styles.detailRow}>
-                          <Text style={styles.detailLabel}>Opened</Text>
-                          <Text style={styles.detailValue}>
-                            {entry.created_at
-                              ? new Date(entry.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-                              : 'n.a.'}
-                          </Text>
-                        </View>
-                        <View style={styles.detailRow}>
-                          <Text style={styles.detailLabel}>Closed</Text>
-                          <Text style={styles.detailValue}>
-                            {entry.closed_at
-                              ? new Date(entry.closed_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-                              : 'Still open'}
-                          </Text>
-                        </View>
-                        <TouchableOpacity
-                          style={styles.deleteEntryBtn}
-                          onPress={() => deleteEntry(entry.intent_id)}
-                          activeOpacity={0.8}
-                        >
-                          <Ionicons name="trash-outline" size={14} color={Colors.red} />
-                          <Text style={styles.deleteEntryText}>Delete Entry</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
+                    {sig.reason && <Text style={styles.entrySub}>{sig.reason}</Text>}
                   </GlassCard>
-                </TouchableOpacity>
-              );
-            })
+                );
+              })
+            )
           )}
+
           <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
@@ -252,6 +315,14 @@ export default function JournalScreen() {
 }
 
 const styles = StyleSheet.create({
+  tabRow: { flexDirection: 'row', marginBottom: 12, borderRadius: Radius.md, backgroundColor: Colors.bgGlass, borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' },
+  tabBtn: { flex: 1, paddingVertical: 9, alignItems: 'center' },
+  tabBtnActive: { backgroundColor: Colors.accentSoft },
+  tabText: { fontSize: 12, fontWeight: '600', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
+  tabTextActive: { color: Colors.accentLight },
+  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 4, marginTop: 8, marginBottom: 4 },
+  monthLabel: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
+  monthPnL: { fontSize: 13, fontWeight: '700' },
   root: { flex: 1, backgroundColor: Colors.bg },
   safeArea: { flex: 1 },
   header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.lg },

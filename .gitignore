@@ -135,3 +135,4 @@ tmp/
 *.backup
 .#*
 backups/fasttrade_20260327_100926.sql
+mobile/android/*

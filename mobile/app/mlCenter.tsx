@@ -24,6 +24,7 @@ export default function MLCenterScreen() {
   const [metrics, setMetrics] = useState<any | null>(null);
   const [dataSummary, setDataSummary] = useState<any | null>(null);
   const [backfillStatus, setBackfillStatus] = useState<any | null>(null);
+  const [trainingHistory, setTrainingHistory] = useState<any[]>([]);
 
   const [predictSymbol, setPredictSymbol] = useState('NIFTY');
   const [prediction, setPrediction] = useState<any | null>(null);
@@ -32,14 +33,19 @@ export default function MLCenterScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [metricsRes, dataSummaryRes, backfillRes] = await Promise.allSettled([
+      const [metricsRes, dataSummaryRes, backfillRes, historyRes] = await Promise.allSettled([
         mlAPI.getMetrics(),
         mlAPI.getDataSummary(),
         mlAPI.getBackfillStatus(),
+        mlAPI.getTrainingHistory(),
       ]);
       if (metricsRes.status === 'fulfilled') setMetrics(metricsRes.value.data || null);
       if (dataSummaryRes.status === 'fulfilled') setDataSummary(dataSummaryRes.value.data || null);
       if (backfillRes.status === 'fulfilled') setBackfillStatus(backfillRes.value.data || null);
+      if (historyRes.status === 'fulfilled') {
+        const h = historyRes.value.data;
+        setTrainingHistory(Array.isArray(h) ? h : h?.history || []);
+      }
     } catch {
       setMetrics(null);
       setDataSummary(null);
@@ -161,6 +167,23 @@ export default function MLCenterScreen() {
               <EmptyState icon="📊" title="No Data Summary" subtitle="ML data summary is unavailable." />
             )}
           </GlassCard>
+
+          {trainingHistory.length > 0 && (
+            <GlassCard style={styles.card}>
+              <Text style={styles.title}>Training History</Text>
+              {trainingHistory.slice(0, 10).map((run: any, i: number) => (
+                <View key={i} style={[styles.row, { paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.border }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.meta}>{run.trained_at ? new Date(run.trained_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : `Run ${i + 1}`}</Text>
+                    <Text style={[styles.meta, { fontSize: 11, color: Colors.textFaint }]}>{run.model_type || run.algorithm || ''}</Text>
+                  </View>
+                  <Text style={[styles.value, { color: Number(run.accuracy || 0) >= 0.6 ? Colors.green : Colors.amber }]}>
+                    {(Number(run.accuracy || 0) * 100).toFixed(1)}%
+                  </Text>
+                </View>
+              ))}
+            </GlassCard>
+          )}
 
           <GlassCard style={styles.card}>
             <Text style={styles.title}>Quick Prediction</Text>

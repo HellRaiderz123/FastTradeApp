@@ -40,6 +40,9 @@ export default function AutoTraderScreen() {
   const [status, setStatus] = useState<any>(null);
   const [config, setConfig] = useState<any>(null);
   const [logs, setLogs] = useState<any[]>([]);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsHasMore, setLogsHasMore] = useState(true);
+  const [logsLoadingMore, setLogsLoadingMore] = useState(false);
   const [tab, setTab] = useState<'overview' | 'config' | 'logs'>('overview');
   const [saving, setSaving] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -80,7 +83,10 @@ export default function AutoTraderScreen() {
       setEditAutoExit(!!cfg.auto_exit_on_reversal);
       setEditMarketHours(cfg.market_hours_only !== false);
       const logData = logsRes.data;
-      setLogs(Array.isArray(logData) ? logData : logData?.logs || []);
+      const logArr = Array.isArray(logData) ? logData : logData?.logs || [];
+      setLogs(logArr);
+      setLogsPage(1);
+      setLogsHasMore(logArr.length >= 50);
     } catch {
       // silently fail — show whatever we have
     }
@@ -98,6 +104,21 @@ export default function AutoTraderScreen() {
     }, 10000);
     return () => clearInterval(interval);
   }, [load, tab]);
+
+  const loadMoreLogs = async () => {
+    if (logsLoadingMore || !logsHasMore) return;
+    setLogsLoadingMore(true);
+    try {
+      const nextPage = logsPage + 1;
+      const res = await autoTraderAPI.getLogs({ limit: 50, offset: nextPage * 50 });
+      const data = res.data;
+      const newLogs = Array.isArray(data) ? data : data?.logs || [];
+      setLogs((prev) => [...prev, ...newLogs]);
+      setLogsPage(nextPage);
+      setLogsHasMore(newLogs.length >= 50);
+    } catch {}
+    setLogsLoadingMore(false);
+  };
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -366,6 +387,16 @@ export default function AutoTraderScreen() {
                   );
                 })
               )}
+              {logsHasMore && (
+                <TouchableOpacity
+                  style={styles.loadMoreBtn}
+                  onPress={loadMoreLogs}
+                  activeOpacity={0.8}
+                  disabled={logsLoadingMore}
+                >
+                  <Text style={styles.loadMoreText}>{logsLoadingMore ? 'Loading…' : 'Load More'}</Text>
+                </TouchableOpacity>
+              )}
             </GlassCard>
           )}
 
@@ -463,5 +494,7 @@ const styles = StyleSheet.create({
   logLevel: { fontSize: 10, fontWeight: '700', width: 40, paddingTop: 2, letterSpacing: 0.3 },
   logMsg: { fontSize: 12, color: Colors.textSecondary, lineHeight: 17 },
   logTime: { fontSize: 10, color: Colors.textFaint, marginTop: 2 },
+  loadMoreBtn: { marginTop: 10, paddingVertical: 10, alignItems: 'center', borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.bgGlass },
+  loadMoreText: { fontSize: 13, fontWeight: '600', color: Colors.accent },
   emptyText: { color: Colors.textMuted, textAlign: 'center', paddingVertical: 24 },
 });

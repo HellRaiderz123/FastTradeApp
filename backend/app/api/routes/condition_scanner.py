@@ -1697,8 +1697,8 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
     if history and not signal_history_id:
         signal_history_id = history.id
 
-    if is_paper_mode(mode):
-        # Paper trade — just log it
+    if is_paper_mode(mode) or mode == "ZERODHA_DRY_RUN":
+        # Paper / dry-run — record as paper fill
         order["status"] = "FILLED_PAPER"
         order["order_id"] = f"PAPER-{datetime.now().strftime('%Y%m%d%H%M%S')}-{symbol}"
         order["fill_price"] = ltp

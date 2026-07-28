@@ -284,14 +284,7 @@ export default function SettingsScreen() {
             <InfoRow label="Layout" value="Expo Router tabs" />
           </GlassCard>
 
-          <GlassCard style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Planned Next</Text>
-            <Text style={styles.noteText}>1. Push notification registration</Text>
-            <Text style={styles.noteText}>2. Live broker and scanner settings sync</Text>
-            <Text style={styles.noteText}>3. Broker authentication polish</Text>
-          </GlassCard>
-
-          <PrimaryButton title="Sign Out" onPress={handleLogout} variant="danger" style={{ marginBottom: 12 }} />
+<PrimaryButton title="Sign Out" onPress={handleLogout} variant="danger" style={{ marginBottom: 12 }} />
 
           <TouchableOpacity style={styles.syncButton} activeOpacity={0.85} onPress={() => load()}>
             <LinearGradient colors={Gradients.primaryAction} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.syncGradient}>

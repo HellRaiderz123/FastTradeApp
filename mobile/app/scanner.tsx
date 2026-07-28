@@ -601,6 +601,16 @@ export default function ScannerScreen() {
                                 <Text style={styles.signalMeta}>
                                   Entry: ₹{Number(signal.entry_price || 0).toFixed(2)} · {signal.timestamp ? new Date(signal.timestamp).toLocaleDateString() : 'N/A'}
                                 </Text>
+                                {signal.exit_reason ? (
+                                  <Text style={[styles.signalMeta, {
+                                    color:
+                                      signal.exit_reason === 'TP' ? Colors.green :
+                                      signal.exit_reason === 'SL' ? Colors.red :
+                                      signal.exit_reason === 'TSL' ? Colors.amber :
+                                      signal.exit_reason === 'COND_EXIT' ? '#fb923c' :
+                                      Colors.textMuted,
+                                  }]}>{signal.exit_reason}</Text>
+                                ) : null}
                               </View>
                             </View>
                             {signal.pnl != null && (
