@@ -121,13 +121,13 @@ async def periodic_mtm_updates():
     from app.db.session import SessionLocal
     while True:
         try:
-            if manager.get_connection_count() > 0:
-                from app.core.execution.paper_mtm import update_paper_mtm
-                from app.db.models_intent import ExecutionIntent
+            from app.core.execution.paper_mtm import update_paper_mtm
+            from app.db.models_intent import ExecutionIntent
 
-                db = SessionLocal()
-                try:
-                    update_paper_mtm(db)
+            db = SessionLocal()
+            try:
+                update_paper_mtm(db)
+                if manager.get_connection_count() > 0:
                     positions = db.query(ExecutionIntent).filter(
                         ExecutionIntent.status == "EXECUTED"
                     ).all()
@@ -144,10 +144,9 @@ async def periodic_mtm_updates():
                         ],
                         "timestamp": asyncio.get_event_loop().time()
                     }
-                finally:
-                    db.close()
-
-                await broadcast_mtm_update(mtm_data)
+                    await broadcast_mtm_update(mtm_data)
+            finally:
+                db.close()
 
             await asyncio.sleep(5)
 

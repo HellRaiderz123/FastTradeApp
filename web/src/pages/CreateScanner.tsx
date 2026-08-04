@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, Play, Save, ChevronRight, ChevronDown,
   Zap, Filter, Star, Search, MoreVertical, Activity,
@@ -362,6 +363,7 @@ const DEFAULT_ZERODHA_CONFIG: BrokerageConfig = {
 
 const CreateScanner: React.FC = () => {
   const { showToast } = useToast();
+  const navigate = useNavigate();
 
   // Strategy list
   const [strategies, setStrategies] = useState<Strategy[]>([]);
@@ -928,15 +930,17 @@ const CreateScanner: React.FC = () => {
     setShowBacktestPanel(false);
     try {
       const res = await api.post(`/condition-scanner/scan/${selectedId}`, null, {
-        params: { auto_execute: editorAutoScan },
+        params: { auto_execute: false },
       });
-      setScanResult(res.data);
-      if (res.data.matches_found === 0) {
+      const result = res.data;
+      setScanResult(result);
+      if (result.matches_found === 0) {
         showToast('info', 'No signals found in current scan');
-      } else if (res.data.auto_executed > 0) {
-        showToast('success', `${res.data.matches_found} signal(s) found • ${res.data.auto_executed} auto-executed`);
       } else {
-        showToast('success', `${res.data.matches_found} signal(s) found!`);
+        showToast('success', `${result.matches_found} signal(s) found`);
+        navigate('/scanner-execution', {
+          state: { scanResult: result, autoExecute: editorAutoScan },
+        });
       }
     } catch (err: any) {
       showToast('error', err?.response?.data?.detail || 'Scan failed');
@@ -2050,12 +2054,12 @@ const CreateScanner: React.FC = () => {
                     Save
                   </button>
                   <button
-                    onClick={() => { saveStrategy().then(() => runScan()); }}
+                    onClick={async () => { await saveStrategy(); await runScan(); }}
                     disabled={saving || scanning || !selectedId}
                     className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl flex items-center gap-2 transition disabled:opacity-50"
                   >
                     {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                    Execute
+                    {editorAutoScan ? 'Scan & Execute' : 'Scan'}
                   </button>
                   <button
                     onClick={() => { saveStrategy().then(() => runBacktest()); }}
@@ -2186,20 +2190,15 @@ const CreateScanner: React.FC = () => {
                               ) : null}
                             </div>
                             <button
-                              onClick={() => executeSignal(sig)}
-                              disabled={executing === sig.symbol}
+                              onClick={() => navigate('/scanner-execution', { state: { scanResult, autoExecute: false } })}
                               className={`w-full py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition ${
                                 scanResult.direction === 'BUY'
                                   ? 'bg-green-600 hover:bg-green-700 text-white'
                                   : 'bg-red-600 hover:bg-red-700 text-white'
-                              } disabled:opacity-50`}
+                              }`}
                             >
-                              {executing === sig.symbol ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : (
-                                <ArrowRight className="w-3 h-3" />
-                              )}
-                              {scanResult.direction === 'BUY' ? 'Buy' : 'Sell'} {sig.symbol}
+                              <ArrowRight className="w-3 h-3" />
+                              View Execution
                             </button>
                           </div>
                         ))}

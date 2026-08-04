@@ -19,7 +19,8 @@ def get_ltp(symbols: List[str]) -> Dict[str, float]:
             cached = get_cached_ltp(sym)
         except Exception:
             cached = None
-        if cached is not None and cached != 0.0:
+        # Only trust cache if value is a realistic price (> 0.5)
+        if cached is not None and float(cached) > 0.5:
             out[sym] = float(cached)
         else:
             missing.append(sym)
@@ -37,8 +38,14 @@ def get_ltp(symbols: List[str]) -> Dict[str, float]:
         if ":" in sym:
             normalized_sym = sym
         else:
-            # Strategy tickets are option legs by default.
-            normalized_sym = f"NFO:{sym}"
+            # Stock symbols go to NSE, options/futures to NFO.
+            # Use a length guard: real option symbols are long (e.g. NIFTY2601026000CE).
+            # Plain stock names like BAJFINANCE or HEROMOTOCO can end in CE/PE by coincidence.
+            sym_upper = sym.upper()
+            is_option = (
+                (sym_upper.endswith("CE") or sym_upper.endswith("PE")) and len(sym) > 10
+            ) or sym_upper.endswith("FUT")
+            normalized_sym = f"NFO:{sym}" if is_option else f"NSE:{sym}"
         normalized.append(normalized_sym)
         original_to_normalized[sym] = normalized_sym
 
@@ -53,9 +60,9 @@ def get_ltp(symbols: List[str]) -> Dict[str, float]:
         except Exception:
             info = None
         if info and isinstance(info, dict) and "last_price" in info:
-            out[original] = float(info["last_price"])  # type: ignore[index]
-        else:
-            # Missing LTP for this symbol; return 0.0 and let caller decide.
-            out[original] = 0.0
+            price = float(info["last_price"])  # type: ignore[index]
+            if price > 0:
+                out[original] = price
+            # else: omit — callers get None from .get(), preventing bad P&L
 
     return out

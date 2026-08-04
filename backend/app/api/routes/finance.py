@@ -64,8 +64,10 @@ def bulk_create_transactions(
     payload: list[FinanceTransactionCreate],
     db: Session = Depends(get_db),
 ):
-    create_transactions(db, payload)
-    return {"status": "ok", "count": len(payload)}
+    if not payload:
+        raise HTTPException(400, "No transactions provided")
+    result = create_transactions(db, payload)
+    return {"status": "ok", "count": len(result)}
 
 
 @router.get("/transactions", response_model=list[FinanceTransactionOut])

@@ -54,13 +54,14 @@ def run_auto_exit(db: Session):
         if is_credit_spread and entry_credit > 0 and current_pnl >= entry_credit * 0.5:
             reason = "PROFIT_50PCT"
 
-        # --- Fix 6: Time-based exit (1 day before expiry if profitable) ---
+        # --- Fix 6: Time-based exit (on expiry day only, if profitable) ---
         if not reason and intent.expiry and current_pnl > 0:
             try:
                 from datetime import date as _date
                 expiry_str = str(intent.expiry)
                 expiry_date = _date.fromisoformat(expiry_str)
-                if now.date() >= expiry_date - timedelta(days=1):
+                # Only exit ON expiry day itself, not the day before
+                if now.date() == expiry_date:
                     reason = "PRE_EXPIRY_EXIT"
             except (ValueError, TypeError):
                 pass
@@ -82,6 +83,35 @@ def run_auto_exit(db: Session):
             and current_pnl < (max_pnl * (1 - intent.trailing_sl_pct / 100))  # type: ignore
         ):
             reason = "TRAILING_SL_HIT"
+
+        # Check indicator-based exit conditions (scanner trades only)
+        if not reason:
+            try:
+                ticket = intent.ticket_dict
+                exit_conditions = ticket.get("exit_conditions") or []
+                if exit_conditions:
+                    from app.api.routes.condition_scanner import (
+                        _evaluate_condition, _build_price_series, TIMEFRAME_CANDLE_MAP
+                    )
+                    from sqlalchemy import desc as _desc
+                    tf = ticket.get("timeframe", "Day")
+                    sym = intent.underlying or ""
+                    candle_info = TIMEFRAME_CANDLE_MAP.get(tf, TIMEFRAME_CANDLE_MAP["Day"])
+                    CandleModel, date_attr, _ = candle_info
+                    date_col = getattr(CandleModel, date_attr)
+                    candles = (
+                        db.query(CandleModel)
+                        .filter(CandleModel.symbol == sym)
+                        .order_by(_desc(date_col))
+                        .limit(100)
+                        .all()
+                    )[::-1]
+                    if len(candles) >= 2:
+                        closes, highs, lows, volumes = _build_price_series(candles)
+                        if all(_evaluate_condition(c, closes, highs, lows, volumes) for c in exit_conditions):
+                            reason = "COND_EXIT"
+            except Exception as _ce:
+                logger.debug("Condition exit eval failed for %s: %s", intent.intent_id, _ce)
 
         if not reason:
             continue

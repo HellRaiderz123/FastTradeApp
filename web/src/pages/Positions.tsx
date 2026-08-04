@@ -971,6 +971,11 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
   const entryCredit = Number(trade?.entry_credit ?? trade?.entry_price ?? 0);
   const marginRequired = Number(trade?.margin_required ?? 0);
 
+  // Detect scanner equity BUY: single leg, side=BUY or action=BUY, entry_credit is negative (cost paid)
+  const legs = trade?.ticket?.legs || [];
+  const firstLegSide = (legs[0]?.side || legs[0]?.action || '').toUpperCase();
+  const isEquityBuy = legs.length === 1 && firstLegSide === 'BUY';
+
   const isProfitable = pnl >= 0;
   const tpHit = tp !== null ? pnl >= tp : false;
   const slHit = sl !== null ? pnl <= sl : false;
@@ -979,14 +984,15 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
   const openedAtRaw = trade?.created_at ?? trade?.entry_time ?? trade?.filled_at;
   const openedAtLabel = openedAtRaw ? new Date(openedAtRaw).toLocaleString() : '-';
 
-  // If pnl is computed as (entry_credit - cost_to_close), then cost_to_close = entry_credit - pnl.
-  const currentValue = entryCredit - pnl;
+  // For equity BUY: entry_credit is negative (cost paid), current value = abs(entry_credit) + pnl
+  // For options/spreads: entry_credit is premium received, current = entry_credit - pnl
+  const entryValue = isEquityBuy ? Math.abs(entryCredit) : entryCredit;
+  const currentValue = isEquityBuy ? entryValue + pnl : entryCredit - pnl;
   // Percent metrics
-  const pnlPercentPremium = entryCredit !== 0 ? (pnl / Math.abs(entryCredit)) * 100 : null;
+  const pnlPercentPremium = entryValue !== 0 ? (pnl / entryValue) * 100 : null;
   const pnlPercentMargin = marginRequired > 0 ? (pnl / marginRequired) * 100 : null;
 
-  // Extract legs from ticket
-  const legs = trade?.ticket?.legs || [];
+  // Extract legs from ticket (already declared above)
   const legsMetrics = trade?.legs_metrics || [];
   const execution_result = trade?.execution_result || {};
   const mode = (execution_result && execution_result.mode) || trade?.mode || 'UNKNOWN';
@@ -1087,8 +1093,8 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
 
       <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${showMargin ? 'grid-cols-2 md:grid-cols-7' : 'grid-cols-2 md:grid-cols-6'}`}>
         <div>
-          <p className="text-xs text-slate-400">Premium {isZerodhaMode ? 'Collected' : ''}</p>
-          <p className="font-semibold text-white">₹{entryCredit.toLocaleString()}</p>
+          <p className="text-xs text-slate-400">{isEquityBuy ? 'Entry Value' : `Premium ${isZerodhaMode ? 'Collected' : ''}`}</p>
+          <p className="font-semibold text-white">₹{entryValue.toLocaleString()}</p>
         </div>
         {showMargin && (
           <div>
@@ -1103,7 +1109,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
         <div>
           <p className="text-xs text-slate-400">P&L</p>
           <p className={`font-semibold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
-            ₹{Math.abs(pnl).toLocaleString()}
+            {isProfitable ? '+' : '-'}₹{Math.abs(pnl).toLocaleString()}
           </p>
         </div>
         <div>

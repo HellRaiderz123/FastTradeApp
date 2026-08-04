@@ -176,14 +176,31 @@ export default function ScannerScreen() {
         setSignalHistory(latestHistory);
       }
       
-      // Show alert for significant findings
-      if (count > 0) {
+      // Navigate to execution screen for significant findings
+      if (count > 0 && res.data) {
+        const scanResult = {
+          strategy_id: selected.id,
+          strategy_name: selected.name,
+          direction: selected.direction || 'BUY',
+          signals: Array.isArray(res.data.signals) ? res.data.signals : latestHistory,
+          total_scanned: res.data.total_scanned || count,
+          matches_found: count,
+          execution_mode: res.data.execution_mode || 'ZERODHA_DRY_RUN',
+          exit_config: selected.exit_config || {},
+        };
         Alert.alert(
           '🎯 Signals Found!',
           `${count} new signal${count === 1 ? '' : 's'} detected in ${selected.name}`,
           [
             { text: 'Dismiss', style: 'default' },
-            { text: 'View Signals', style: 'default', onPress: () => {} }, // Already visible in timeline
+            {
+              text: 'View Execution',
+              style: 'default',
+              onPress: () => router.push({
+                pathname: '/scannerExecution',
+                params: { scanResult: JSON.stringify(scanResult), autoExecute: 'false' },
+              }),
+            },
           ]
         );
       }

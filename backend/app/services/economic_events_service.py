@@ -235,10 +235,10 @@ class EconomicEventsService:
         events: List[Dict[str, Any]],
         *,
         days_ahead: int,
-        keep_recent_days: int = 7,
+        keep_recent_days: int = 14,
     ) -> List[Dict[str, Any]]:
         today = datetime.now().date()
-        earliest = today - timedelta(days=min(max(keep_recent_days, 2), 7))
+        earliest = today - timedelta(days=max(keep_recent_days, 1))
         latest = today + timedelta(days=max(days_ahead, 1))
 
         deduped: List[Dict[str, Any]] = []
@@ -262,7 +262,7 @@ class EconomicEventsService:
         deduped.sort(key=lambda item: (item.get('date', ''), item.get('time', ''), item.get('title', '')))
         return deduped
 
-    def fetch_earnings_calendar(self, days_ahead: int = 30) -> List[Dict[str, Any]]:
+    def fetch_earnings_calendar(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
         """Fetch live earnings-related events from official feeds where available, else current RSS news."""
         events = self._fetch_official_feed_events(
             self.CORPORATE_FEEDS["nse_financial_results"],
@@ -270,17 +270,17 @@ class EconomicEventsService:
             days_ahead=days_ahead,
             default_impact='high',
         )
-        if events:
-            return events
-        return self._fetch_live_news_events(
-            event_type='earnings',
-            keywords=['earnings', 'results', 'quarterly', 'q1', 'q2', 'q3', 'q4', 'eps'],
-            preferred_categories=['earnings'],
-            days_ahead=days_ahead,
-            default_impact='high',
-        )
+        if not events:
+            events = self._fetch_live_news_events(
+                event_type='earnings',
+                keywords=['earnings', 'results', 'quarterly', 'q1', 'q2', 'q3', 'q4', 'eps'],
+                preferred_categories=['earnings'],
+                days_ahead=days_ahead,
+                default_impact='high',
+            )
+        return self._dedupe_and_filter(events, days_ahead=days_ahead, keep_recent_days=days_back)
 
-    def fetch_dividend_calendar(self, days_ahead: int = 30) -> List[Dict[str, Any]]:
+    def fetch_dividend_calendar(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
         """Fetch live dividend and corporate payout events."""
         events = self._fetch_official_feed_events(
             self.CORPORATE_FEEDS["nse_dividends"],
@@ -289,17 +289,17 @@ class EconomicEventsService:
             default_impact='medium',
             limit=12,
         )
-        if events:
-            return events
-        return self._fetch_live_news_events(
-            event_type='dividend',
-            keywords=['dividend', 'buyback', 'bonus', 'stock split', 'rights issue'],
-            preferred_categories=['corporate'],
-            days_ahead=days_ahead,
-            default_impact='medium',
-        )
+        if not events:
+            events = self._fetch_live_news_events(
+                event_type='dividend',
+                keywords=['dividend', 'buyback', 'bonus', 'stock split', 'rights issue'],
+                preferred_categories=['corporate'],
+                days_ahead=days_ahead,
+                default_impact='medium',
+            )
+        return self._dedupe_and_filter(events, days_ahead=days_ahead, keep_recent_days=days_back)
 
-    def fetch_board_meetings(self, days_ahead: int = 30) -> List[Dict[str, Any]]:
+    def fetch_board_meetings(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
         """Fetch live board meeting and AGM-related announcements."""
         events = self._fetch_official_feed_events(
             self.CORPORATE_FEEDS["nse_board_meetings"],
@@ -308,17 +308,17 @@ class EconomicEventsService:
             default_impact='medium',
             limit=12,
         )
-        if events:
-            return events
-        return self._fetch_live_news_events(
-            event_type='board_meeting',
-            keywords=['board meeting', 'agm', 'egm', 'annual general meeting'],
-            preferred_categories=['corporate'],
-            days_ahead=days_ahead,
-            default_impact='medium',
-        )
+        if not events:
+            events = self._fetch_live_news_events(
+                event_type='board_meeting',
+                keywords=['board meeting', 'agm', 'egm', 'annual general meeting'],
+                preferred_categories=['corporate'],
+                days_ahead=days_ahead,
+                default_impact='medium',
+            )
+        return self._dedupe_and_filter(events, days_ahead=days_ahead, keep_recent_days=days_back)
 
-    def fetch_ipo_calendar(self, days_ahead: int = 30) -> List[Dict[str, Any]]:
+    def fetch_ipo_calendar(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
         """Fetch live IPO and listing updates."""
         events = self._fetch_official_feed_events(
             self.CORPORATE_FEEDS["nse_ipo"],
@@ -327,17 +327,17 @@ class EconomicEventsService:
             default_impact='medium',
             limit=10,
         )
-        if events:
-            return events
-        return self._fetch_live_news_events(
-            event_type='ipo',
-            keywords=['ipo', 'listing', 'public issue', 'public offer', 'offer for sale'],
-            preferred_categories=['ipo'],
-            days_ahead=days_ahead,
-            default_impact='medium',
-        )
+        if not events:
+            events = self._fetch_live_news_events(
+                event_type='ipo',
+                keywords=['ipo', 'listing', 'public issue', 'public offer', 'offer for sale'],
+                preferred_categories=['ipo'],
+                days_ahead=days_ahead,
+                default_impact='medium',
+            )
+        return self._dedupe_and_filter(events, days_ahead=days_ahead, keep_recent_days=days_back)
 
-    def fetch_rbi_events(self, days_ahead: int = 30) -> List[Dict[str, Any]]:
+    def fetch_rbi_events(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
         """Fetch live RBI and macro-economic events from current financial news."""
         rbi_events = self._fetch_live_news_events(
             event_type='rbi',
@@ -355,18 +355,18 @@ class EconomicEventsService:
             default_impact='high',
             allow_category_match_without_keyword=True,
         )
-        return self._dedupe_and_filter(rbi_events + macro_events, days_ahead=days_ahead)
+        return self._dedupe_and_filter(rbi_events + macro_events, days_ahead=days_ahead, keep_recent_days=days_back)
 
-    def fetch_all_events(self, days_ahead: int = 30) -> List[Dict[str, Any]]:
+    def fetch_all_events(self, days_ahead: int = 21, days_back: int = 14) -> List[Dict[str, Any]]:
         """Fetch live event signals across earnings, macro, IPO, dividend, and corporate categories."""
         all_events: List[Dict[str, Any]] = []
-        all_events.extend(self.fetch_earnings_calendar(days_ahead))
-        all_events.extend(self.fetch_dividend_calendar(days_ahead))
-        all_events.extend(self.fetch_board_meetings(days_ahead))
-        all_events.extend(self.fetch_ipo_calendar(days_ahead))
-        all_events.extend(self.fetch_rbi_events(days_ahead))
+        all_events.extend(self.fetch_earnings_calendar(days_ahead, days_back))
+        all_events.extend(self.fetch_dividend_calendar(days_ahead, days_back))
+        all_events.extend(self.fetch_board_meetings(days_ahead, days_back))
+        all_events.extend(self.fetch_ipo_calendar(days_ahead, days_back))
+        all_events.extend(self.fetch_rbi_events(days_ahead, days_back))
 
-        all_events = self._dedupe_and_filter(all_events, days_ahead=days_ahead)
+        all_events = self._dedupe_and_filter(all_events, days_ahead=days_ahead, keep_recent_days=days_back)
 
         for event in all_events:
             event_datetime = self._parse_datetime(event['date'])
@@ -390,7 +390,7 @@ class EconomicEventsService:
     def get_today_high_impact(self) -> List[Dict[str, Any]]:
         """Get today's or nearest upcoming high-impact live events."""
         try:
-            events = self.fetch_all_events(days_ahead=7)
+            events = self.fetch_all_events(days_ahead=7, days_back=3)
             today = datetime.now().strftime('%Y-%m-%d')
 
             today_events = [e for e in events if e.get('date') == today and e.get('impact') == 'high']

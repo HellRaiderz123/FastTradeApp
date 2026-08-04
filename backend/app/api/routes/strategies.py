@@ -136,6 +136,7 @@ def create_strategy_from_suggestion(
                     "strike_type": "ABSOLUTE",
                     "strike_offset": 0,
                     "quantity": request.lots * lot_size,
+                    "price": leg.get("premium", 0),   # ✅ use 'price' so MTM can read it
                     "premium": leg.get("premium", 0),
                 }
                 for leg in raw_legs

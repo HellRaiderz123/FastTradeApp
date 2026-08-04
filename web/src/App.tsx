@@ -26,6 +26,7 @@ import BacktestComparison from './pages/BacktestComparison';
 import TradeCostTracker from './pages/TradeCostTracker';
 import CustomWatchlists from './pages/CustomWatchlists';
 import CreateScanner from './pages/CreateScanner';
+import ScannerExecution from './pages/ScannerExecution';
 import BrokerReconciliation from './pages/BrokerReconciliation';
 import StrategyPnL from './pages/StrategyPnL';
 import StrategyMarketplace from './pages/StrategyMarketplace';
@@ -110,6 +111,7 @@ function AppInner() {
                   <Route path="/strategies/builder" element={<StrategyBuilder />} />
                   <Route path="/marketplace" element={<StrategyMarketplace />} />
                   <Route path="/create-scanner" element={<CreateScanner />} />
+                  <Route path="/scanner-execution" element={<ScannerExecution />} />
                   <Route path="/backfill-candles" element={<CandleBackfill />} />
                   <Route path="/backtest" element={<Backtest />} />
                   <Route path="/backtest-comparison" element={<BacktestComparison />} />

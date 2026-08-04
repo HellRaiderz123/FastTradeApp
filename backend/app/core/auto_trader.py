@@ -354,13 +354,13 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
              severity="INFO")
         return
 
-    # Cooldown: don't re-enter within 15 min of a reversal exit on same underlying
+    # Cooldown: don't re-enter within 15 min of a reversal or pre-expiry exit on same underlying
     recent_exit = (
         db.query(ExecutionIntent)
         .filter(
             ExecutionIntent.underlying == underlying,
             ExecutionIntent.status == "CLOSED",
-            ExecutionIntent.exit_reason == "AUTO_REVERSAL_EXIT",
+            ExecutionIntent.exit_reason.in_(["AUTO_REVERSAL_EXIT", "PRE_EXPIRY_EXIT"]),
             ExecutionIntent.closed_at >= now_ist() - timedelta(minutes=15),
         )
         .first()

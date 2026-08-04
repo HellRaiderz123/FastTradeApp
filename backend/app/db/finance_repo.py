@@ -17,29 +17,42 @@ from app.api.schemas.finance import (
 
 # ============= TRANSACTIONS =============
 def _sync_postgres_id_sequence(db: Session, model):
+    """Safely reset the PK sequence so bulk inserts don't collide."""
     bind = db.get_bind()
     if bind is None or bind.dialect.name != "postgresql":
         return
-
     table_name = model.__table__.name
-    db.execute(text(f"""
-        SELECT setval(
-            pg_get_serial_sequence('{table_name}', 'id'),
-            COALESCE((SELECT MAX(id) FROM {table_name}), 0) + 1,
-            false
-        )
-    """))
+    try:
+        db.execute(text(f"""
+            SELECT setval(
+                pg_get_serial_sequence('{table_name}', 'id'),
+                COALESCE((SELECT MAX(id) FROM {table_name}), 0),
+                true
+            )
+        """))
+    except Exception:
+        # pg_get_serial_sequence returns NULL when sequence name can't be found
+        # (e.g. table created without SERIAL). Fall back to explicit sequence name.
+        try:
+            db.execute(text(f"""
+                SELECT setval(
+                    '{table_name}_id_seq',
+                    COALESCE((SELECT MAX(id) FROM {table_name}), 0),
+                    true
+                )
+            """))
+        except Exception:
+            pass
 
 
 def create_transactions(
     db: Session,
     items: list[FinanceTransactionCreate],
 ):
-    objects = [FinanceTransaction(**item.dict()) for item in items]
-    if not objects:
-        return objects
-
+    if not items:
+        return []
     _sync_postgres_id_sequence(db, FinanceTransaction)
+    objects = [FinanceTransaction(**item.dict()) for item in items]
     db.add_all(objects)
     db.commit()
     return objects

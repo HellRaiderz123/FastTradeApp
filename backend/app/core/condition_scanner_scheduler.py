@@ -323,6 +323,25 @@ def _auto_execute_signal(
         order_id=order.get("order_id"),
     )
 
+    # Create ExecutionIntent so auto_exit.py monitors this trade
+    if order.get("status") in {"FILLED_PAPER", "PLACED_LIVE", "DRY_RUN"} and order.get("fill_price"):
+        try:
+            from app.api.routes.condition_scanner import _create_scanner_intent
+            _create_scanner_intent(
+                db,
+                symbol=symbol,
+                direction=direction,
+                strategy_name=strategy_name,
+                strategy_id=strategy_id,
+                fill_price=float(order["fill_price"]),
+                quantity=quantity,
+                exit_config=exit_config,
+                order_id=order.get("order_id", ""),
+                timeframe=timeframe,
+            )
+        except Exception as intent_err:
+            logger.warning(f"    Could not create scanner ExecutionIntent: {intent_err}")
+
     try:
         from app.services.notifications import NotificationService
         svc = NotificationService(db)

@@ -36,7 +36,9 @@ def _resolve_leg_qty(leg: Dict[str, Any], ticket_qty: int) -> int:
         return max(1, int(ticket_qty))
     if value <= 0:
         return max(1, int(ticket_qty))
-    if value <= 10 and ticket_qty > 1:
+    # Only multiply when leg qty looks like a lot count (< ticket_qty).
+    # If leg qty already equals ticket_qty it's the total shares — don't double-multiply.
+    if value < ticket_qty and ticket_qty > 1:
         return value * ticket_qty
     return value
 
@@ -76,7 +78,7 @@ def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) 
             
             # Try ticker cache first
             current_price = get_ticker_ltp(symbol)
-            if current_price is None:
+            if current_price is None or float(current_price) <= 0:
                 all_cached = False
                 break
             

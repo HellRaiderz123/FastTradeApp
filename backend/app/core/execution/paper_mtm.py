@@ -95,7 +95,13 @@ def update_paper_mtm(db: Session):
         lots = ticket.get("lots", 1)
         quantity = lot_size * lots
 
-        symbols = [leg["symbol"] for leg in ticket["legs"]]
+        symbols = [
+            leg.get("symbol") or leg.get("tradingsymbol") or ""
+            for leg in ticket["legs"]
+        ]
+        symbols = [s for s in symbols if s]
+        if not symbols:
+            continue
 
         # ---- LIVE LTP ----
         ltp_map = get_ltp(symbols)
@@ -104,17 +110,20 @@ def update_paper_mtm(db: Session):
 
         # ---- MTM PER LEG ----
         for leg in ticket["legs"]:
-            symbol = leg["symbol"]
-            entry_price = leg.get("price")     # 🔥 STORED PRICE
+            symbol = leg.get("symbol") or leg.get("tradingsymbol")
+            if not symbol:
+                continue
+            entry_price = leg.get("price") or leg.get("premium")  # fallback to premium
             current_price = ltp_map.get(symbol)
 
-            if entry_price is None or current_price is None:
+            if entry_price is None or current_price is None or float(current_price) <= 0:
                 continue
 
-            if leg["side"] == "SELL":
-                leg_pnl = (entry_price - current_price) * quantity
+            side = (leg.get("side") or leg.get("action") or "").upper()
+            if side == "SELL":
+                leg_pnl = (float(entry_price) - float(current_price)) * quantity
             else:  # BUY
-                leg_pnl = (current_price - entry_price) * quantity
+                leg_pnl = (float(current_price) - float(entry_price)) * quantity
 
             pnl += leg_pnl
 

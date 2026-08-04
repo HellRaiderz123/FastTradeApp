@@ -49,6 +49,7 @@ class ExecutionIntent(Base):
 
     entry_credit = Column(Float, nullable=True)
     unrealized_pnl = Column(Float, nullable=True)
+    final_pnl = Column(Float, nullable=True)  # Final P&L after position is closed
     margin_required = Column(Float, nullable=True)  # Margin blocked by broker (Zerodha)
     max_unrealized_pnl = Column(Float, nullable=True)  # Highest profit reached (for trailing stops)
 

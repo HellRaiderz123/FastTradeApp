@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.core.execution.mode import get_execution_mode, is_paper_mode, is_live_mode
 from app.core.indicators.technical import TechnicalIndicators
+from app.db.models_intent import ExecutionIntent
 from app.core.condition_strategy_lab import (
     expand_strategies_with_exit_variants,
     generate_candidate_strategies,
@@ -1581,6 +1582,15 @@ async def scan_strategy(
             if existing_status in {"FILLED_PAPER", "PLACED_LIVE", "EXECUTED", "DRY_RUN"}:
                 auto_skipped += 1
                 continue
+            # Skip if a position already exists for this symbol + strategy today
+            already_open = db.query(ExecutionIntent).filter(
+                ExecutionIntent.underlying == signal["symbol"],
+                ExecutionIntent.strategy == row.name,
+                ExecutionIntent.status.in_(["EXECUTED", "CLOSED"]),
+            ).first()
+            if already_open:
+                auto_skipped += 1
+                continue
             try:
                 quantity = int(signal.get("suggested_quantity") or (max(1, int((float(row.auto_amount or 10000.0) or 10000.0) // max(float(signal.get("ltp") or 1.0), 1.0)))))
                 _auto_execute_signal(
@@ -1618,6 +1628,77 @@ async def scan_strategy(
     }
 
 
+def _create_scanner_intent(
+    db: Session,
+    *,
+    symbol: str,
+    direction: str,
+    strategy_name: str,
+    strategy_id: Optional[int],
+    fill_price: float,
+    quantity: int,
+    exit_config: dict,
+    order_id: str,
+    timeframe: Optional[str] = None,
+) -> None:
+    """Create an ExecutionIntent row so auto_exit.py monitors this scanner trade."""
+    import uuid
+    intent_id = f"SCANNER-{order_id or uuid.uuid4().hex[:12]}"
+    # Avoid duplicates if called twice for same order
+    if db.query(ExecutionIntent).filter_by(intent_id=intent_id).first():
+        return
+
+    sl_pct = float(exit_config.get("sl_pct") or 5.0) / 100
+    tp_pct = float(exit_config.get("tp_pct") or 10.0) / 100
+    tsl_pct = float(exit_config.get("tsl_pct") or 0.0)
+
+    # For BUY: profit = (current - fill) * qty; TP/SL in ₹ PnL terms
+    if direction == "BUY":
+        tp_abs = round(fill_price * tp_pct * quantity, 2)
+        sl_abs = round(-fill_price * sl_pct * quantity, 2)
+        entry_credit = round(-fill_price * quantity, 2)  # cost (negative = debit)
+    else:
+        tp_abs = round(fill_price * tp_pct * quantity, 2)
+        sl_abs = round(-fill_price * sl_pct * quantity, 2)
+        entry_credit = round(fill_price * quantity, 2)   # credit received
+
+    exit_conditions = list(exit_config.get("exit_conditions") or [])
+    resolved_timeframe = timeframe or str(exit_config.get("_timeframe") or "Day")
+
+    ticket = {
+        "lot_size": 1,
+        "lots": quantity,
+        "legs": [{
+            "symbol": symbol,
+            "side": direction,
+            "price": fill_price,
+            "qty": quantity,
+        }],
+        "exit_conditions": exit_conditions,
+        "timeframe": resolved_timeframe,
+    }
+
+    from app.core.utils.time import now_ist
+    intent = ExecutionIntent(
+        run_id=strategy_id or 0,
+        intent_id=intent_id,
+        strategy=strategy_name,
+        underlying=symbol,
+        ticket=ticket,
+        status="EXECUTED",
+        executed=True,
+        expires_at=now_ist(),  # no expiry for equity
+        avg_price=fill_price,
+        entry_credit=entry_credit,
+        pnl=0.0,
+        tp=tp_abs if tp_pct > 0 else None,
+        sl=sl_abs if sl_pct > 0 else None,
+        trailing_sl_pct=tsl_pct if tsl_pct > 0 else None,
+    )
+    db.add(intent)
+    # caller commits
+
+
 @router.post("/execute-signal")
 async def execute_signal(body: dict, db: Session = Depends(get_db)):
     """
@@ -1640,6 +1721,22 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
 
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol required")
+
+    # Prevent duplicate: if a position already exists for this symbol + strategy today, skip
+    from sqlalchemy import func as _sqlfunc
+    already_open = db.query(ExecutionIntent).filter(
+        ExecutionIntent.underlying == symbol,
+        ExecutionIntent.strategy == strategy_name,
+        ExecutionIntent.status.in_(["EXECUTED", "CLOSED"]),
+        _sqlfunc.date(ExecutionIntent.created_at) == _sqlfunc.current_date(),
+    ).first()
+    if already_open:
+        return {
+            "order": {"status": "SKIPPED", "symbol": symbol, "reason": "Position already open"},
+            "execution_mode": get_execution_mode(),
+            "message": f"Skipped: {symbol} already has an open {strategy_name} position (intent {already_open.intent_id})",
+            "signal_history_id": signal_history_id,
+        }
 
     mode = get_execution_mode()
 
@@ -1751,6 +1848,24 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
         execution_mode=mode,
         order_id=order.get("order_id"),
     )
+
+    # Create ExecutionIntent so auto_exit.py monitors this trade
+    if order.get("status") in {"FILLED_PAPER", "PLACED_LIVE", "DRY_RUN"} and order.get("fill_price"):
+        try:
+            _create_scanner_intent(
+                db,
+                symbol=symbol,
+                direction=direction,
+                strategy_name=strategy_name,
+                strategy_id=strategy_id,
+                fill_price=float(order["fill_price"]),
+                quantity=quantity,
+                exit_config=exit_config,
+                order_id=order.get("order_id", ""),
+                timeframe=timeframe,
+            )
+        except Exception as intent_err:
+            logger.warning(f"Could not create scanner ExecutionIntent: {intent_err}")
 
     # Persist to execution log
     try:

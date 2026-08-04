@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -14,7 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Line, Path, Rect } from 'react-native-svg';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { financeAPI } from '../lib/api';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ProgressBar, ScreenHeader, StatCard, Tag } from '../components/ui';
@@ -81,6 +82,13 @@ type TrendPayload = {
   trends: TrendSeries[];
 };
 
+type Forecast = {
+  category: string;
+  predicted_amount: number;
+  confidence: number;
+  forecast_month?: string;
+};
+
 type TransactionFormState = {
   date: string;
   description: string;
@@ -139,6 +147,7 @@ export default function FinanceScreen() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [trendData, setTrendData] = useState<TrendPayload>({ months: [], trends: [] });
+  const [forecasts, setForecasts] = useState<Forecast[]>([]);
   const [selectedMonth, setSelectedMonth] = useState('');
   const [transactionModalVisible, setTransactionModalVisible] = useState(false);
   const [budgetModalVisible, setBudgetModalVisible] = useState(false);
@@ -155,16 +164,19 @@ export default function FinanceScreen() {
     monthly_limit: '',
     alert_threshold: '80',
   });
+  const [categoryModalTx, setCategoryModalTx] = useState<Transaction | null>(null);
+  const [savingCategory, setSavingCategory] = useState(false);
 
   const load = useCallback(async (monthOverride?: string) => {
-    const month = monthOverride ?? selectedMonth;
+    const month = monthOverride ?? selectedMonth ?? '';
     try {
-      const [txRes, goalRes, billRes, trendRes, budgetRes] = await Promise.allSettled([
+      const [txRes, goalRes, billRes, trendRes, budgetRes, forecastRes] = await Promise.allSettled([
         financeAPI.getTransactions(),
         financeAPI.getSavingsGoals(),
         financeAPI.getBillReminders(),
         financeAPI.getTrends(6, 5),
-        financeAPI.getBudgets(month || undefined),
+        financeAPI.getBudgets(),
+        financeAPI.getExpenseForecasts(month || undefined),
       ]);
 
       let nextTransactions: Transaction[] = [];
@@ -174,6 +186,7 @@ export default function FinanceScreen() {
       }
       if (goalRes.status === 'fulfilled') setGoals(Array.isArray(goalRes.value.data) ? goalRes.value.data : []);
       if (billRes.status === 'fulfilled') setBills(Array.isArray(billRes.value.data) ? billRes.value.data : []);
+      if (forecastRes.status === 'fulfilled') setForecasts(Array.isArray(forecastRes.value.data) ? forecastRes.value.data : []);
       if (trendRes.status === 'fulfilled') {
         const data = trendRes.value.data;
         setTrendData({
@@ -196,11 +209,10 @@ export default function FinanceScreen() {
         setBudgetStatuses([]);
       }
 
-      if (!month && nextTransactions.length > 0) {
+      if (nextTransactions.length > 0) {
         const months = Array.from(new Set(nextTransactions.map((tx) => monthKey(tx.tran_date)).filter(Boolean))).sort().reverse();
-        if (months[0]) {
-          setSelectedMonth(months[0]);
-        }
+        // Only auto-set month on first load (when no month is selected yet)
+        setSelectedMonth((prev) => prev || months[0] || '');
       }
     } catch {
     } finally {
@@ -213,11 +225,11 @@ export default function FinanceScreen() {
     load();
   }, []);
 
-  useEffect(() => {
-    if (selectedMonth) {
-      load(selectedMonth);
-    }
-  }, [selectedMonth, load]);
+  useFocusEffect(
+    useCallback(() => {
+      load(selectedMonth || undefined);
+    }, [selectedMonth])
+  );
 
   const availableMonths = useMemo(() => {
     const txMonths = transactions.map((tx) => monthKey(tx.tran_date)).filter(Boolean);
@@ -317,6 +329,19 @@ export default function FinanceScreen() {
     ]);
   };
 
+  const updateCategory = async (tx: Transaction, category: string) => {
+    if (!tx.id) return;
+    setSavingCategory(true);
+    try {
+      await financeAPI.updateTransactionCategory(tx.id, category);
+      setTransactions((prev) => prev.map((t) => t.id === tx.id ? { ...t, category } : t));
+      setCategoryModalTx(null);
+    } catch {
+      Alert.alert('Failed', 'Could not update category.');
+    }
+    setSavingCategory(false);
+  };
+
   const deleteBudget = (budgetId?: number) => {
     if (!budgetId) return;
     Alert.alert('Delete Budget', 'Remove this monthly budget?', [
@@ -353,6 +378,15 @@ export default function FinanceScreen() {
           <View style={styles.headerActions}>
             <PrimaryButton title="Add Tx" onPress={() => setTransactionModalVisible(true)} small style={styles.headerButton} />
             <PrimaryButton title="Add Budget" onPress={() => setBudgetModalVisible(true)} variant="ghost" small style={styles.headerButton} />
+            {Platform.OS === 'android' && (
+              <PrimaryButton
+                title="📱 Scan SMS"
+                onPress={() => router.push('/smsScanner')}
+                variant="success"
+                small
+                style={styles.headerButton}
+              />
+            )}
           </View>
         </ScreenHeader>
 
@@ -414,6 +448,30 @@ export default function FinanceScreen() {
                   ))}
                 </View>
               </>
+            )}
+          </GlassCard>
+
+          <GlassCard style={styles.sectionCard}>
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionTitle}>Expense Forecast</Text>
+              <Tag label={`${forecasts.length} categories`} />
+            </View>
+            {forecasts.length === 0 ? (
+              <Text style={styles.emptyHint}>No forecast data yet. Add more transactions to generate forecasts.</Text>
+            ) : (
+              forecasts.map((fc, idx) => {
+                const confidence = Math.round((fc.confidence || 0) * 100);
+                return (
+                  <View key={`${fc.category}-${idx}`} style={styles.itemRow}>
+                    <View style={styles.itemHeader}>
+                      <Text style={styles.itemTitle}>{fc.category}</Text>
+                      <Text style={[styles.itemValue, { color: Colors.amber }]}>{money(fc.predicted_amount)}</Text>
+                    </View>
+                    <Text style={styles.itemSub}>Predicted next month  ·  {confidence}% confidence</Text>
+                    <ProgressBar value={confidence} color={confidence >= 70 ? Colors.green : confidence >= 40 ? Colors.amber : Colors.red} style={{ marginTop: 6 }} />
+                  </View>
+                );
+              })
             )}
           </GlassCard>
 
@@ -504,7 +562,7 @@ export default function FinanceScreen() {
             {filteredTransactions.length === 0 ? (
               <EmptyState icon="🧾" title="No transactions for this month" subtitle="Add one manually or switch the month filter." />
             ) : (
-              filteredTransactions.slice(0, 20).map((tx, idx) => {
+              filteredTransactions.map((tx, idx) => {
                 const debit = Number(tx.debit || 0);
                 const credit = Number(tx.credit || 0);
                 const amount = credit > 0 ? credit : debit;
@@ -513,7 +571,11 @@ export default function FinanceScreen() {
                   <View key={`${tx.id || tx.tran_date}-${idx}`} style={styles.txRow}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.itemTitle}>{tx.description || 'Transaction'}</Text>
-                      <Text style={styles.itemSub}>{tx.tran_date || '-'}  ·  {tx.category || 'Uncategorized'}</Text>
+                      <Text style={styles.itemSub}>{tx.tran_date || '-'}</Text>
+                      <TouchableOpacity onPress={() => setCategoryModalTx(tx)} style={styles.categoryChip}>
+                        <Text style={styles.categoryChipText}>{tx.category || 'Uncategorized'}</Text>
+                        <Ionicons name="pencil-outline" size={11} color={Colors.accent} style={{ marginLeft: 4 }} />
+                      </TouchableOpacity>
                     </View>
                     <View style={styles.txRight}>
                       <Text style={[styles.itemValue, { color: isCredit ? Colors.green : Colors.textPrimary }]}>{isCredit ? '+' : '-'}{money(amount)}</Text>
@@ -530,6 +592,41 @@ export default function FinanceScreen() {
           <View style={{ height: 100 }} />
         </ScrollView>
       </SafeAreaView>
+
+      {/* Category picker modal */}
+      <Modal visible={!!categoryModalTx} transparent animationType="fade" onRequestClose={() => setCategoryModalTx(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Category</Text>
+              <TouchableOpacity onPress={() => setCategoryModalTx(null)}>
+                <Ionicons name="close-outline" size={22} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            {categoryModalTx && (
+              <Text style={[styles.itemSub, { marginBottom: 12 }]} numberOfLines={1}>
+                {categoryModalTx.description}
+              </Text>
+            )}
+            <ScrollView style={{ maxHeight: 340 }}>
+              {CATEGORY_OPTIONS.map((cat) => {
+                const active = cat === categoryModalTx?.category;
+                return (
+                  <TouchableOpacity
+                    key={cat}
+                    disabled={savingCategory}
+                    style={[styles.optionRow, active && styles.optionRowActive]}
+                    onPress={() => categoryModalTx && updateCategory(categoryModalTx, cat)}
+                  >
+                    <Text style={[styles.optionRowText, active && styles.optionRowTextActive]}>{cat}</Text>
+                    {active ? <Ionicons name="checkmark-outline" size={18} color={Colors.accentLight} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <OptionListModal
         visible={monthModalVisible}
@@ -877,6 +974,19 @@ const styles = StyleSheet.create({
   },
   txRight: { alignItems: 'flex-end', marginLeft: 10 },
   deleteButton: { marginTop: 6, padding: 4 },
+  categoryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    borderColor: Colors.borderAccent,
+    backgroundColor: Colors.accentGlow,
+  },
+  categoryChipText: { fontSize: 11, color: Colors.accent, fontWeight: '600' },
   barChartWrap: { paddingTop: 4 },
   barLegendRow: { flexDirection: 'row', justifyContent: 'space-around', marginTop: -6 },
   barLegendItem: { flexDirection: 'row', alignItems: 'center' },

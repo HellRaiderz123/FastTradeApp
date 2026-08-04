@@ -108,6 +108,8 @@ export default function Layout() {
       <Tabs.Screen name="aiAgents" options={{ href: null }} />
       <Tabs.Screen name="news" options={{ href: null }} />
       <Tabs.Screen name="account" options={{ href: null }} />
+      <Tabs.Screen name="scannerExecution" options={{ href: null }} />
+      <Tabs.Screen name="smsScanner" options={{ href: null }} />
     </Tabs>
   );
 }

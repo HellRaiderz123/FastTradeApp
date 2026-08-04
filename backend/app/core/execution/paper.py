@@ -24,7 +24,10 @@ class PaperExecutionAdapter(ExecutionAdapter):
             return max(1, int(ticket_qty))
         if value <= 0:
             return max(1, int(ticket_qty))
-        if value <= 10 and ticket_qty > 1:
+        # If leg qty already equals ticket_qty, it's the total — don't multiply again.
+        # Only multiply when leg qty looks like a lot count (< ticket_qty), which
+        # happens for options where lot_size > 1 and qty stores lots not shares.
+        if value < ticket_qty and ticket_qty > 1:
             return value * ticket_qty
         return value
 
@@ -146,12 +149,13 @@ class PaperExecutionAdapter(ExecutionAdapter):
         pnl = 0.0
         for leg in ticket["legs"]:
             symbol = leg.get("symbol") or f'{leg["strike"]}{leg["type"]}'
-            current = ltp_map.get(symbol, 0.0)
-            entry = leg.get("price")
-            if entry is None:
-                raise ValueError("Leg price missing for MTM")
+            current = ltp_map.get(symbol)
+            entry = leg.get("price") or leg.get("premium")
+            if entry is None or current is None or float(current) <= 0:
+                continue
             leg_qty = self._resolve_leg_qty(leg, ticket_qty)
-            sign = 1.0 if leg["side"] == "SELL" else -1.0
+            side = (leg.get("side") or leg.get("action") or "").upper()
+            sign = 1.0 if side == "SELL" else -1.0
             pnl += (float(entry) - float(current)) * sign * leg_qty
 
         return round(pnl, 2)
@@ -165,11 +169,13 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
         exit_cost = 0.0
         for leg in ticket["legs"]:
-            price = ltp_map.get(leg["symbol"])
-            if price is None or price == 0.0:
-                raise ValueError(f"LTP not found for symbol: {leg['symbol']}")
+            symbol = leg.get("symbol") or leg.get("tradingsymbol", "")
+            price = ltp_map.get(symbol)
+            if price is None or float(price) <= 0:
+                raise ValueError(f"LTP not found for symbol: {symbol}")
             leg_qty = self._resolve_leg_qty(leg, ticket_qty)
-            if leg["side"] == "SELL":
+            side = (leg.get("side") or leg.get("action") or "").upper()
+            if side == "SELL":
                 exit_cost += price * leg_qty
             else:
                 exit_cost -= price * leg_qty

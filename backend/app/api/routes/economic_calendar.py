@@ -389,30 +389,23 @@ def generate_economic_calendar(days_ahead: int = 30, event_type: Optional[str] =
 
 @router.get("/events")
 async def get_calendar_events(
-    days_ahead: int = 30,
+    days_ahead: int = 21,
+    days_back: int = 14,
     event_type: Optional[str] = None,
     impact: Optional[str] = None
 ):
     """
-    Get upcoming economic calendar events from real sources
-    
+    Get economic calendar events from real sources
+
     Query params:
-        days_ahead: Number of days to look ahead (default 30)
+        days_ahead: Days to look ahead (default 21 = ~3 weeks)
+        days_back: Days to look back (default 14 = ~2 weeks)
         event_type: Filter by type (earnings, rbi, economic, ipo, dividend, corporate_action, global, all)
         impact: Filter by impact level (high, medium, low)
-    
-    Returns:
-        {
-            "events": [...],
-            "total_count": 45,
-            "event_types": ["earnings", "rbi", ...],
-            "upcoming_high_impact": 12
-        }
     """
     try:
-        # Fetch real events using service
         events_service = get_events_service()
-        events = events_service.fetch_all_events(days_ahead)
+        events = events_service.fetch_all_events(days_ahead=days_ahead, days_back=days_back)
         
         # Filter by event type if specified
         if event_type and event_type != "all":
@@ -478,38 +471,35 @@ async def get_today_events():
 
 @router.get("/week")
 async def get_week_events():
-    """Get this week's events (next 7 days) from real sources"""
+    """Get events spanning 1 week back and 1 week ahead"""
     try:
         events_service = get_events_service()
-        all_events = events_service.fetch_all_events(days_ahead=7)
-        
-        # Enrich events with countdown and days_until
+        all_events = events_service.fetch_all_events(days_ahead=7, days_back=7)
+
         all_events = [enrich_event_with_countdown(e) for e in all_events]
-        
-        week_events = [e for e in all_events if e.get("days_until", 0) <= 7]
-        
-        # Group by day
+
+        week_events = [e for e in all_events if -7 <= e.get("days_until", 0) <= 7]
+
         events_by_day = {}
         for event in week_events:
             date = event["date"]
             if date not in events_by_day:
                 events_by_day[date] = []
             events_by_day[date].append(event)
-        
+
         return {
-            "start_date": datetime.now().strftime("%Y-%m-%d"),
+            "start_date": (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),
             "end_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
             "events_by_day": events_by_day,
             "total_count": len(week_events),
             "data_source": "live_feeds",
             "sources": sorted({str(e.get("source") or "unknown") for e in week_events})
         }
-    
+
     except Exception as e:
         logger.error(f"Week calendar error: {str(e)}", exc_info=True)
-        # Return empty instead of erroring
         return {
-            "start_date": datetime.now().strftime("%Y-%m-%d"),
+            "start_date": (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),
             "end_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
             "events_by_day": {},
             "total_count": 0,
@@ -518,11 +508,11 @@ async def get_week_events():
 
 
 @router.get("/earnings")
-async def get_earnings_calendar(days_ahead: int = 30):
+async def get_earnings_calendar(days_ahead: int = 21, days_back: int = 14):
     """Get real earnings announcements from NSE"""
     try:
         events_service = get_events_service()
-        earnings = events_service.fetch_earnings_calendar(days_ahead)
+        earnings = events_service.fetch_earnings_calendar(days_ahead, days_back)
         
         # Enrich events with countdown and days_until
         earnings = [enrich_event_with_countdown(e) for e in earnings]
@@ -546,11 +536,11 @@ async def get_earnings_calendar(days_ahead: int = 30):
 
 
 @router.get("/ipo")
-async def get_ipo_calendar(days_ahead: int = 30):
+async def get_ipo_calendar(days_ahead: int = 21, days_back: int = 14):
     """Get real IPO schedule from NSE"""
     try:
         events_service = get_events_service()
-        ipos = events_service.fetch_ipo_calendar(days_ahead)
+        ipos = events_service.fetch_ipo_calendar(days_ahead, days_back)
         
         # Enrich events with countdown and days_until
         ipos = [enrich_event_with_countdown(e) for e in ipos]
