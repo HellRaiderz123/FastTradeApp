@@ -376,6 +376,8 @@ export const financeAPI = {
   getBudgets: (month?: string) => api.get('/finance/budgets', { params: { month } }),
   getBudgetStatus: (category: string, month?: string) =>
     api.get(`/finance/budgets/status/${category}`, { params: { month } }),
+  getAllBudgetStatuses: (month?: string) =>
+    api.get('/finance/budgets/status', { params: { month } }),
   deleteBudget: (budgetId: number) =>
     api.delete(`/finance/budgets/${budgetId}`),
 

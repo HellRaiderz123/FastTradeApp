@@ -118,7 +118,8 @@ export default function SmsScannerScreen() {
       );
     } catch (err: any) {
       setImporting(false);
-      Alert.alert('Import Failed', err?.response?.data?.detail || 'Could not import transactions.');
+      const detail = err?.response?.data?.detail || err?.response?.data?.message || err?.message || 'Could not import transactions.';
+      Alert.alert('Import Failed', `Error: ${detail}`);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
   }, [transactions, router]);

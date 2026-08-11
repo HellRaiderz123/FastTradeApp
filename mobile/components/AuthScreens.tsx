@@ -163,6 +163,22 @@ export function LoginScreen() {
                 </View>
               </View>
 
+              <View style={styles.fieldWrap}>
+                <Text style={styles.label}>Backend URL</Text>
+                <TextInput
+                  value={apiBaseInput}
+                  onChangeText={setApiBaseInput}
+                  onBlur={async () => {
+                    if (apiBaseInput.trim()) await persistApiBaseUrl(apiBaseInput.trim());
+                  }}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="https://xxxx.ngrok-free.app"
+                  placeholderTextColor={Colors.textMuted}
+                  style={styles.input}
+                />
+              </View>
+
               <PrimaryButton title="Sign In" onPress={handleSignIn} disabled={!canSubmit} loading={loading} />
             </GlassCard>
           </View>

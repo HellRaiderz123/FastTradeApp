@@ -1,6 +1,9 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, text
 from datetime import datetime, timedelta, date
+import logging
+
+logger = logging.getLogger(__name__)
 from app.db.models_finance import (
     FinanceTransaction, RecurringTransaction, Budget, SavingsGoal,
     BillReminder, ExpenseForecast, CurrencyExchange
@@ -51,10 +54,12 @@ def create_transactions(
 ):
     if not items:
         return []
+    logger.info(f"create_transactions: syncing sequence then inserting {len(items)} rows")
     _sync_postgres_id_sequence(db, FinanceTransaction)
     objects = [FinanceTransaction(**item.dict()) for item in items]
     db.add_all(objects)
     db.commit()
+    logger.info(f"create_transactions: committed {len(objects)} rows")
     return objects
 
 

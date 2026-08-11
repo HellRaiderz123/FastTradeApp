@@ -1,7 +1,10 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import date, timedelta
 from app.db.session import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 def get_db():
     db = SessionLocal()
@@ -66,8 +69,14 @@ def bulk_create_transactions(
 ):
     if not payload:
         raise HTTPException(400, "No transactions provided")
-    result = create_transactions(db, payload)
-    return {"status": "ok", "count": len(result)}
+    logger.info(f"bulk_create_transactions: received {len(payload)} items")
+    try:
+        result = create_transactions(db, payload)
+        logger.info(f"bulk_create_transactions: inserted {len(result)} items")
+        return {"status": "ok", "count": len(result)}
+    except Exception as e:
+        logger.error(f"bulk_create_transactions failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to save transactions: {str(e)}")
 
 
 @router.get("/transactions", response_model=list[FinanceTransactionOut])
@@ -155,6 +164,21 @@ def list_budgets(month: str = None, db: Session = Depends(get_db)):
     return get_budgets(db, month)
 
 
+@router.get("/budgets/status")
+def get_all_budget_statuses(
+    month: str = None,
+    db: Session = Depends(get_db),
+):
+    """Return status for all budgets in one call."""
+    budgets = get_budgets(db, month)
+    result = []
+    for budget in budgets:
+        status = get_budget_status(db, budget.category, month)
+        if status:
+            result.append(status)
+    return result
+
+
 @router.get("/budgets/status/{category}")
 def get_budget_spending(
     category: str,
@@ -163,7 +187,7 @@ def get_budget_spending(
 ):
     status = get_budget_status(db, category, month)
     if not status:
-        raise HTTPException(404, "Budget not found")
+        return {"budget": None, "spent": 0, "remaining": 0, "percent_used": 0}
     return status
 
 

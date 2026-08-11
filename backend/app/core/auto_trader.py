@@ -317,13 +317,14 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
                  details=advice, severity="INFO")
 
     # ── Step 2: New entry evaluation ──────────────────────────────
-    # Count only auto-trader-created positions (exclude DIRECT_ZERODHA synced)
+    # Count only auto-trader option positions (exclude DIRECT_ZERODHA and STOCK_MOMENTUM)
     total_open = (
         db.query(ExecutionIntent)
         .filter(
             ExecutionIntent.status == "EXECUTED",
             ExecutionIntent.closed_at.is_(None),
             ExecutionIntent.strategy != "DIRECT_ZERODHA",
+            ExecutionIntent.strategy != "STOCK_MOMENTUM",
         )
         .count()
     )
@@ -501,6 +502,7 @@ def _scan_stock(db: Session, cfg: AutoTraderConfig, symbol: str, executor):
             ExecutionIntent.status == "EXECUTED",
             ExecutionIntent.closed_at.is_(None),
             ExecutionIntent.strategy != "DIRECT_ZERODHA",
+            ExecutionIntent.strategy == "STOCK_MOMENTUM",
         )
         .count()
     )

@@ -175,7 +175,7 @@ export default function FinanceScreen() {
         financeAPI.getSavingsGoals(),
         financeAPI.getBillReminders(),
         financeAPI.getTrends(6, 5),
-        financeAPI.getBudgets(),
+        financeAPI.getAllBudgetStatuses(month || undefined),
         financeAPI.getExpenseForecasts(month || undefined),
       ]);
 
@@ -196,15 +196,7 @@ export default function FinanceScreen() {
       }
 
       if (budgetRes.status === 'fulfilled' && Array.isArray(budgetRes.value.data)) {
-        const budgets = budgetRes.value.data as Budget[];
-        const statusResults = await Promise.allSettled(
-          budgets.map((budget) => financeAPI.getBudgetStatus(String(budget.category || ''), month || undefined))
-        );
-        const statuses = statusResults
-          .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
-          .map((result) => result.value.data)
-          .filter(Boolean);
-        setBudgetStatuses(statuses);
+        setBudgetStatuses(budgetRes.value.data.filter(Boolean));
       } else {
         setBudgetStatuses([]);
       }
@@ -280,8 +272,8 @@ export default function FinanceScreen() {
       setTransactionModalVisible(false);
       setTransactionForm({ date: todayIso(), description: '', amount: '', type: 'DEBIT', category: 'Food' });
       await load(selectedMonth);
-    } catch {
-      Alert.alert('Failed', 'Could not add transaction.');
+    } catch (err: any) {
+      Alert.alert('Failed', err?.response?.data?.detail || err?.message || 'Could not add transaction.');
     }
     setSavingTransaction(false);
   };

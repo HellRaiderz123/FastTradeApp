@@ -53,22 +53,52 @@ function parseAmount(raw: string): number {
 }
 
 function extractDate(smsBody: string, smsDate: number): string {
-  // Try to extract date from SMS body
   const patterns = [
-    /(\d{2}[-\/]\d{2}[-\/]\d{2,4})/,
-    /(\d{2}-[A-Za-z]{3}-\d{2,4})/,
     /(\d{4}-\d{2}-\d{2})/,
+    /(\d{2}[-\/]\d{2}[-\/]\d{4})/,
+    /(\d{2}-[A-Za-z]{3}-\d{4})/,
+    /(\d{2}[-\/]\d{2}[-\/]\d{2})/,
+    /(\d{2}-[A-Za-z]{3}-\d{2})/,
   ];
   for (const p of patterns) {
     const m = smsBody.match(p);
     if (m) {
       try {
-        const d = new Date(m[1].replace(/(\d{2})[-\/](\d{2})[-\/](\d{2,4})/, '$3-$2-$1'));
-        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+        let raw = m[1];
+        // dd-mm-yyyy or dd/mm/yyyy
+        let d = raw.match(/^(\d{2})[-\/](\d{2})[-\/](\d{4})$/);
+        if (d) {
+          const dt = new Date(`${d[3]}-${d[2]}-${d[1]}`);
+          if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+        }
+        // dd-Mon-yyyy
+        let d2 = raw.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
+        if (d2) {
+          const dt = new Date(`${d2[1]} ${d2[2]} ${d2[3]}`);
+          if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+        }
+        // yyyy-mm-dd
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+          const dt = new Date(raw);
+          if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+        }
+        // 2-digit year: dd-mm-yy or dd/mm/yy
+        let d3 = raw.match(/^(\d{2})[-\/](\d{2})[-\/](\d{2})$/);
+        if (d3) {
+          const yr = parseInt(d3[3]) + 2000;
+          const dt = new Date(`${yr}-${d3[2]}-${d3[1]}`);
+          if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+        }
+        // dd-Mon-yy
+        let d4 = raw.match(/^(\d{2})-([A-Za-z]{3})-(\d{2})$/);
+        if (d4) {
+          const yr = parseInt(d4[3]) + 2000;
+          const dt = new Date(`${d4[1]} ${d4[2]} ${yr}`);
+          if (!isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
+        }
       } catch {}
     }
   }
-  // Fall back to SMS timestamp
   return new Date(smsDate).toISOString().slice(0, 10);
 }
 
@@ -122,13 +152,32 @@ export function parseSms(smsBody: string, smsDate: number, sender: string): Pars
   // Build description
   let description = '';
   if (UPI_PATTERN.test(body)) {
-    const vpaMatch = body.match(/(?:to|from)\s+([\w.\-@]+@[\w]+)/i);
-    description = vpaMatch ? `UPI - ${vpaMatch[1]}` : 'UPI Payment';
+    // Try to get payee/payer name (before VPA)
+    const namedVpa = body.match(/(?:to|from)\s+([^@\n]{2,30}?)\s*([\w.\-]+@[\w]+)/i);
+    const vpaOnly = body.match(/(?:to|from)\s+([\w.\-@]+@[\w]+)/i);
+    // Try UPI ref/txn ID
+    const refMatch = body.match(/(?:upi\s*ref\.?\s*(?:no\.?)?|ref\s*no\.?|txn\s*id)\s*[:\-]?\s*(\w+)/i);
+    if (namedVpa && namedVpa[1].trim().length > 1) {
+      description = `UPI - ${namedVpa[1].trim()} (${namedVpa[2]})`;
+    } else if (vpaOnly) {
+      description = `UPI - ${vpaOnly[1]}`;
+    } else {
+      description = 'UPI Payment';
+    }
+    if (refMatch) description += ` | Ref: ${refMatch[2]}`;
   } else if (CARD_PATTERN.test(body)) {
-    const merchantMatch = body.match(/(?:at|to)\s+([A-Z][A-Z0-9 ]{2,30}?)(?:\s+on|\s+for|\.|,|$)/i);
-    description = merchantMatch ? `Card - ${merchantMatch[1].trim()}` : 'Card Transaction';
+    const txnType = body.match(/\b(pos|atm|neft|imps|rtgs|card)\b/i)?.[1]?.toUpperCase() || 'Card';
+    const merchantMatch = body.match(/(?:at|to)\s+([A-Za-z][A-Za-z0-9 &.\-]{2,35}?)(?:\s+on|\s+for|\s+via|\.|,|$)/i);
+    const refMatch = body.match(/(?:ref\.?\s*(?:no\.?)?|txn\s*id|rrn)\s*[:\-]?\s*(\w+)/i);
+    description = merchantMatch ? `${txnType} - ${merchantMatch[1].trim()}` : `${txnType} Transaction`;
+    if (refMatch) description += ` | Ref: ${refMatch[1]}`;
   } else {
-    description = debit > 0 ? 'Bank Debit' : 'Bank Credit';
+    // Generic bank: try to extract narration/info
+    const narration = body.match(/(?:info|narration|remarks?|desc(?:ription)?)\s*[:\-]\s*([^\n.]{3,50})/i)
+      || body.match(/(?:transfer|payment|credit|debit)\s+(?:to|from|by)\s+([A-Za-z][A-Za-z0-9 .]{2,40}?)(?:\s+on|\.|,|$)/i);
+    const refMatch = body.match(/(?:ref\.?\s*(?:no\.?)?|txn\s*id)\s*[:\-]?\s*(\w+)/i);
+    description = narration ? narration[1].trim() : (debit > 0 ? 'Bank Debit' : 'Bank Credit');
+    if (refMatch) description += ` | Ref: ${refMatch[1]}`;
   }
 
   return {
