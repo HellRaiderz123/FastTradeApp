@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from app.db.session import engine
 from app.db.models import Base
 from app.db.models_intent import ExecutionIntent
@@ -7,8 +8,17 @@ from app.db.models_signal_outcome import SignalOutcome
 from app.db.models_zerodha import ZerodhaSession
 
 
+_MIGRATIONS = [
+    "ALTER TABLE execution_intents ADD COLUMN IF NOT EXISTS execution_mode VARCHAR;",
+]
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    with engine.connect() as conn:
+        for stmt in _MIGRATIONS:
+            conn.execute(text(stmt))
+        conn.commit()
 
 if __name__ == "__main__":
     init_db()

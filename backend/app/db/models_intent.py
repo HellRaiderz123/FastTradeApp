@@ -29,6 +29,7 @@ class ExecutionIntent(Base):
 
     status = Column(String, default="CONFIRMED")
     executed = Column(Boolean, default=False)
+    execution_mode = Column(String, nullable=True)  # PAPER | ZERODHA_LIVE | ZERODHA_DRY_RUN | ZERODHA_ACTUAL | ZERODHA_HOLDING
 
     expires_at = Column(DateTime(timezone=True))
 

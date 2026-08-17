@@ -23,7 +23,6 @@ export default function Dashboard() {
   const [bankniftyLtp, setBankniftyLtp] = useState<number | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const ltpPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const posPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const wsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -45,9 +44,9 @@ export default function Dashboard() {
     return () => pulse.stop();
   }, [pulseAnim]);
 
-  // Live LTP polling — every 5 seconds
+  // LTP fetch — once on mount only, refreshed on pull-to-refresh
   useEffect(() => {
-    ltpPollRef.current = setInterval(async () => {
+    const fetchLtp = async () => {
       try {
         const [niftyRes, bnRes] = await Promise.allSettled([
           marketAPI.getLTP('NIFTY'),
@@ -57,8 +56,8 @@ export default function Dashboard() {
         if (bnRes.status === 'fulfilled' && bnRes.value.data?.ltp) setBankniftyLtp(bnRes.value.data.ltp);
         setLastUpdated(new Date());
       } catch {}
-    }, 5000);
-    return () => { if (ltpPollRef.current) clearInterval(ltpPollRef.current); };
+    };
+    fetchLtp();
   }, []);
 
   // ── Real-time positions via WebSocket (/ws/positions) ────────────────────
@@ -133,16 +132,18 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [posRes, sysRes, atRes, ltpRes] = await Promise.allSettled([
+      const [posRes, sysRes, atRes, niftyRes, bnRes] = await Promise.allSettled([
         journalAPI.getExecutionIntents(50),
         systemAPI.status(),
         autoTraderAPI.getStatus(),
         marketAPI.getLTP('NIFTY'),
+        marketAPI.getLTP('BANKNIFTY'),
       ]);
       if (posRes.status === 'fulfilled') handlePositionPayload(posRes.value.data || []);
       if (sysRes.status === 'fulfilled') setSystemEnabled(sysRes.value.data?.trading_enabled);
       if (atRes.status === 'fulfilled') setAutoTrader(atRes.value.data);
-      if (ltpRes.status === 'fulfilled') setNiftyLtp(ltpRes.value.data?.ltp);
+      if (niftyRes.status === 'fulfilled' && niftyRes.value.data?.ltp) setNiftyLtp(niftyRes.value.data.ltp);
+      if (bnRes.status === 'fulfilled' && bnRes.value.data?.ltp) setBankniftyLtp(bnRes.value.data.ltp);
       setLastUpdated(new Date());
     } catch {}
     setLoading(false);

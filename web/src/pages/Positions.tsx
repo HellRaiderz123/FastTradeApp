@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle, Activity } from 'lucide-react';
-import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore, greeksAPI, autoTraderAPI } from '../lib/api';
+import { useSearchParams } from 'react-router-dom';
+import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle, Activity, Package, Info, Loader2, RefreshCw } from 'lucide-react';
+import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore, greeksAPI, autoTraderAPI, holdingsAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 import { useToast } from '../components/Toast';
 import SpreadGrouping from '../components/SpreadGrouping';
@@ -11,8 +12,18 @@ const WS_RECONNECT_MAX_MS = 30000;
 const Positions: React.FC = () => {
   const { showToast } = useToast();
   const { trades, setTrades } = useTradeStore();
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<'options' | 'holdings'>(
+    searchParams.get('tab') === 'holdings' ? 'holdings' : 'options'
+  );
   const [loading, setLoading] = useState(false);
   const [localTrades, setLocalTrades] = useState<any[]>([]);
+  const [holdings, setHoldings] = useState<any[]>([]);
+  const [holdingsMeta, setHoldingsMeta] = useState<{ total_pnl: number; total_invested: number }>({ total_pnl: 0, total_invested: 0 });
+  const [holdingsLoading, setHoldingsLoading] = useState(false);
+  const [zerodhaHoldings, setZerodhaHoldings] = useState<any[]>([]);
+  const [zerodhaHoldingsLoading, setZerodhaHoldingsLoading] = useState(false);
+  const [insightHolding, setInsightHolding] = useState<any | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -174,6 +185,7 @@ const Positions: React.FC = () => {
   useEffect(() => {
     unmountedRef.current = false;
     fetchPositions();
+    fetchHoldings();
     // Fetch smart suggestions on mount and every 60s
     fetchSmartSuggestions();
     const smartPoll = window.setInterval(fetchSmartSuggestions, 60000);
@@ -206,15 +218,46 @@ const Positions: React.FC = () => {
       const data = response?.data;
       const intents = Array.isArray(data) ? data : [];
       const ZERODHA_STRATEGIES = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
-      const activeIntents = intents.filter((intent: any) =>
-        intent?.status === 'EXECUTED' &&
-        !ZERODHA_STRATEGIES.includes(intent?.strategy)
-      );
+      const activeIntents = intents.filter((intent: any) => {
+        if (intent?.status !== 'EXECUTED') return false;
+        const id: string = intent?.intent_id || '';
+        const strat: string = intent?.strategy || '';
+        // Exclude Zerodha-synced, scanner stock trades, and AI stock trades
+        if (ZERODHA_STRATEGIES.includes(strat)) return false;
+        if (id.startsWith('SCANNER-')) return false;
+        if (id.startsWith('AI-')) return false;
+        if (strat === 'STOCK_MOMENTUM' || strat === 'AI_TRADE') return false;
+        return true;
+      });
       setLocalTrades(activeIntents);
     } catch (error) {
       console.error('Failed to fetch positions:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchHoldings = async () => {
+    try {
+      setHoldingsLoading(true);
+      const res = await holdingsAPI.list('OPEN');
+      const data = res?.data;
+      setHoldings(Array.isArray(data?.holdings) ? data.holdings : []);
+      setHoldingsMeta({ total_pnl: data?.total_pnl ?? 0, total_invested: data?.total_invested ?? 0 });
+    } catch (err) {
+      console.error('Failed to fetch holdings:', err);
+    } finally {
+      setHoldingsLoading(false);
+    }
+    try {
+      setZerodhaHoldingsLoading(true);
+      const zRes = await import('../lib/api').then(m => m.default.get('/zerodha/holdings'));
+      const zData = zRes?.data;
+      setZerodhaHoldings(Array.isArray(zData?.holdings) ? zData.holdings : Array.isArray(zData) ? zData : []);
+    } catch {
+      setZerodhaHoldings([]);
+    } finally {
+      setZerodhaHoldingsLoading(false);
     }
   };
 
@@ -248,8 +291,172 @@ const Positions: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Smart Alerts Banner */}
-      {criticalAlerts > 0 && (
+      {/* Tab switcher */}
+      <div className="flex gap-2 border-b border-slate-700 pb-0">
+        <button
+          onClick={() => setActiveTab('options')}
+          className={`px-4 py-2 text-sm font-semibold rounded-t transition ${
+            activeTab === 'options'
+              ? 'bg-slate-800 text-white border border-b-0 border-slate-600'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          Options / Spreads
+        </button>
+        <button
+          onClick={() => { setActiveTab('holdings'); fetchHoldings(); }}
+          className={`px-4 py-2 text-sm font-semibold rounded-t transition flex items-center gap-2 ${
+            activeTab === 'holdings'
+              ? 'bg-slate-800 text-white border border-b-0 border-slate-600'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Package className="w-4 h-4" />
+          Stock Holdings
+          {holdings.length > 0 && (
+            <span className="bg-blue-500 text-white text-xs rounded-full px-1.5 py-0.5">{holdings.length}</span>
+          )}
+        </button>
+      </div>
+
+      {/* ── Holdings Tab ── */}
+      {activeTab === 'holdings' && (
+        <div className="space-y-6">
+          {/* Summary */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <SummaryCard label="FastTrade Holdings" value={holdings.length.toString()} color="blue" />
+            <SummaryCard
+              label="Total P&L"
+              value={`₹${holdingsMeta.total_pnl.toLocaleString()}`}
+              color={holdingsMeta.total_pnl >= 0 ? 'green' : 'red'}
+            />
+            <SummaryCard
+              label="Total Invested"
+              value={`₹${holdingsMeta.total_invested.toLocaleString()}`}
+              color="purple"
+            />
+          </div>
+
+          {/* ── FastTrade Holdings (scanner / AI trades) ── */}
+          <div className="card-glass p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-white">
+                FastTrade Holdings {holdingsLoading && <span className="text-sm font-normal text-slate-400">(updating...)</span>}
+              </h2>
+              {holdings.length > 0 && (
+                <button
+                  onClick={async () => {
+                    if (!window.confirm('Close ALL open holdings at market price?')) return;
+                    try {
+                      const res = await holdingsAPI.closeAll();
+                      showToast('success', 'All Closed', `Closed ${res.data.closed} holding(s). P&L: ₹${res.data.total_pnl}`);
+                      fetchHoldings();
+                    } catch { showToast('error', 'Failed', 'Could not close all holdings'); }
+                  }}
+                  className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/30 rounded text-xs font-semibold transition"
+                >
+                  Close All
+                </button>
+              )}
+            </div>
+            {holdings.length === 0 ? (
+              <div className="text-center py-10">
+                <Package className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <p className="text-slate-400">No open FastTrade holdings</p>
+                <p className="text-sm text-slate-500 mt-1">Execute a scanner signal or AI chat trade to create a holding</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {holdings.map((h: any) => (
+                  <HoldingCard
+                    key={h.id}
+                    holding={h}
+                    onClose={async () => {
+                      try {
+                        const res = await holdingsAPI.close(h.id);
+                        showToast('success', 'Closed', `${h.symbol} closed. P&L: ₹${res.data.pnl}`);
+                        fetchHoldings();
+                      } catch { showToast('error', 'Failed', 'Could not close holding'); }
+                    }}
+                    onRefresh={async () => {
+                      try { await holdingsAPI.refreshPrice(h.id); fetchHoldings(); } catch {}
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ── Zerodha Holdings ── */}
+          <div className="card-glass p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                Zerodha Holdings
+                <span className="text-xs font-normal px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">Live Broker</span>
+                {zerodhaHoldingsLoading && <span className="text-sm font-normal text-slate-400">(loading...)</span>}
+              </h2>
+            </div>
+            {zerodhaHoldings.length === 0 ? (
+              <div className="text-center py-10">
+                <Package className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                <p className="text-slate-400">{zerodhaHoldingsLoading ? 'Fetching from Zerodha...' : 'No Zerodha holdings found'}</p>
+                <p className="text-sm text-slate-500 mt-1">Requires active Zerodha session</p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs text-slate-500 uppercase tracking-wider px-1">
+                  <span>Symbol</span><span className="text-right">Qty</span><span className="text-right">Avg Cost</span><span className="text-right">P&L</span>
+                </div>
+                <div className="space-y-2">
+                  {zerodhaHoldings.map((h: any, i: number) => {
+                    const sym = h.tradingsymbol ?? h.symbol;
+                    const pnl = Number(h.pnl ?? ((h.last_price - h.average_price) * h.quantity));
+                    const isPnlPos = pnl >= 0;
+                    return (
+                      <div key={i} className="flex items-center gap-3 bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700 hover:border-slate-600 transition">
+                        <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3 items-center">
+                          <div>
+                            <p className="font-semibold text-white text-sm">{sym}</p>
+                            <p className="text-xs text-slate-500">{h.exchange ?? 'NSE'}</p>
+                          </div>
+                          <p className="text-right text-white font-medium">{h.quantity}</p>
+                          <div className="text-right">
+                            <p className="text-white font-medium">₹{Number(h.average_price ?? h.avg_price ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                            <p className="text-xs text-slate-500">LTP ₹{Number(h.last_price ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                          </div>
+                          <p className={`text-right font-semibold ${isPnlPos ? 'text-green-400' : 'text-red-400'}`}>
+                            {isPnlPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setInsightHolding({ ...h, _sym: sym })}
+                          title="AI & ML Insights"
+                          className="flex-shrink-0 p-1.5 rounded-lg hover:bg-blue-600/20 text-slate-500 hover:text-blue-400 transition"
+                        >
+                          <Info className="w-4 h-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {insightHolding && (
+        <ZerodhaHoldingInsightModal
+          symbol={insightHolding._sym}
+          holding={insightHolding}
+          onClose={() => setInsightHolding(null)}
+        />
+      )}
+
+      {/* ── Options / Spreads Tab ── */}
+      {activeTab === 'options' && (
+        <div className="space-y-6">
+        {criticalAlerts > 0 && (
         <div className="bg-red-500/10 border border-red-500/40 rounded-lg p-4 flex items-center gap-3 animate-pulse">
           <AlertTriangle className="w-6 h-6 text-red-400 flex-shrink-0" />
           <div>
@@ -406,8 +613,388 @@ const Positions: React.FC = () => {
           </div>
         )}
       </div>
+        </div>
+      )} {/* end options tab */}
+    </div>
+  );
+};
 
+// ──────────── ZerodhaHoldingInsightModal ────────────
+const SIG_COLOR: Record<string, string> = {
+  BUY: 'text-green-400', BULLISH: 'text-green-400', STRONG_BUY: 'text-green-400',
+  SELL: 'text-red-400', BEARISH: 'text-red-400', STRONG_SELL: 'text-red-400',
+  HOLD: 'text-yellow-400', NEUTRAL: 'text-yellow-400', NO_TRADE: 'text-slate-400',
+};
+const sigColor = (s?: string) => SIG_COLOR[String(s || '').toUpperCase()] ?? 'text-slate-300';
 
+const SignalBadge: React.FC<{ label: string; value?: string; sub?: string }> = ({ label, value, sub }) => (
+  <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700">
+    <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{label}</p>
+    <p className={`text-sm font-bold ${sigColor(value)}`}>{value ?? '—'}</p>
+    {sub && <p className="text-[10px] text-slate-500 mt-0.5">{sub}</p>}
+  </div>
+);
+
+const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClose: () => void }> = ({ symbol, holding, onClose }) => {
+  const [data, setData] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [aiJobId, setAiJobId] = React.useState<string | null>(null);
+  const [aiResult, setAiResult] = React.useState<any>(null);
+  const [aiLoading, setAiLoading] = React.useState(false);
+  const [aiError, setAiError] = React.useState<string | null>(null);
+  const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const api = (await import('../lib/api')).default;
+        const [mlRes, ensRes] = await Promise.allSettled([
+          api.get(`/ml/signal-with-news/${symbol}`),
+          api.get(`/ml/ensemble/predict/${symbol}`),
+        ]);
+        if (!cancelled) setData({
+          ml: mlRes.status === 'fulfilled' ? mlRes.value.data : null,
+          ensemble: ensRes.status === 'fulfilled' ? ensRes.value.data : null,
+        });
+      } catch { /* ignore */ }
+      finally { if (!cancelled) setLoading(false); }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [symbol]);
+
+  const runAiAnalysis = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    setAiResult(null);
+    try {
+      const api = (await import('../lib/api')).default;
+      const res = await api.post('/ai-analysis/analyze', { symbol, exchange: 'NSE' });
+      const jobId = res.data?.job_id;
+      if (!jobId) throw new Error('No job_id returned');
+      setAiJobId(jobId);
+      // Poll for result
+      pollRef.current = setInterval(async () => {
+        try {
+          const statusRes = await api.get(`/ai-analysis/status/${jobId}`);
+          const s = statusRes.data;
+          if (s?.status === 'completed' || s?.result) {
+            clearInterval(pollRef.current!);
+            setAiResult(s.result ?? s);
+            setAiLoading(false);
+          } else if (s?.status === 'failed') {
+            clearInterval(pollRef.current!);
+            setAiError(s.error ?? 'Analysis failed');
+            setAiLoading(false);
+          }
+        } catch { /* keep polling */ }
+      }, 3000);
+    } catch (e: any) {
+      setAiError(e?.response?.data?.detail ?? e?.message ?? 'Failed to start analysis');
+      setAiLoading(false);
+    }
+  };
+
+  React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const ml = data?.ml;
+  const ens = data?.ensemble;
+  const mlSignal = ml?.ml_signal ?? ml?.signal;
+  const rawMlConf = ml?.confidence ?? ml?.ml_confidence;
+  // Backend returns confidence as 0-100 integer; guard against decimal (0-1) form
+  const mlConf = rawMlConf != null ? (rawMlConf <= 1 ? rawMlConf * 100 : rawMlConf) : null;
+  const techBias = ml?.technical_bias ?? ml?.bias;
+  const rawSentiment = ml?.news_sentiment ?? ml?.sentiment;
+  const newsSentiment = rawSentiment && typeof rawSentiment === 'object' ? (rawSentiment.label ?? rawSentiment.signal ?? JSON.stringify(rawSentiment)) : rawSentiment;
+  const newsHeadlines: string[] = ml?.news_headlines ?? ml?.headlines ?? [];
+  const ensSignal = ens?.signal ?? ens?.ensemble_signal;
+  const rawEnsConf = ens?.confidence ?? ens?.ensemble_confidence;
+  const ensConf = rawEnsConf != null ? (rawEnsConf <= 1 ? rawEnsConf * 100 : rawEnsConf) : null;
+  const indicators: Record<string, any> = ml?.indicators ?? {};
+
+  // Price targets derived from technical indicators
+  const avgPrice = Number(holding.average_price ?? holding.avg_price ?? 0);
+  const ltp = Number(holding.last_price ?? avgPrice);
+  const bbUpper = indicators.bb_upper as number | undefined;
+  const bbLower = indicators.bb_lower as number | undefined;
+  const ema50 = (indicators.ema_50 ?? indicators.ema_20) as number | undefined;
+  const nearestResistance = bbUpper ?? ema50;
+  const nearestSupport = bbLower;
+  const potentialGainPct = nearestResistance && ltp > 0 ? ((nearestResistance - ltp) / ltp * 100) : null;
+  const downside = nearestSupport && ltp > 0 ? ((ltp - nearestSupport) / ltp * 100) : null;
+
+  const pnl = Number(holding.pnl ?? ((holding.last_price - holding.average_price) * holding.quantity));
+  const isPnlPos = pnl >= 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
+      <div
+        className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+          <div>
+            <p className="text-lg font-bold text-white">{symbol}</p>
+            <p className="text-xs text-slate-400">{holding.exchange ?? 'NSE'} · Qty {holding.quantity} · Avg ₹{Number(holding.average_price ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className={`text-sm font-bold ${isPnlPos ? 'text-green-400' : 'text-red-400'}`}>
+              {isPnlPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+            </span>
+            <button onClick={onClose} className="p-1.5 hover:bg-slate-800 rounded-lg"><X className="w-4 h-4 text-slate-400" /></button>
+          </div>
+        </div>
+
+        <div className="px-6 py-5 space-y-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 gap-3">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+              <span className="text-slate-400">Loading signals...</span>
+            </div>
+          ) : (
+            <>
+              {/* ── ML Signal ── */}
+              <section>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">ML Signal</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <SignalBadge label="ML Signal" value={mlSignal} sub={mlConf != null ? `${mlConf.toFixed(0)}% confidence` : undefined} />
+                  <SignalBadge label="Technical Bias" value={techBias} />
+                  <SignalBadge label="News Sentiment" value={newsSentiment} />
+                  <SignalBadge label="Ensemble" value={ensSignal} sub={ensConf != null ? `${ensConf.toFixed(0)}% conf` : undefined} />
+                </div>
+              </section>
+
+              {/* ── Price Targets ── */}
+              {(nearestResistance || nearestSupport) && (
+                <section>
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Price Targets</p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {nearestResistance && (
+                      <div className="bg-slate-800/60 rounded-lg p-3 border border-green-500/20">
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Next Target</p>
+                        <p className="text-sm font-bold text-green-400">₹{nearestResistance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                        {potentialGainPct != null && potentialGainPct > 0 && (
+                          <p className="text-[10px] text-green-500 mt-0.5">+{potentialGainPct.toFixed(2)}% upside</p>
+                        )}
+                        <p className="text-[10px] text-slate-600 mt-0.5">{bbUpper ? 'BB Upper' : 'EMA'}</p>
+                      </div>
+                    )}
+                    {nearestSupport && (
+                      <div className="bg-slate-800/60 rounded-lg p-3 border border-red-500/20">
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Support</p>
+                        <p className="text-sm font-bold text-red-400">₹{nearestSupport.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                        {downside != null && downside > 0 && (
+                          <p className="text-[10px] text-red-500 mt-0.5">-{downside.toFixed(2)}% downside</p>
+                        )}
+                        <p className="text-[10px] text-slate-600 mt-0.5">BB Lower</p>
+                      </div>
+                    )}
+                    {ema50 && (
+                      <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700">
+                        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">EMA Trend</p>
+                        <p className="text-sm font-bold text-slate-300">₹{ema50.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                        <p className={`text-[10px] mt-0.5 ${ltp > ema50 ? 'text-green-500' : 'text-red-500'}`}>{ltp > ema50 ? 'Above EMA ↑' : 'Below EMA ↓'}</p>
+                      </div>
+                    )}
+                    <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700">
+                      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Holding P&L</p>
+                      <p className={`text-sm font-bold ${isPnlPos ? 'text-green-400' : 'text-red-400'}`}>
+                        {isPnlPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </p>
+                      {avgPrice > 0 && ltp > 0 && (
+                        <p className={`text-[10px] mt-0.5 ${isPnlPos ? 'text-green-500' : 'text-red-500'}`}>
+                          {((ltp - avgPrice) / avgPrice * 100).toFixed(2)}% from avg
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {/* ── Technical Indicators ── */}
+              {Object.keys(indicators).length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Technical Indicators</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(indicators).map(([k, v]) => (
+                      <span key={k} className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300">
+                        <span className="text-slate-500">{k}:</span> {typeof v === 'number' ? v.toFixed(2) : typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? '')}
+                      </span>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* ── News Headlines ── */}
+              {newsHeadlines.length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Recent News</p>
+                  <ul className="space-y-1.5">
+                    {newsHeadlines.slice(0, 5).map((h, i) => (
+                      <li key={i} className="text-xs text-slate-300 flex gap-2">
+                        <span className="text-slate-600 flex-shrink-0">•</span>{h}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {/* ── AI Deep Analysis ── */}
+              <section>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">AI Deep Analysis</p>
+                  {!aiResult && (
+                    <button
+                      onClick={runAiAnalysis}
+                      disabled={aiLoading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-semibold transition disabled:opacity-50"
+                    >
+                      {aiLoading ? <><Loader2 className="w-3 h-3 animate-spin" /> Analysing…</> : <><RefreshCw className="w-3 h-3" /> Run Analysis</>}
+                    </button>
+                  )}
+                  {aiResult && (
+                    <button onClick={runAiAnalysis} disabled={aiLoading} className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1">
+                      <RefreshCw className="w-3 h-3" /> Refresh
+                    </button>
+                  )}
+                </div>
+
+                {aiError && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{aiError}</p>}
+
+                {aiLoading && !aiResult && (
+                  <div className="flex items-center gap-2 text-xs text-slate-400 py-3">
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                    Running multi-agent analysis (technical, sentiment, fundamentals, bull/bear)…
+                  </div>
+                )}
+
+                {aiResult && (() => {
+                  const r = aiResult;
+                  const decision = r?.final_decision ?? r?.decision ?? r?.trader_decision;
+                  const technical = r?.technical_analysis ?? r?.technical;
+                  const sentiment = r?.sentiment_analysis ?? r?.sentiment;
+                  const fundamental = r?.fundamental_analysis ?? r?.fundamental;
+                  const bull = r?.bull_research ?? r?.bull_case;
+                  const bear = r?.bear_research ?? r?.bear_case;
+                  const summary = r?.summary ?? r?.analysis_summary;
+                  return (
+                    <div className="space-y-4">
+                      {/* Decision */}
+                      {decision && (
+                        <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700">
+                          <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Final Decision</p>
+                          <p className={`text-base font-bold ${sigColor(decision?.action ?? decision?.signal ?? decision)}`}>
+                            {decision?.action ?? decision?.signal ?? String(decision)}
+                          </p>
+                          {decision?.reasoning && <p className="text-xs text-slate-400 mt-1 leading-relaxed">{decision.reasoning}</p>}
+                          {decision?.confidence && <p className="text-xs text-slate-500 mt-1">Confidence: {decision.confidence}%</p>}
+                        </div>
+                      )}
+
+                      {/* Summary */}
+                      {summary && <p className="text-xs text-slate-300 leading-relaxed">{typeof summary === 'string' ? summary : JSON.stringify(summary)}</p>}
+
+                      {/* 4-column agent grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {[['📈 Technical', technical], ['💬 Sentiment', sentiment], ['📊 Fundamental', fundamental]].map(([title, agent]) =>
+                          agent ? (
+                            <div key={String(title)} className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/60">
+                              <p className="text-xs font-semibold text-slate-300 mb-2">{String(title)}</p>
+                              <p className={`text-sm font-bold mb-1 ${sigColor(agent?.signal ?? agent?.bias ?? agent?.action)}`}>
+                                {agent?.signal ?? agent?.bias ?? agent?.action ?? '—'}
+                              </p>
+                              <p className="text-[11px] text-slate-400 leading-relaxed line-clamp-4">
+                                {agent?.summary ?? agent?.reasoning ?? agent?.analysis ?? ''}
+                              </p>
+                            </div>
+                          ) : null
+                        )}
+                        {/* Bull / Bear */}
+                        {(bull || bear) && (
+                          <div className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/60">
+                            <p className="text-xs font-semibold text-slate-300 mb-2">🐂 Bull / 🐻 Bear</p>
+                            {bull && <p className="text-[11px] text-green-400/80 leading-relaxed mb-1 line-clamp-3">{bull?.summary ?? bull?.case ?? String(bull)}</p>}
+                            {bear && <p className="text-[11px] text-red-400/80 leading-relaxed line-clamp-3">{bear?.summary ?? bear?.case ?? String(bear)}</p>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {!aiResult && !aiLoading && !aiError && (
+                  <p className="text-xs text-slate-500">Click "Run Analysis" for a full multi-agent AI report including technical, sentiment, fundamentals, and bull/bear research.</p>
+                )}
+              </section>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ──────────── HoldingCard ────────────
+interface HoldingCardProps {
+  holding: any;
+  onClose: () => void;
+  onRefresh: () => void;
+}
+
+const HoldingCard: React.FC<HoldingCardProps> = ({ holding, onClose, onRefresh }) => {
+  const pnl = Number(holding.pnl ?? 0);
+  const isProfitable = pnl >= 0;
+  const pnlPct = holding.invested_value > 0 ? (pnl / holding.invested_value) * 100 : 0;
+  const modeColor = (holding.execution_mode || '').includes('LIVE')
+    ? 'bg-red-500/20 text-red-300 border-red-500/30'
+    : 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+  const modeLabel = (holding.execution_mode || '').includes('LIVE') ? 'LIVE' : 'PAPER';
+
+  return (
+    <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-3">
+          {isProfitable ? <TrendingUp className="w-5 h-5 text-green-400" /> : <TrendingDown className="w-5 h-5 text-red-400" />}
+          <div>
+            <p className="font-semibold text-white">{holding.symbol}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-xs text-slate-400">{holding.strategy_name || 'Manual'} · {holding.source}</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded border ${modeColor}`}>{modeLabel}</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                holding.direction === 'BUY' ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'
+              }`}>{holding.direction}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onRefresh} className="text-xs text-slate-400 hover:text-blue-400 border border-slate-600 rounded px-2 py-1 transition">↻ Refresh</button>
+          <button onClick={onClose} className="text-slate-400 hover:text-red-400 transition"><X className="w-5 h-5" /></button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 py-3 border-t border-b border-slate-700">
+        <div><p className="text-xs text-slate-400">Qty</p><p className="font-semibold text-white">{holding.quantity}</p></div>
+        <div><p className="text-xs text-slate-400">Entry</p><p className="font-semibold text-white">₹{Number(holding.entry_price).toLocaleString()}</p></div>
+        <div><p className="text-xs text-slate-400">LTP</p><p className="font-semibold text-white">₹{Number(holding.current_price ?? holding.entry_price).toLocaleString()}</p></div>
+        <div>
+          <p className="text-xs text-slate-400">P&L</p>
+          <p className={`font-semibold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
+            {isProfitable ? '+' : ''}₹{Math.abs(pnl).toLocaleString()} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+          </p>
+        </div>
+        <div><p className="text-xs text-slate-400">Invested</p><p className="font-semibold text-white">₹{Number(holding.invested_value).toLocaleString()}</p></div>
+      </div>
+
+      {(holding.sl_pct || holding.tp_pct) && (
+        <div className="flex gap-4 mt-2 text-xs text-slate-400">
+          {holding.sl_pct && <span>SL: {holding.sl_pct}%</span>}
+          {holding.tp_pct && <span>TP: {holding.tp_pct}%</span>}
+          {holding.tsl_pct && <span>TSL: {holding.tsl_pct}%</span>}
+        </div>
+      )}
     </div>
   );
 };

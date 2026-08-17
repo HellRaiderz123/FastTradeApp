@@ -23,6 +23,7 @@ Example:
 
 from typing import Dict, Tuple, Optional
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -221,30 +222,39 @@ def get_risk_percentage_from_mode(risk_mode: str) -> float:
 
 def get_risk_percentage_from_settings(db=None) -> float:
     """
-    Get risk percentage from database settings.
-    Falls back to default BALANCED (2%) if DB unavailable.
-    
-    Args:
-        db: SQLAlchemy session (optional)
-        
-    Returns:
-        Risk percentage from max_portfolio_loss_pct (e.g., 13.0 for 13%)
+    Get per-trade risk percentage from database settings.
+    Reads `per_trade_risk_pct` (e.g. 2.0 for 2% per trade).
+    Falls back to RISK_PER_TRADE env var, then BALANCED (2%) default.
+
+    NOTE: This is intentionally separate from `max_portfolio_loss_pct`,
+    which is a daily drawdown circuit-breaker, not a per-trade sizing input.
     """
     try:
         from app.db.risk_repo import get_or_create_risk_limits
         from app.db.session import SessionLocal
-        
+
         session = db if db is not None else SessionLocal()
         try:
             limits = get_or_create_risk_limits(session)
-            if limits and limits.max_portfolio_loss_pct:
-                return float(limits.max_portfolio_loss_pct)
+            if limits and limits.per_trade_risk_pct:
+                return float(limits.per_trade_risk_pct)
         finally:
             if db is None and session:
                 session.close()
     except Exception as e:
-        logger.warning(f"Could not load risk percentage from settings: {e}, using BALANCED (2%)")
-    
+        logger.warning(f"Could not load risk percentage from settings: {e}")
+
+    # Fallback: RISK_PER_TRADE env var (must be a sensible per-trade %, not portfolio loss %)
+    try:
+        env_val = float(os.getenv("RISK_PER_TRADE", ""))
+        if 0 < env_val <= 10:
+            return env_val
+        logger.warning(
+            f"RISK_PER_TRADE={env_val} is outside safe per-trade range (0-10%), using BALANCED (2%)"
+        )
+    except (ValueError, TypeError):
+        pass
+
     return RISK_PROFILES["BALANCED"]
 
 

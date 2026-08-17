@@ -16,7 +16,7 @@ security = HTTPBearer(auto_error=False)
 
 
 def _is_auth_enabled() -> bool:
-    return os.getenv("AUTH_ENABLED", "false").strip().lower() == "true"
+    return os.getenv("AUTH_ENABLED", "true").strip().lower() == "true"
 
 
 def _secret_key() -> str:
@@ -106,7 +106,13 @@ def _expected_username() -> str:
 
 
 def _expected_password() -> str:
-    return os.getenv("AUTH_PASSWORD", "admin123")
+    pw = os.getenv("AUTH_PASSWORD", "")
+    if not pw:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AUTH_PASSWORD is not configured",
+        )
+    return pw
 
 
 def verify_login_credentials(username: str, password: str) -> bool:

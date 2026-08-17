@@ -1,4 +1,4 @@
-"""
+﻿"""
 Condition-based Strategy Scanner (Streak-like)
 ================================================
 Lets users define entry/exit conditions using technical indicators,
@@ -1533,6 +1533,13 @@ async def scan_strategy(
             ltp = quote.get("last_price")
             volume = quote.get("volume")
 
+        # Skip symbols that already have an open holding (avoid duplicate BUY alerts)
+        try:
+            from app.api.routes.holdings import has_open_holding as _has_holding
+            if _has_holding(db, symbol):
+                continue
+        except Exception:
+            pass
         result = _scan_symbol(
             symbol,
             conditions,
@@ -1582,15 +1589,14 @@ async def scan_strategy(
             if existing_status in {"FILLED_PAPER", "PLACED_LIVE", "EXECUTED", "DRY_RUN"}:
                 auto_skipped += 1
                 continue
-            # Skip if a position already exists for this symbol + strategy today
-            already_open = db.query(ExecutionIntent).filter(
-                ExecutionIntent.underlying == signal["symbol"],
-                ExecutionIntent.strategy == row.name,
-                ExecutionIntent.status.in_(["EXECUTED", "CLOSED"]),
-            ).first()
-            if already_open:
-                auto_skipped += 1
-                continue
+            # Skip if an open StockHolding already exists for this symbol
+            try:
+                from app.api.routes.holdings import has_open_holding as _has_holding_scan
+                if _has_holding_scan(db, signal["symbol"]):
+                    auto_skipped += 1
+                    continue
+            except Exception:
+                pass
             try:
                 quantity = int(signal.get("suggested_quantity") or (max(1, int((float(row.auto_amount or 10000.0) or 10000.0) // max(float(signal.get("ltp") or 1.0), 1.0)))))
                 _auto_execute_signal(
@@ -1722,21 +1728,23 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol required")
 
-    # Prevent duplicate: if a position already exists for this symbol + strategy today, skip
-    from sqlalchemy import func as _sqlfunc
-    already_open = db.query(ExecutionIntent).filter(
-        ExecutionIntent.underlying == symbol,
-        ExecutionIntent.strategy == strategy_name,
-        ExecutionIntent.status.in_(["EXECUTED", "CLOSED"]),
-        _sqlfunc.date(ExecutionIntent.created_at) == _sqlfunc.current_date(),
-    ).first()
-    if already_open:
-        return {
-            "order": {"status": "SKIPPED", "symbol": symbol, "reason": "Position already open"},
-            "execution_mode": get_execution_mode(),
-            "message": f"Skipped: {symbol} already has an open {strategy_name} position (intent {already_open.intent_id})",
-            "signal_history_id": signal_history_id,
-        }
+    # Prevent duplicate: skip if an open StockHolding already exists for this symbol
+    try:
+        from app.api.routes.holdings import has_open_holding as _has_holding
+        if _has_holding(db, symbol):
+            already_open = db.query(ExecutionIntent).filter(
+                ExecutionIntent.underlying == symbol,
+                ExecutionIntent.strategy == strategy_name,
+                ExecutionIntent.status == "EXECUTED",
+            ).order_by(ExecutionIntent.id.desc()).first()
+            return {
+                "order": {"status": "SKIPPED", "symbol": symbol, "reason": "Position already open"},
+                "execution_mode": get_execution_mode(),
+                "message": f"Skipped: {symbol} already has an open {strategy_name} position" + (f" (intent {already_open.intent_id})" if already_open else ""),
+                "signal_history_id": signal_history_id,
+            }
+    except Exception:
+        pass
 
     mode = get_execution_mode()
 
@@ -1866,6 +1874,28 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
             )
         except Exception as intent_err:
             logger.warning(f"Could not create scanner ExecutionIntent: {intent_err}")
+
+        # Create StockHolding for paper-trade performance tracking
+        try:
+            from app.api.routes.holdings import create_stock_holding, has_open_holding
+            if not has_open_holding(db, symbol):
+                create_stock_holding(
+                    db,
+                    symbol=symbol,
+                    direction=direction,
+                    quantity=quantity,
+                    entry_price=float(order["fill_price"]),
+                    strategy_name=strategy_name,
+                    source="SCANNER",
+                    execution_mode=mode,
+                    order_id=order.get("order_id"),
+                    tp_pct=float(exit_config.get("tp_pct") or 0) or None,
+                    sl_pct=float(exit_config.get("sl_pct") or 0) or None,
+                    tsl_pct=float(exit_config.get("tsl_pct") or 0) or None,
+                )
+                db.commit()
+        except Exception as holding_err:
+            logger.warning(f"Could not create StockHolding: {holding_err}")
 
     # Persist to execution log
     try:

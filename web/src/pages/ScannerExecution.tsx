@@ -68,7 +68,7 @@ function buildInitialEvents(direction: string): ExecutionEvent[] {
     { time: '', label: direction === 'BUY' ? 'Sold' : 'Bought', sublabel: 'Order Placed', status: 'pending', cycle: 'C1' },
     { time: '', label: 'Exit Triggered', sublabel: 'Condition has been met', status: 'pending', cycle: 'C1' },
     { time: '', label: direction === 'BUY' ? 'Bought' : 'Sold', sublabel: 'Order Placed', status: 'pending', cycle: 'C1' },
-    { time: now, label: `${direction === 'BUY' ? 'BUY' : 'SELL'} alert`, sublabel: 'Take action', status: 'active', cycle: 'C1' },
+    { time: now, label: `${direction === 'BUY' ? 'BUY' : 'SELL'} alert`, sublabel: 'Signal detected', status: 'active', cycle: 'C1' },
     { time: now, label: 'Waiting for entry', sublabel: 'Waiting for entry', status: 'done', cycle: 'C1' },
   ];
 }
@@ -80,7 +80,7 @@ function buildExecutedEvents(direction: string, fillPrice: number, orderId: stri
     { time: '', label: direction === 'BUY' ? 'Sold' : 'Bought', sublabel: 'Order Placed', status: 'pending', cycle: 'C1' },
     { time: '', label: 'Exit Triggered', sublabel: 'Condition has been met', status: 'pending', cycle: 'C1' },
     { time: now, label: direction === 'BUY' ? 'Bought' : 'Sold', sublabel: `Order ${orderId}`, status: 'active', cycle: 'C1' },
-    { time: now, label: `${direction === 'BUY' ? 'BUY' : 'SELL'} alert${priceStr ? ` at ${priceStr}` : ''}`, sublabel: 'Take action', status: 'done', cycle: 'C1' },
+    { time: now, label: `${direction === 'BUY' ? 'BUY' : 'SELL'} alert${priceStr ? ` at ${priceStr}` : ''}`, sublabel: 'Signal detected', status: 'done', cycle: 'C1' },
     { time: now, label: 'Waiting for entry', sublabel: 'Waiting for entry', status: 'done', cycle: 'C1' },
   ];
 }

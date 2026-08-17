@@ -18,6 +18,7 @@ def create_execution_intent(
     sl: float | None = None,
     trailing_sl_pct: float | None = None,
     ttl_seconds: int = 120,
+    execution_mode: str | None = None,
 ):
 
     intent = ExecutionIntent(
@@ -30,6 +31,7 @@ def create_execution_intent(
         tp=tp,
         sl=sl,
         trailing_sl_pct=trailing_sl_pct,
+        execution_mode=execution_mode,
         expires_at=now_ist() + timedelta(seconds=ttl_seconds),
     )
 

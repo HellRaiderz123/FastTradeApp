@@ -317,7 +317,9 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
                  details=advice, severity="INFO")
 
     # ── Step 2: New entry evaluation ──────────────────────────────
-    # Count only auto-trader option positions (exclude DIRECT_ZERODHA and STOCK_MOMENTUM)
+    # Count only auto-trader option positions for this underlying's options universe.
+    # Exclude: DIRECT_ZERODHA, STOCK_MOMENTUM, scanner intents (SCANNER-*/AI-* intent_id prefix)
+    option_underlyings = [u.upper() for u in (cfg.underlyings or ["NIFTY"])]
     total_open = (
         db.query(ExecutionIntent)
         .filter(
@@ -325,6 +327,7 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
             ExecutionIntent.closed_at.is_(None),
             ExecutionIntent.strategy != "DIRECT_ZERODHA",
             ExecutionIntent.strategy != "STOCK_MOMENTUM",
+            ExecutionIntent.underlying.in_(option_underlyings),
         )
         .count()
     )
@@ -496,17 +499,16 @@ def _scan_stock(db: Session, cfg: AutoTraderConfig, symbol: str, executor):
     if auto_open:
         return  # already have a position
 
-    total_open = (
+    total_stock_open = (
         db.query(ExecutionIntent)
         .filter(
             ExecutionIntent.status == "EXECUTED",
             ExecutionIntent.closed_at.is_(None),
-            ExecutionIntent.strategy != "DIRECT_ZERODHA",
             ExecutionIntent.strategy == "STOCK_MOMENTUM",
         )
         .count()
     )
-    if total_open >= (cfg.max_open_positions or 3):
+    if total_stock_open >= (cfg.max_open_positions or 3):
         return
 
     if not _is_within_entry_window(cfg):

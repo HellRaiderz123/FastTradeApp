@@ -40,6 +40,7 @@ def update_risk_limits(
     *,
     max_portfolio_loss_pct: float,
     max_trades_per_day: int,
+    per_trade_risk_pct: float | None = None,
     iv_regime_limits: dict | None = None,
 ) -> RiskLimitConfig:
     """Persist updated risk limits and return the saved record."""
@@ -47,6 +48,8 @@ def update_risk_limits(
 
     record.max_portfolio_loss_pct = max_portfolio_loss_pct
     record.max_trades_per_day = max_trades_per_day
+    if per_trade_risk_pct is not None:
+        record.per_trade_risk_pct = per_trade_risk_pct
     record.iv_regime_limits = iv_regime_limits or default_iv_limits()
 
     # Flag the JSON column as modified so SQLAlchemy knows to persist changes

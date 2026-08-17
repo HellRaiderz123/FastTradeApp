@@ -780,6 +780,20 @@ export const positionsAPI = {
     api.patch(`/intent/${intentId}/update_tp_sl`, { tp, sl, trailing_sl }),
 };
 
+// Holdings APIs (stock/cash positions from scanner & AI chat)
+export const holdingsAPI = {
+  list: (status?: string) =>
+    api.get('/holdings', { params: status ? { status } : {} }),
+  close: (id: number, exitPrice?: number) =>
+    api.post(`/holdings/${id}/close`, exitPrice ? { exit_price: exitPrice } : {}),
+  closeAll: () =>
+    api.post('/holdings/close-all'),
+  refreshPrice: (id: number) =>
+    api.patch(`/holdings/${id}/price`),
+  delete: (id: number) =>
+    api.delete(`/holdings/${id}`),
+};
+
 // Authentication APIs
 export const authAPI = {
   login: (username: string, password: string) =>

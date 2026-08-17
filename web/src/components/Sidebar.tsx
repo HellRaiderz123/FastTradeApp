@@ -4,7 +4,7 @@ import {
   TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart,
   Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock,
   GitCompare, DollarSign, Star, Filter, RefreshCw, PieChart, ShoppingBag, Database,
-  ChevronDown, Activity,
+  ChevronDown, Activity, Package,
 } from 'lucide-react';
 import { settingsAPI } from '../lib/api';
 
@@ -49,6 +49,7 @@ const SECTIONS: Section[] = [
       { path: '/backfill-candles', icon: Database, label: 'Backfill Candles' },
       { path: '/auto-trader', icon: Bot, label: 'Auto Trader' },
       { path: '/positions', icon: Briefcase, label: 'Positions' },
+      { path: '/positions?tab=holdings', icon: Package, label: 'Stock Holdings' },
       { path: '/reconciliation', icon: RefreshCw, label: 'Reconciliation' },
     ],
   },

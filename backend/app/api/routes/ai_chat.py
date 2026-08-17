@@ -2210,6 +2210,24 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                     db.add(_intent)
                     db.commit()
                     logger.info("AI trade journal entry created: %s", _intent_id)
+                    # Create StockHolding for holdings tracking
+                    try:
+                        from app.api.routes.holdings import create_stock_holding, has_open_holding
+                        if not has_open_holding(db, symbol):
+                            create_stock_holding(
+                                db,
+                                symbol=symbol,
+                                direction=action,
+                                quantity=quantity,
+                                entry_price=float(effective_price or 0),
+                                strategy_name="AI_TRADE",
+                                source="AI_CHAT",
+                                execution_mode="LIVE",
+                                order_id=str(order_id),
+                            )
+                            db.commit()
+                    except Exception as _h_err:
+                        logger.warning("Could not create AI StockHolding: %s", _h_err)
                 except Exception as _journal_err:
                     logger.warning("Could not write AI trade to journal: %s", _journal_err)
                 # ─────────────────────────────────────────────────────────────

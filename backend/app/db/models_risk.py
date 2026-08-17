@@ -3,6 +3,9 @@ from sqlalchemy import Column, Integer, Float, JSON, DateTime
 from app.db.session import Base
 from app.core.utils.time import now_ist
 
+# Sensible per-trade risk default: 2% of capital per trade
+DEFAULT_PER_TRADE_RISK_PCT = 2.0
+
 
 def default_iv_limits() -> dict:
     """Default IV-regime limits used when no overrides are stored."""
@@ -27,6 +30,7 @@ class RiskLimitConfig(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     max_portfolio_loss_pct = Column(Float, default=3.0)
+    per_trade_risk_pct = Column(Float, default=DEFAULT_PER_TRADE_RISK_PCT)  # % of capital risked per trade
     max_trades_per_day = Column(Integer, default=3)
     iv_regime_limits = Column(JSON, default=default_iv_limits)
     created_at = Column(DateTime(timezone=True), default=now_ist)
