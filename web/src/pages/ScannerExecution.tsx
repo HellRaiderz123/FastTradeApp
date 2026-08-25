@@ -216,6 +216,22 @@ const TradeModal: React.FC<TradeModalProps> = ({ symbol, direction, ltp, default
   );
 };
 
+interface HistoricalSignal {
+  id: number;
+  symbol: string;
+  direction: string;
+  status: string;
+  ltp: number;
+  quantity: number;
+  signal_date: string;
+  executed_at: string | null;
+  trigger_count: number;
+  execution_payload?: {
+    fill_price?: number;
+    order_id?: string;
+  };
+}
+
 const ScannerExecution: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -237,9 +253,30 @@ const ScannerExecution: React.FC = () => {
     }))
   );
 
+  const [historicalSignals, setHistoricalSignals] = useState<HistoricalSignal[]>([]);
+
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(
     scanResult?.signals?.[0]?.symbol || null
   );
+
+  // Fetch historical executed signals for this strategy
+  useEffect(() => {
+    if (!scanResult?.strategy_id) return;
+    api.get('/condition-scanner/history', {
+      params: {
+        strategy_id: scanResult.strategy_id,
+        status: 'FILLED_PAPER',
+        limit: 100,
+        days: 30,
+      }
+    }).then(res => {
+      const history = res.data?.history || [];
+      // Filter out signals that are already in current scan
+      const currentSymbols = new Set(scanResult.signals.map(s => s.symbol));
+      const filtered = history.filter((h: HistoricalSignal) => !currentSymbols.has(h.symbol));
+      setHistoricalSignals(filtered);
+    }).catch(() => {});
+  }, [scanResult?.strategy_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [executingAll, setExecutingAll] = useState(false);
   const [tradeModal, setTradeModal] = useState<string | null>(null);
@@ -459,6 +496,55 @@ const ScannerExecution: React.FC = () => {
               </div>
             );
           })}
+
+          {/* Historical executed signals from previous cycles */}
+          {historicalSignals.length > 0 && (
+            <>
+              <div className="px-4 py-2 bg-slate-900/50 border-y border-slate-800">
+                <span className="text-[10px] text-slate-500 uppercase tracking-wider">
+                  Previous Cycles ({historicalSignals.length})
+                </span>
+              </div>
+              {historicalSignals.map(hist => (
+                <div
+                  key={hist.id}
+                  className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-center px-4 py-3 border-b border-slate-800/40 bg-slate-900/20"
+                >
+                  {/* Symbol */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-semibold text-slate-300 truncate">{hist.symbol}</span>
+                    <span className="text-[10px] text-slate-600">NSE</span>
+                    {hist.quantity && (
+                      <span className="text-[10px] text-slate-500">x{hist.quantity}</span>
+                    )}
+                  </div>
+
+                  {/* Fill Price */}
+                  <span className="text-xs text-slate-500 text-right">
+                    {hist.execution_payload?.fill_price?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) || '-'}
+                  </span>
+
+                  {/* LTP */}
+                  <span className="text-xs text-slate-400 text-right">
+                    {hist.ltp?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) || '-'}
+                  </span>
+
+                  {/* Date */}
+                  <span className="text-[10px] text-slate-600 text-right">
+                    {hist.signal_date ? new Date(hist.signal_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '-'}
+                  </span>
+
+                  {/* Status */}
+                  <div className="flex items-center justify-end gap-1.5 w-24">
+                    <span className="flex items-center gap-1 text-[10px] text-green-500/70">
+                      <CheckCircle className="w-3 h-3" />
+                      C{hist.trigger_count}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       </div>
 

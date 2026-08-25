@@ -733,91 +733,92 @@ def _get_portfolio_snapshot() -> dict:
 # Technical indicator computation  (pure Python / numpy — no new deps)
 # ---------------------------------------------------------------------------
 
-def _compute_indicators(candles: list[dict]) -> dict:
+def _compute_indicators(candles: list[dict], timeframe: str = "15m") -> dict:
     """
-    Compute EMA, RSI, MACD, Bollinger Bands, support/resistance from candles.
-    Returns a dict of indicator values and a human-readable summary string.
+    Delegates to the TA engine so journal and scanner use identical logic.
+    Falls back to a minimal summary dict if candles are insufficient.
     """
     if not candles:
         return {"available": False, "summary": "No candle data available."}
 
-    closes = [c["close"] for c in candles if c.get("close") is not None]
-    highs  = [c["high"]  for c in candles if c.get("high")  is not None]
-    lows   = [c["low"]   for c in candles if c.get("low")   is not None]
-    vols   = [c.get("volume", 0) or 0 for c in candles]
+    try:
+        from app.core.signals.ta_engine import (
+            ta_signal_15m_from_candles,
+            _ta_signal_daily_from_df,
+        )
+        import pandas as pd
 
-    if len(closes) < 15:
-        return {"available": False, "summary": "Insufficient candle data (< 15 bars)."}
+        if timeframe == "daily" and len(candles) >= 200:
+            df = pd.DataFrame(
+                [
+                    {
+                        "close": float(c.get("close") or 0),
+                        "high": float(c.get("high") or 0),
+                        "low": float(c.get("low") or 0),
+                        "open": float(c.get("open") or 0),
+                        "volume": float(c.get("volume") or 0),
+                    }
+                    for c in candles
+                ]
+            )
+            sig = _ta_signal_daily_from_df(df)
+        else:
+            sig = ta_signal_15m_from_candles(candles)
 
-    def ema(values: list, period: int) -> float:
-        k = 2.0 / (period + 1)
-        result = values[0]
-        for v in values[1:]:
-            result = v * k + result * (1 - k)
-        return round(result, 2)
+        if not sig or sig.get("signal") == "NO_TRADE" and not sig.get("indicators"):
+            return {"available": False, "summary": sig.get("reason", "Insufficient data")}
 
-    def rsi(values: list, period: int = 14) -> float:
-        if len(values) < period + 1:
-            return 50.0
-        gains, losses = [], []
-        for i in range(1, period + 1):
-            diff = values[-period + i] - values[-period + i - 1]
-            (gains if diff >= 0 else losses).append(abs(diff))
-        avg_gain = sum(gains) / period if gains else 0.001
-        avg_loss = sum(losses) / period if losses else 0.001
-        rs = avg_gain / avg_loss
-        return round(100 - (100 / (1 + rs)), 2)
+        ind = sig.get("indicators") or {}
+        current_price = ind.get("sma_20") or ind.get("ema_20") or ind.get("ema_50") or 0
+        # Prefer actual last close from candles
+        try:
+            current_price = float(candles[-1].get("close") or current_price)
+        except Exception:
+            pass
 
-    current = closes[-1]
-    ema20   = ema(closes[-30:], 20) if len(closes) >= 20 else None
-    ema50   = ema(closes[-60:], 50) if len(closes) >= 50 else None
-    rsi14   = rsi(closes, 14)
+        closes = [float(c.get("close") or 0) for c in candles if c.get("close")]
+        highs  = [float(c.get("high")  or 0) for c in candles if c.get("high")]
+        lows   = [float(c.get("low")   or 0) for c in candles if c.get("low")]
+        support    = round(min(lows[-20:])  if len(lows)  >= 20 else (min(lows)  if lows  else 0), 2)
+        resistance = round(max(highs[-20:]) if len(highs) >= 20 else (max(highs) if highs else 0), 2)
 
-    # MACD (12, 26, 9)
-    macd_line = None
-    macd_signal = None
-    if len(closes) >= 35:
-        fast = ema(closes[-30:], 12)
-        slow = ema(closes[-40:], 26)
-        macd_line = round(fast - slow, 2)
+        bias = sig.get("bias", "NEUTRAL")
+        trend = "UPTREND" if bias == "BULLISH" else ("DOWNTREND" if bias == "BEARISH" else "SIDEWAYS")
 
-    # Recent swing support / resistance (last 20 bars)
-    window = closes[-20:] if len(closes) >= 20 else closes
-    support    = round(min(lows[-20:])  if len(lows)  >= 20 else min(lows), 2)
-    resistance = round(max(highs[-20:]) if len(highs) >= 20 else max(highs), 2)
+        vols = [float(c.get("volume") or 0) for c in candles]
+        avg_vol  = sum(vols[-10:]) / 10 if len(vols) >= 10 else (sum(vols) / len(vols) if vols else 0)
+        last_vol = vols[-1] if vols else 0
+        vol_signal = "HIGH" if last_vol > avg_vol * 1.5 else ("LOW" if last_vol < avg_vol * 0.5 else "NORMAL")
 
-    # Trend direction
-    if ema20 and ema50:
-        trend = "UPTREND" if ema20 > ema50 and current > ema20 else (
-                "DOWNTREND" if ema20 < ema50 and current < ema20 else "SIDEWAYS")
-    elif ema20:
-        trend = "ABOVE_EMA20" if current > ema20 else "BELOW_EMA20"
-    else:
-        trend = "UNKNOWN"
-
-    # Volume signal
-    avg_vol = sum(vols[-10:]) / 10 if len(vols) >= 10 else (sum(vols) / len(vols) if vols else 0)
-    last_vol = vols[-1] if vols else 0
-    vol_signal = "HIGH" if last_vol > avg_vol * 1.5 else ("LOW" if last_vol < avg_vol * 0.5 else "NORMAL")
-
-    return {
-        "available": True,
-        "current_price": round(current, 2),
-        "ema20": ema20,
-        "ema50": ema50,
-        "rsi14": rsi14,
-        "macd_line": macd_line,
-        "trend": trend,
-        "support": support,
-        "resistance": resistance,
-        "volume_signal": vol_signal,
-        "bars_analysed": len(closes),
-        "summary": (
-            f"Price {current:.2f} | Trend {trend} | EMA20 {ema20} | EMA50 {ema50} "
-            f"| RSI {rsi14} | MACD {macd_line} | S {support} R {resistance} "
-            f"| Volume {vol_signal}"
-        ),
-    }
+        return {
+            "available": True,
+            "current_price": round(current_price, 2),
+            "ema20": ind.get("ema_20"),
+            "ema50": ind.get("ema_50"),
+            "rsi14": ind.get("rsi"),
+            "macd_line": ind.get("macd_hist"),
+            "adx": ind.get("adx"),
+            "stoch_k": ind.get("stoch_k"),
+            "trend": trend,
+            "bias": bias,
+            "signal": sig.get("signal"),
+            "confidence": sig.get("confidence"),
+            "support": support,
+            "resistance": resistance,
+            "volume_signal": vol_signal,
+            "bars_analysed": len(closes),
+            "quality_score": sig.get("quality_score", 0),
+            "trade_readiness_score": sig.get("trade_readiness_score", 0),
+            "summary": (
+                f"Price {current_price:.2f} | {trend} | Bias {bias} | "
+                f"RSI {ind.get('rsi', '?')} | ADX {ind.get('adx', '?')} | "
+                f"S {support} R {resistance} | Vol {vol_signal} | "
+                f"Signal {sig.get('signal')} ({sig.get('confidence', 0):.0f}%)"
+            ),
+        }
+    except Exception as e:
+        logger.warning("trading_agents: _compute_indicators TA engine call failed: %s", e)
+        return {"available": False, "summary": f"TA engine error: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -1438,12 +1439,12 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str, debate_rounds
             candles_5m = _get_candle_data(symbol, "5m", limit=60, min_required=15)
             candles_15m = _get_candle_data(symbol, "15m", limit=60, min_required=15)
             candles = candles_1h if len(candles_1h) >= 15 else candles_daily
-            indicators = _compute_indicators(candles)
+            indicators = _compute_indicators(candles, timeframe="1h" if len(candles_1h) >= 15 else "daily")
             multi_tf = {
-                "5m": _compute_indicators(candles_5m) if len(candles_5m) >= 15 else {"available": False},
-                "15m": _compute_indicators(candles_15m) if len(candles_15m) >= 15 else {"available": False},
+                "5m": _compute_indicators(candles_5m, timeframe="15m") if len(candles_5m) >= 15 else {"available": False},
+                "15m": _compute_indicators(candles_15m, timeframe="15m") if len(candles_15m) >= 15 else {"available": False},
                 "1h": indicators,
-                "daily": _compute_indicators(candles_daily) if len(candles_daily) >= 15 else {"available": False},
+                "daily": _compute_indicators(candles_daily, timeframe="daily") if len(candles_daily) >= 15 else {"available": False},
             }
             news_items = _get_news_items(limit=15)
             vix = _get_vix()

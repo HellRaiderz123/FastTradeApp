@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict
 from sqlalchemy.orm import Session
-from app.db.models_candles import Candle15m, CandleDaily
+from app.db.models_candles import Candle5m, Candle15m, CandleDaily
 
 logger = logging.getLogger(__name__)
 
@@ -118,35 +118,52 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     quality_score = sum([1 for v in quality_checks.values() if v])
 
     # ================================================================
-    # MARKET BIAS & SIGNAL (with divergence detection)
+    # MARKET BIAS & SIGNAL (with mean-reversion detection)
     # ================================================================
     # Separate EMA trend from slope for more nuanced signal detection
     ema_trend_bullish = last["ema_20"] > last["ema_50"]
     ema_trend_bearish = last["ema_20"] < last["ema_50"]
     ema_slope_positive = last["ema_20_slope"] > 0
     ema_slope_negative = last["ema_20_slope"] < 0
-    rsi_bullish = float(last["rsi"]) > 50
-    rsi_bearish = float(last["rsi"]) < 50
-    adx_strong = float(last["adx"]) >= 25
+    rsi_val = float(last["rsi"])
+    stoch_val = float(last["stoch_k"])
+    adx_val = float(last["adx"])
+    adx_strong = adx_val >= 25
 
-    # STRONG SIGNALS: EMA trend + slope + RSI all aligned + ADX confirmation
-    if ema_trend_bullish and ema_slope_positive and rsi_bullish and adx_strong:
+    # Mean-reversion detection — only fire on extreme readings to avoid counter-trend traps
+    deeply_oversold = rsi_val <= 28 and stoch_val <= 15 and not ema_trend_bearish
+    deeply_overbought = rsi_val >= 72 and stoch_val >= 85 and not ema_trend_bullish
+
+    # STRONG TREND SIGNALS first — trend takes priority over mean-reversion
+    if ema_trend_bullish and ema_slope_positive and rsi_val > 50 and adx_strong:
         signal = "BULLISH"
         bias = "BULLISH"
         confidence = 70 + min(10, quality_score * 2)
         reason = "EMA trend up + RSI > 50 + ADX strong"
-    elif ema_trend_bearish and ema_slope_negative and rsi_bearish and adx_strong:
+    elif ema_trend_bearish and ema_slope_negative and rsi_val < 50 and adx_strong:
         signal = "BEARISH"
         bias = "BEARISH"
         confidence = 70 + min(10, quality_score * 2)
         reason = "EMA trend down + RSI < 50 + ADX strong"
-    
+
+    # MEAN REVERSION (only after trend check, only at extremes)
+    elif deeply_oversold:
+        signal = "BULLISH"
+        bias = "BULLISH"
+        confidence = 65 + min(10, quality_score * 2)
+        reason = f"Extreme oversold reversal (RSI={rsi_val:.1f}, Stoch={stoch_val:.1f}) — no bearish trend"
+    elif deeply_overbought:
+        signal = "BEARISH"
+        bias = "BEARISH"
+        confidence = 65 + min(10, quality_score * 2)
+        reason = f"Extreme overbought reversal (RSI={rsi_val:.1f}, Stoch={stoch_val:.1f}) — no bullish trend"
+
     # MEDIUM SIGNALS: EMA trend + ADX strong, but RSI/slope divergence
     elif adx_strong and ema_trend_bearish:
         signal = "BEARISH"
         bias = "BEARISH"
         confidence = 55 + min(7, quality_score)
-        if rsi_bullish:
+        if rsi_val > 50:
             reason = "EMA bearish + strong ADX but RSI divergence (caution: potential reversal)"
         else:
             reason = "EMA bearish + strong ADX but slope divergence (weakening trend)"
@@ -154,11 +171,11 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
         signal = "BULLISH"
         bias = "BULLISH"
         confidence = 55 + min(7, quality_score)
-        if rsi_bearish:
+        if rsi_val < 50:
             reason = "EMA bullish + strong ADX but RSI divergence (caution: potential reversal)"
         else:
             reason = "EMA bullish + strong ADX but slope divergence (weakening trend)"
-    
+
     # TRUE RANGE: Weak ADX or no clear trend
     else:
         signal = "RANGE"
@@ -361,6 +378,273 @@ def ta_signal_15m(db: Session, symbol: str) -> Dict:
                 )
     except Exception as e:
         logger.debug("Could not compute day change context: %s", e)
+
+    return result
+
+
+# ================================================================
+# 5-MINUTE TA ENGINE (Optimized for Scalping)
+# ================================================================
+
+def _ta_signal_5m_from_df(df: pd.DataFrame) -> Dict:
+    """
+    5-minute TA signal optimized for scalping.
+    Faster indicators, momentum-focused, tighter thresholds.
+    """
+    if len(df) < 50:  # Need fewer candles for 5m (50 = ~4 hours)
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": "Not enough 5m candles",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+            "scalp_ready": False,
+        }
+
+    df = df.copy()
+
+    # Remove price anomalies
+    df, dropped, _ = _drop_price_anomalies(df, gap_threshold=0.03)  # Tighter for 5m
+    if len(df) < 50:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": f"Not enough candles after cleanup (dropped {dropped})",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+            "scalp_ready": False,
+        }
+
+    # ================================================================
+    # FAST INDICATORS (shorter periods for scalping)
+    # ================================================================
+    df["ema_9"] = df["close"].ewm(span=9).mean()
+    df["ema_21"] = df["close"].ewm(span=21).mean()
+    df["ema_9_slope"] = df["ema_9"].diff()
+    
+    # VWAP approximation (cumulative)
+    df["vwap"] = (df["close"] * df["volume"]).cumsum() / df["volume"].cumsum()
+    df["vwap"] = df["vwap"].fillna(df["close"])
+
+    # Fast RSI (7-period)
+    df["rsi_fast"] = compute_rsi(df["close"], period=7)
+    
+    # Standard RSI for confirmation
+    df["rsi"] = compute_rsi(df["close"], period=14)
+
+    # ADX (trend strength)
+    df["adx"] = compute_adx(df, period=10)  # Faster ADX
+
+    # Stochastic (fast)
+    df["stoch_k"], df["stoch_d"] = compute_stochastic(df["high"], df["low"], df["close"], period=9)
+
+    # Momentum (rate of change)
+    df["momentum"] = df["close"].pct_change(5) * 100  # 5-bar momentum
+
+    # Volume spike detection
+    df["volume_ma"] = df["volume"].rolling(20).mean()
+    df["volume_ratio"] = df["volume"] / df["volume_ma"]
+    if float(df["volume"].fillna(0).sum()) == 0.0:
+        df["volume_ratio"] = 1.0
+
+    last = df.iloc[-1]
+    prev = df.iloc[-2] if len(df) > 1 else last
+
+    # ================================================================
+    # SCALP-SPECIFIC QUALITY CHECKS
+    # ================================================================
+    rsi_fast = float(last["rsi_fast"])
+    rsi_val = float(last["rsi"])
+    stoch_val = float(last["stoch_k"])
+    adx_val = float(last["adx"])
+    momentum = float(last["momentum"])
+    volume_ratio = float(last["volume_ratio"])
+    ema_slope = float(last["ema_9_slope"])
+    
+    # Price vs VWAP
+    close = float(last["close"])
+    vwap = float(last["vwap"])
+    above_vwap = close > vwap
+
+    quality_checks = {
+        "adx_ok": adx_val >= 20,  # Lower threshold for scalps
+        "momentum_ok": abs(momentum) >= 0.15,  # Need some movement
+        "volume_spike": volume_ratio >= 1.3,  # Volume confirmation
+        "rsi_not_extreme": 25 <= rsi_fast <= 75,  # Avoid extremes
+        "stoch_ok": 20 <= stoch_val <= 80,
+        "ema_aligned": (ema_slope > 0 and above_vwap) or (ema_slope < 0 and not above_vwap),
+    }
+
+    quality_score = sum([1 for v in quality_checks.values() if v])
+
+    # ================================================================
+    # SCALP SIGNAL DETECTION
+    # ================================================================
+    # Momentum burst detection
+    strong_momentum_up = momentum >= 0.3 and ema_slope > 0 and above_vwap
+    strong_momentum_down = momentum <= -0.3 and ema_slope < 0 and not above_vwap
+    
+    # EMA crossover detection
+    ema_cross_up = last["ema_9"] > last["ema_21"] and prev["ema_9"] <= prev["ema_21"]
+    ema_cross_down = last["ema_9"] < last["ema_21"] and prev["ema_9"] >= prev["ema_21"]
+    
+    # RSI momentum
+    rsi_bullish_momentum = rsi_fast > 55 and rsi_val > 50
+    rsi_bearish_momentum = rsi_fast < 45 and rsi_val < 50
+
+    # ================================================================
+    # SIGNAL GENERATION
+    # ================================================================
+    scalp_ready = False
+    
+    # STRONG SCALP SIGNALS (momentum burst + volume)
+    if strong_momentum_up and volume_ratio >= 1.5 and adx_val >= 22:
+        signal = "SCALP_BULLISH"
+        bias = "BULLISH"
+        confidence = 72 + min(8, quality_score * 2)
+        reason = f"Strong momentum burst UP (mom={momentum:.2f}%, vol={volume_ratio:.1f}x)"
+        scalp_ready = True
+    elif strong_momentum_down and volume_ratio >= 1.5 and adx_val >= 22:
+        signal = "SCALP_BEARISH"
+        bias = "BEARISH"
+        confidence = 72 + min(8, quality_score * 2)
+        reason = f"Strong momentum burst DOWN (mom={momentum:.2f}%, vol={volume_ratio:.1f}x)"
+        scalp_ready = True
+    
+    # EMA CROSSOVER SCALPS
+    elif ema_cross_up and rsi_bullish_momentum and volume_ratio >= 1.2:
+        signal = "SCALP_BULLISH"
+        bias = "BULLISH"
+        confidence = 65 + min(10, quality_score * 2)
+        reason = f"EMA 9/21 cross UP + RSI momentum (RSI={rsi_fast:.1f})"
+        scalp_ready = True
+    elif ema_cross_down and rsi_bearish_momentum and volume_ratio >= 1.2:
+        signal = "SCALP_BEARISH"
+        bias = "BEARISH"
+        confidence = 65 + min(10, quality_score * 2)
+        reason = f"EMA 9/21 cross DOWN + RSI momentum (RSI={rsi_fast:.1f})"
+        scalp_ready = True
+    
+    # MODERATE MOMENTUM (trend continuation)
+    elif momentum >= 0.2 and above_vwap and rsi_bullish_momentum and adx_val >= 20:
+        signal = "BULLISH"
+        bias = "BULLISH"
+        confidence = 58 + min(7, quality_score)
+        reason = f"Bullish momentum above VWAP (mom={momentum:.2f}%)"
+        scalp_ready = quality_score >= 4
+    elif momentum <= -0.2 and not above_vwap and rsi_bearish_momentum and adx_val >= 20:
+        signal = "BEARISH"
+        bias = "BEARISH"
+        confidence = 58 + min(7, quality_score)
+        reason = f"Bearish momentum below VWAP (mom={momentum:.2f}%)"
+        scalp_ready = quality_score >= 4
+    
+    # NO CLEAR SCALP SETUP
+    else:
+        signal = "NO_SCALP"
+        bias = "NEUTRAL"
+        confidence = 30 + quality_score * 3
+        reason = f"No clear scalp setup (mom={momentum:.2f}%, ADX={adx_val:.1f})"
+        scalp_ready = False
+
+    # ================================================================
+    # TRADE READINESS
+    # ================================================================
+    readiness_score = int(min(100, quality_score * 12 + abs(momentum) * 20))
+
+    return {
+        "signal": signal,
+        "confidence": min(100, float(confidence)),
+        "reason": reason,
+        "bias": bias,
+        "iv_regime": "NORMAL",  # Will be enriched externally
+        "quality_checks": quality_checks,
+        "quality_score": quality_score,
+        "trade_readiness_score": readiness_score,
+        "scalp_ready": scalp_ready,
+        "indicators": {
+            "ema_9": round(float(last["ema_9"]), 2),
+            "ema_21": round(float(last["ema_21"]), 2),
+            "vwap": round(vwap, 2),
+            "rsi_fast": round(rsi_fast, 2),
+            "rsi": round(rsi_val, 2),
+            "adx": round(adx_val, 2),
+            "stoch_k": round(stoch_val, 2),
+            "momentum": round(momentum, 3),
+            "volume_ratio": round(volume_ratio, 2),
+            "above_vwap": above_vwap,
+        },
+    }
+
+
+def ta_signal_5m(db: Session, symbol: str) -> Dict:
+    """
+    5-MINUTE TA signal optimized for scalping.
+    Uses faster indicators and momentum detection.
+    """
+    symbol = symbol.upper().strip()
+    candles = (
+        db.query(Candle5m)
+        .filter(Candle5m.symbol == symbol)
+        .order_by(Candle5m.timestamp.desc())
+        .limit(100)  # ~8 hours of 5m data
+        .all()
+    )
+
+    logger.info(
+        "TA 5M DEBUG | symbol=%s | candles_found=%d",
+        symbol,
+        len(candles),
+    )
+
+    if len(candles) < 50:
+        return {
+            "signal": "NO_TRADE",
+            "confidence": 0,
+            "reason": "Not enough 5m candles",
+            "indicators": {},
+            "quality_checks": {},
+            "quality_score": 0,
+            "trade_readiness_score": 0,
+            "iv_regime": None,
+            "bias": "NEUTRAL",
+            "scalp_ready": False,
+        }
+
+    df = pd.DataFrame(
+        [
+            {
+                "close": c.close,
+                "high": c.high,
+                "low": c.low,
+                "open": c.open,
+                "volume": c.volume or 0,
+            }
+            for c in reversed(candles)
+        ]
+    )
+
+    result = _ta_signal_5m_from_df(df)
+
+    # Attach diagnostics
+    try:
+        last_ts = candles[0].timestamp if candles else None
+        result["diagnostics"] = {
+            "candle_count": len(candles),
+            "last_candle_ts": last_ts.isoformat() if last_ts else None,
+            "last_close": candles[0].close if candles else None,
+            "timeframe": "5m",
+        }
+    except Exception:
+        pass
 
     return result
 

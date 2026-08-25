@@ -1,8 +1,15 @@
 import axios from 'axios';
+import { authTokenStore } from '../lib/api';
 
 const AI_API = axios.create({
   baseURL: (import.meta as any).env?.VITE_API_BASE ? `${(import.meta as any).env?.VITE_API_BASE}/ai-analysis` : '/api/ai-analysis',
   timeout: 120000, // Long timeout for LLM processing
+});
+
+AI_API.interceptors.request.use((config) => {
+  const token = authTokenStore.get();
+  if (token) config.headers['Authorization'] = `Bearer ${token}`;
+  return config;
 });
 
 // ── Types ────────────────────────────────────────────────────────────────────

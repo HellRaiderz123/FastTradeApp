@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date
-from typing import Dict, Any, cast as typing_cast
+from typing import Dict, Any, cast as typing_cast, Optional
 from datetime import date
+from pydantic import BaseModel
 
 from app.db.session import SessionLocal
 from app.db.intent_query import get_intent_by_id
@@ -15,6 +16,7 @@ from app.core.execution.mode import get_execution_mode
 from app.db.models_intent import ExecutionIntent
 from app.db.models import DailyCapital
 from app.services.notifications import NotificationService
+from app.db.intent_repo import create_execution_intent
 
 # Phase 2: Circuit breaker + drawdown
 from app.core.risk.circuit_breaker import CircuitBreaker, CircuitBreakerTripped
@@ -22,6 +24,14 @@ from app.core.risk.drawdown_tracker import DrawdownTracker
 from app.core.risk.cost_calculator import calculate_costs_from_intent, format_cost_breakdown
 
 router = APIRouter(prefix="/execute", tags=["Execution"])
+
+
+class DirectTicketRequest(BaseModel):
+    underlying: str
+    strategy: str
+    ticket: Dict[str, Any]
+    tp: Optional[float] = None
+    sl: Optional[float] = None
 
 
 def get_db():
@@ -234,4 +244,74 @@ def execute_paper(
             "lots_executed": adjusted_lots,
         },
         "costs": trade_cost_summary,
+    }
+
+
+@router.post("/direct-ticket")
+def execute_direct_ticket(
+    req: DirectTicketRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Execute a raw ticket directly — used by Hedge, Adjust, and Add-to-Position
+    from the Positions page. Bypasses strategy run creation; creates an intent
+    in CONFIRMED state and executes it immediately.
+    """
+    from app.core.risk.system_guard import is_trading_enabled
+    from app.core.market.expiry import get_next_weekly_expiry_from_kite
+    from datetime import timedelta
+
+    if not is_trading_enabled(db):
+        raise HTTPException(status_code=403, detail="Trading is disabled by system kill switch")
+
+    # Resolve expiry for the intent record
+    try:
+        expiry = get_next_weekly_expiry_from_kite(req.underlying)
+    except Exception:
+        expiry = None
+
+    # Create intent directly in CONFIRMED state (no strategy run needed)
+    intent = ExecutionIntent(
+        intent_id=f"DIRECT-{now_ist().strftime('%Y%m%d%H%M%S')}-{req.strategy[:6].upper()}",
+        strategy=req.strategy,
+        underlying=req.underlying,
+        ticket=req.ticket,
+        expiry=str(expiry) if expiry else None,
+        status="CONFIRMED",
+        executed=False,
+        tp=req.tp,
+        sl=req.sl,
+        pnl=0.0,
+        expires_at=now_ist() + timedelta(minutes=5),
+    )
+    db.add(intent)
+    db.commit()
+    db.refresh(intent)
+
+    # Execute immediately
+    mode = get_execution_mode()
+    executor = get_execution_adapter(mode)
+
+    try:
+        result = executor.execute(intent)
+    except Exception as exc:
+        db.delete(intent)
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Execution failed: {exc}")
+
+    intent.status = "EXECUTED"
+    intent.executed = True
+    intent.execution_result = result
+    entry_credit = result.get("entry_credit") or compute_entry_credit_total(req.ticket)
+    intent.entry_credit = entry_credit
+    margin_required = result.get("margin_required")
+    if margin_required is not None:
+        intent.margin_required = margin_required
+    intent.last_mtm_at = now_ist()
+    db.commit()
+
+    return {
+        "intent_id": intent.intent_id,
+        "status": "EXECUTED",
+        "execution": result,
     }

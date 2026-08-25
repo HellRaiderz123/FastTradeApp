@@ -376,3 +376,80 @@ def check_ratio_backspread_risk(
         )
     
     return True, "Risk within limits", metrics
+
+
+def check_naked_option_risk(
+    *,
+    strike: int,
+    spot: float,
+    capital: float,
+    lot_size: int,
+    lots: int,
+    iv_regime: str,
+    is_scalp: bool = False,
+    premium: float = None,
+    risk_config: Optional[RiskLimits] = None,
+) -> Tuple[bool, str, Dict[str, float]]:
+    """
+    Risk check for naked option buys (LONG_CALL, LONG_PUT, SCALP_CALL, SCALP_PUT).
+    
+    Max loss = Premium paid.
+    If premium not provided, estimate based on ATM distance and IV regime.
+    """
+    
+    metrics: Dict[str, float] = {}
+    limits = get_risk_limits(iv_regime, risk_config)
+    
+    if premium is not None:
+        # Use actual premium
+        max_loss = premium * lot_size * lots
+        metrics["premium"] = premium
+    else:
+        # Estimate premium based on ATM distance and IV regime
+        # ATM options: ~1.5-4% of spot in premium
+        atm_dist_pct = abs(strike - spot) / spot * 100
+        
+        # Base premium as % of spot (for ATM)
+        base_premium_pct_map = {
+            "LOW": 1.5,    # ~1.5% of spot for ATM in LOW IV
+            "NORMAL": 2.5, # ~2.5% in NORMAL IV
+            "HIGH": 4.0,   # ~4% in HIGH IV
+        }
+        base_pct = base_premium_pct_map.get(iv_regime, 2.5)
+        
+        # Reduce premium estimate for OTM options
+        otm_decay = max(0.1, 1 - (atm_dist_pct * 0.3))
+        
+        estimated_premium_pct = base_pct * otm_decay
+        estimated_premium = spot * (estimated_premium_pct / 100)
+        max_loss = estimated_premium * lot_size * lots
+        
+        metrics["estimated_premium"] = estimated_premium
+        metrics["atm_dist_pct"] = atm_dist_pct
+        metrics["otm_decay"] = otm_decay
+    
+    metrics["max_loss"] = max_loss
+    metrics["risk_type"] = "LIMITED"
+    metrics["is_scalp"] = float(is_scalp)
+    
+    if capital <= 0:
+        return (False, "Capital not available", metrics)
+    
+    risk_pct = (max_loss / capital) * 100.0
+    metrics["risk_pct_capital"] = risk_pct
+    
+    # For naked option buys, allow higher risk since max loss is limited to premium
+    # These are debit trades - you can only lose what you pay
+    if is_scalp:
+        max_allowed = min(limits["max_risk_pct_capital"] * 3, 15.0)  # Max 15% for scalps
+    else:
+        max_allowed = min(limits["max_risk_pct_capital"] * 12, 50.0)  # Max 50% for directional buys
+    
+    if risk_pct > max_allowed:
+        return (
+            False,
+            f"Risk {risk_pct:.2f}% exceeds limit {max_allowed:.2f}%",
+            metrics,
+        )
+    
+    return True, "Risk within limits (naked buy)", metrics

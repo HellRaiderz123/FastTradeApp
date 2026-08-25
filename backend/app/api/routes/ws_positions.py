@@ -158,6 +158,15 @@ async def ws_positions(websocket: WebSocket):
                     if not is_open:
                         continue
 
+                    # Exclude scanner/AI stock trades — they belong in Holdings tab
+                    _HOLDINGS_STRATEGIES = {"ZERODHA_HOLDING", "ZERODHA_ACTUAL", "DIRECT_ZERODHA", "STOCK_MOMENTUM", "AI_TRADE"}
+                    _intent_id = getattr(intent, "intent_id", "") or ""
+                    _strategy = getattr(intent, "strategy", "") or ""
+                    if _strategy in _HOLDINGS_STRATEGIES:
+                        continue
+                    if _intent_id.startswith("SCANNER-") or _intent_id.startswith("AI-"):
+                        continue
+
                     # Support PAPER, ZERODHA_DRY_RUN, ZERODHA_LIVE, and ZERODHA_LIVE_DIRECT modes
                     mode = None
                     if isinstance(intent.execution_result, dict):

@@ -1260,3 +1260,36 @@ def start_holdings_reconciliation_scheduler():
     )
     logger.info("🟢 Holdings reconciliation scheduler started (Mon-Fri at 9:05 AM IST)")
 
+
+def start_scalp_trading_scheduler():
+    """Start 5-minute scalp paper trading scheduler."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start scalp trading scheduler: main scheduler not running")
+        return
+    
+    from app.core.scalp.scalp_paper_trader import _scalp_trading_job
+    
+    scheduler.add_job(
+        func=_scalp_trading_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",
+        minute="*/5",
+        id="scalp_trading_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("🟢 Scalp trading scheduler started (every 5 min, Mon-Fri 9:20 AM - 3:15 PM IST)")
+
+
+def start_holdings_auto_exit_scheduler():
+    """Start holdings auto-exit scheduler (every 1 min during market hours)."""
+    if not scheduler.running:
+        logger.warning("⚠️ Cannot start holdings auto-exit scheduler: main scheduler not running")
+        return
+
+    from app.core.exit.holdings_auto_exit import start_holdings_exit_scheduler
+    start_holdings_exit_scheduler(scheduler)
+    logger.info("🟢 Holdings auto-exit scheduler registered")
+

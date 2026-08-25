@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
@@ -11,7 +13,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
-from app.api.routes.ai_chat import _call_llm
 from app.core.utils.time import now_ist
 from app.db.models_alexa import AlexaInteractionLog, AlexaMemory
 from app.db.models_notification import Notification
@@ -19,9 +20,13 @@ from app.db.models_twitter import TwitterAlert
 from app.db.models_watchlist import Watchlist
 from app.db.session import SessionLocal
 from app.services.alexa_proactive_alerts import get_alexa_proactive_alert_service
-from app.services.llm_service import call_llm
-from app.services.market_data import get_option_chain, get_spot
+from app.services.llm_service import call_llm, call_llm_async
+from app.services.market_data import get_spot
 from app.services.rss_feed_service import get_rss_service
+
+_ALEXA_LLM_TIMEOUT = float(os.getenv("ALEXA_LLM_TIMEOUT_SEC", "5.5"))
+_ALEXA_TOTAL_TIMEOUT = float(os.getenv("ALEXA_TOTAL_TIMEOUT_SEC", "6.5"))
+_spot_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="alexa_spot")
 
 logger = logging.getLogger(__name__)
 
@@ -464,42 +469,43 @@ def _primary_market_symbol(question: str) -> str:
     return "NIFTY"
 
 
-def _build_live_market_context(question: str, user_memory: dict[str, list[str]]) -> str:
+async def _build_live_market_context_async(question: str, user_memory: dict[str, list[str]]) -> str:
+    """Fetch spot prices concurrently in a thread pool — never blocks the event loop."""
     if not ALEXA_LIVE_MARKET_CONTEXT_ENABLED:
         return ""
 
+    loop = asyncio.get_event_loop()
+
+    def _fetch_spots():
+        results = {}
+        for sym in ("NIFTY", "BANKNIFTY", "NIFTYVIX"):
+            try:
+                results[sym] = get_spot(sym)
+            except Exception:
+                results[sym] = None
+        return results
+
+    try:
+        spots = await asyncio.wait_for(
+            loop.run_in_executor(_spot_executor, _fetch_spots),
+            timeout=3.0,
+        )
+    except Exception as exc:
+        logger.debug("Alexa spot fetch timed out or failed: %s", exc)
+        spots = {}
+
     parts: list[str] = []
+    nifty = spots.get("NIFTY")
+    banknifty = spots.get("BANKNIFTY")
+    india_vix = spots.get("NIFTYVIX")
 
-    try:
-        nifty = get_spot("NIFTY")
-        banknifty = get_spot("BANKNIFTY")
-        india_vix = get_spot("NIFTYVIX")
-        vix_tone = "low volatility" if india_vix < 13 else "elevated volatility" if india_vix > 18 else "moderate volatility"
+    if nifty:
         parts.append(f"NIFTY spot is {nifty:.2f}.")
+    if banknifty:
         parts.append(f"BANKNIFTY spot is {banknifty:.2f}.")
-        parts.append(f"India VIX is {india_vix:.2f}, which suggests {vix_tone}.")
-    except Exception as exc:
-        logger.debug("Alexa live index snapshot unavailable: %s", exc)
-
-    try:
-        underlying = _primary_market_symbol(question)
-        reference_spot = None
-        try:
-            reference_spot = get_spot(underlying)
-        except Exception:
-            reference_spot = None
-
-        chain = get_option_chain(underlying)
-        if not chain.empty:
-            strikes = sorted({int(float(strike)) for strike in chain["strike"].dropna().tolist()})
-            if strikes:
-                atm = min(strikes, key=lambda strike: abs(strike - reference_spot)) if reference_spot else strikes[len(strikes) // 2]
-                window = 150 if underlying == "NIFTY" else 300
-                nearby = [str(strike) for strike in strikes if abs(strike - atm) <= window][:7]
-                if nearby:
-                    parts.append(f"{underlying} option chain near ATM {atm} is available around strikes {', '.join(nearby)}.")
-    except Exception as exc:
-        logger.debug("Alexa live option snapshot unavailable: %s", exc)
+    if india_vix:
+        vix_tone = "low volatility" if india_vix < 13 else "elevated volatility" if india_vix > 18 else "moderate volatility"
+        parts.append(f"India VIX is {india_vix:.2f}, suggesting {vix_tone}.")
 
     if user_memory.get("watchlist"):
         parts.append("Saved watchlist: " + ", ".join(user_memory["watchlist"][-5:]) + ".")
@@ -1279,8 +1285,23 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
         analytics["used_fasttrade_context"] = use_fasttrade_context
         analytics["is_alert_request"] = is_alert_request
 
-        live_market_context = _build_live_market_context(question, user_memory) if use_fasttrade_context else ""
-        alert_context = _build_alert_context(question, db) if is_alert_request else ""
+        # Fetch market context and alert context concurrently within a tight budget
+        live_market_context = ""
+        alert_context = ""
+        if use_fasttrade_context or is_alert_request:
+            gather_tasks = [
+                _build_live_market_context_async(question, user_memory) if use_fasttrade_context else asyncio.sleep(0),
+                asyncio.get_event_loop().run_in_executor(None, _build_alert_context, question, db) if is_alert_request else asyncio.sleep(0),
+            ]
+            try:
+                results = await asyncio.wait_for(asyncio.gather(*gather_tasks, return_exceptions=True), timeout=3.5)
+                if use_fasttrade_context and isinstance(results[0], str):
+                    live_market_context = results[0]
+                if is_alert_request and isinstance(results[1], str):
+                    alert_context = results[1]
+            except Exception as exc:
+                logger.debug("Alexa context gather timed out: %s", exc)
+
         if intent_name == "AlertSummaryIntent" and alert_context.startswith("No unread"):
             no_alerts_text = (
                 "अभी कोई unread app notification या high priority market alert नहीं है।"
@@ -1290,7 +1311,7 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
             return respond(no_alerts_text, reprompt=default_reprompt)
         if intent_name == "AlertSummaryIntent" and alert_context:
             question = f"Summarize these actual current Fast Trade alerts for voice: {alert_context}"
-        answer = None
+
         language_instruction = (
             "Reply in simple Hindi or natural Hinglish. Use at most two short voice-friendly sentences and keep it under 60 words."
             if is_hindi
@@ -1302,58 +1323,41 @@ async def alexa_skill(request: Request, db: Session = Depends(get_db)) -> dict[s
             else "Use the recent conversation to resolve follow-up questions naturally."
         )
 
-        if use_fasttrade_context:
-            prompt_parts = [
-                "You are Fast Trade AI, a calm financial voice assistant for traders and investors.",
-                language_instruction,
-                continuity_instruction,
-                "Use plain language, highlight one relevant risk or caution when useful, and avoid jargon overload.",
-                "Avoid dramatic, slang, or aggressive phrasing.",
-                "Do not use markdown, bullet points, or JSON.",
-                "If the user says only a short keyword like Google, RSI, or Tesla, treat it as a request for a brief explanation instead of refusing it as a web search.",
-                "If the question is about FastTrade portfolio, risk, positions, or market context, use the available trading context.",
-            ]
-            if live_market_context:
-                prompt_parts.append(f"Live market snapshot: {live_market_context}")
-            if alert_context:
-                prompt_parts.append(f"Current alert context: {alert_context}")
-            prompt_parts.append(f"User request: {question}")
-            voice_prompt = " ".join(prompt_parts)
-            try:
-                answer, _actions = _call_llm(voice_prompt, conversation_history, db)
-            except Exception as exc:
-                logger.warning("Alexa Fast Trade context failed, falling back to base LLM: %s", exc)
-                answer = None
+        # Build voice prompt
+        prompt_parts = [
+            "You are Fast Trade AI, a calm financial voice assistant for traders and investors.",
+            language_instruction,
+            continuity_instruction,
+            "Use plain language, highlight one relevant risk or caution when useful, and avoid jargon overload.",
+            "Avoid dramatic, slang, or aggressive phrasing.",
+            "Do not use markdown, bullet points, or JSON.",
+            "If the user says only a short keyword like Google, RSI, or Tesla, treat it as a request for a brief explanation.",
+        ]
+        if live_market_context:
+            prompt_parts.append(f"Live market snapshot: {live_market_context}")
+        if alert_context:
+            prompt_parts.append(f"Current alert context: {alert_context}")
+        if conversation_context:
+            prompt_parts.append(f"Recent conversation: {conversation_context}")
+        prompt_parts.append(f"User request: {question}")
+        voice_prompt = " ".join(prompt_parts)
 
-        if not answer:
-            fallback_prompt_parts: list[str] = []
-            if conversation_context:
-                fallback_prompt_parts.append(f"Recent conversation:\n{conversation_context}")
-            if live_market_context:
-                fallback_prompt_parts.append(f"Live market snapshot:\n{live_market_context}")
-            if alert_context:
-                fallback_prompt_parts.append(f"Current alert context:\n{alert_context}")
-            fallback_prompt_parts.append(f"Current user request:\n{question}")
-            fallback_prompt = "\n\n".join(fallback_prompt_parts)
-
-            answer = call_llm(
-                prompt=fallback_prompt,
-                system_prompt=(
-                    "You are Fast Trade AI, a helpful voice assistant similar to ChatGPT. "
-                    "You can answer both general questions and trading education questions. "
-                    f"{language_instruction} "
-                    f"{continuity_instruction} "
-                    "Use clear spoken language and keep the response easy to understand. "
-                    "Avoid dramatic, slang, or aggressive phrasing. "
-                    "If the user only says a short keyword like Google, RSI, or Tesla, interpret it as asking what it is and answer directly. "
-                    "Do not claim you cannot search the web unless the user explicitly asks for live real-time web results. "
-                    "If live market data or recent conversation is provided, use it directly instead of guessing. "
-                    "Do not use markdown, bullet points, or JSON."
+        answer = None
+        try:
+            answer = await asyncio.wait_for(
+                call_llm_async(
+                    prompt=voice_prompt,
+                    system_prompt="You are Fast Trade AI, a calm financial voice assistant.",
+                    max_tokens=100,
+                    temperature=0.2,
+                    timeout=_ALEXA_LLM_TIMEOUT,
                 ),
-                max_tokens=120,
-                temperature=0.2,
-                timeout=20.0,
+                timeout=_ALEXA_TOTAL_TIMEOUT,
             )
+        except asyncio.TimeoutError:
+            logger.warning("Alexa LLM timed out after %.1fs for intent=%s", _ALEXA_TOTAL_TIMEOUT, intent_name)
+        except Exception as exc:
+            logger.warning("Alexa LLM call failed: %s", exc)
 
         if not answer:
             analytics["success"] = False

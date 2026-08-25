@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle, Activity, Package, Info, Loader2, RefreshCw } from 'lucide-react';
-import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore, greeksAPI, autoTraderAPI, holdingsAPI } from '../lib/api';
+import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore, greeksAPI, holdingsAPI, directExecuteAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 import { useToast } from '../components/Toast';
 import SpreadGrouping from '../components/SpreadGrouping';
@@ -90,7 +90,15 @@ const Positions: React.FC = () => {
             console.debug('[Positions] Ignoring non-position message:', msg?.type);
             return;
           }
-          const updates: any[] = Array.isArray(msg?.intents) ? msg.intents : [];
+          const ZERODHA_STRATEGIES = ['ZERODHA_HOLDING', 'ZERODHA_ACTUAL', 'DIRECT_ZERODHA'];
+          const updates: any[] = (Array.isArray(msg?.intents) ? msg.intents : []).filter((u: any) => {
+            const id: string = u?.intent_id || '';
+            const strat: string = u?.strategy || '';
+            if (ZERODHA_STRATEGIES.includes(strat)) return false;
+            if (id.startsWith('SCANNER-') || id.startsWith('AI-')) return false;
+            if (strat === 'STOCK_MOMENTUM' || strat === 'AI_TRADE') return false;
+            return true;
+          });
           console.log('[Positions] 📊 Received update with', updates.length, 'intents');
 
           // Merge WS smart suggestions into state
@@ -1036,16 +1044,56 @@ const HedgeModal: React.FC<{ trade: any; onClose: () => void; onSuccess: () => v
   const { showToast } = useToast();
   const [hedgeType, setHedgeType] = React.useState<'strangle' | 'wing' | 'opposite'>('strangle');
   const [loading, setLoading] = React.useState(false);
-  
+
+  const buildHedgeTicket = () => {
+    const underlying = trade.underlying || 'NIFTY';
+    const existingLegs: any[] = trade.ticket?.legs || [];
+    const lotSize = trade.ticket?.lot_size || 50;
+    const lots = trade.ticket?.lots || 1;
+    const expiry = trade.expiry || trade.ticket?.expiry;
+
+    // Derive ATM from existing strikes
+    const strikes = existingLegs.map((l: any) => Number(l.strike)).filter(Boolean);
+    const atm = strikes.length ? Math.round(strikes.reduce((a: number, b: number) => a + b, 0) / strikes.length / 50) * 50 : 0;
+    const step = underlying === 'BANKNIFTY' ? 100 : 50;
+
+    let legs: any[] = [];
+
+    if (hedgeType === 'strangle') {
+      // Sell OTM call + put to collect premium and reduce net delta
+      legs = [
+        { side: 'SELL', strike: atm + step * 2, type: 'CE', symbol: `${underlying}${expiry}${atm + step * 2}CE` },
+        { side: 'SELL', strike: atm - step * 2, type: 'PE', symbol: `${underlying}${expiry}${atm - step * 2}PE` },
+      ];
+    } else if (hedgeType === 'wing') {
+      // Buy protective wings on both sides (converts to Iron Condor)
+      const shortCall = existingLegs.find((l: any) => l.side === 'SELL' && l.type === 'CE');
+      const shortPut = existingLegs.find((l: any) => l.side === 'SELL' && l.type === 'PE');
+      if (shortCall) legs.push({ side: 'BUY', strike: shortCall.strike + step * 2, type: 'CE', symbol: `${underlying}${expiry}${shortCall.strike + step * 2}CE` });
+      if (shortPut) legs.push({ side: 'BUY', strike: shortPut.strike - step * 2, type: 'PE', symbol: `${underlying}${expiry}${shortPut.strike - step * 2}PE` });
+      if (!legs.length) legs = [
+        { side: 'BUY', strike: atm + step * 3, type: 'CE', symbol: `${underlying}${expiry}${atm + step * 3}CE` },
+        { side: 'BUY', strike: atm - step * 3, type: 'PE', symbol: `${underlying}${expiry}${atm - step * 3}PE` },
+      ];
+    } else {
+      // Opposite side — buy ATM call or put to neutralise delta
+      const hasBullishLeg = existingLegs.some((l: any) => l.side === 'SELL' && l.type === 'PE');
+      const optType = hasBullishLeg ? 'PE' : 'CE';
+      legs = [{ side: 'BUY', strike: atm, type: optType, symbol: `${underlying}${expiry}${atm}${optType}` }];
+    }
+
+    return { underlying, strategy: `HEDGE_${hedgeType.toUpperCase()}`, ticket: { underlying, strategy: `HEDGE_${hedgeType.toUpperCase()}`, lot_size: lotSize, lots, expiry, legs } };
+  };
+
   const handleHedge = async () => {
     setLoading(true);
     try {
-      // Trigger auto-trader hedge via the position advisor endpoint
-      await autoTraderAPI.updateConfig({ auto_hedge_on_reversal: true });
-      showToast('success', 'Hedge Queued', `Adding ${hedgeType} hedge to ${trade.strategy} on next scan`);
+      const { underlying, strategy, ticket } = buildHedgeTicket();
+      await directExecuteAPI.execute({ underlying, strategy, ticket });
+      showToast('success', 'Hedge Placed', `${hedgeType} hedge executed for ${trade.underlying}`);
       onSuccess();
-    } catch (err) {
-      showToast('error', 'Hedge Failed', 'Failed to queue hedge');
+    } catch (err: any) {
+      showToast('error', 'Hedge Failed', err?.response?.data?.detail || 'Failed to place hedge');
     } finally {
       setLoading(false);
     }
@@ -1118,12 +1166,31 @@ const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
   const handleAdjust = async () => {
     setLoading(true);
     try {
-      // Close current position then re-enter with adjusted strikes via exit + re-run
+      // Step 1: close current position
       await exitAPI.manualExit(String(trade.intent_id));
-      showToast('success', 'Position Rolled', `Closed current position. Re-enter with ${direction === 'up' ? '+' : '-'}${adjustment} pt strikes.`);
+
+      // Step 2: build new ticket with adjusted strikes
+      const delta = direction === 'up' ? adjustment : -adjustment;
+      const newLegs = legs.map((leg: any) => ({
+        ...leg,
+        strike: leg.strike + delta,
+        symbol: leg.symbol
+          ? leg.symbol.replace(String(leg.strike), String(leg.strike + delta))
+          : undefined,
+      }));
+      const newTicket = { ...trade.ticket, legs: newLegs };
+
+      // Step 3: execute new position
+      await directExecuteAPI.execute({
+        underlying: trade.underlying,
+        strategy: trade.strategy,
+        ticket: newTicket,
+      });
+
+      showToast('success', 'Position Rolled', `Closed and re-entered with strikes ${direction === 'up' ? '+' : '-'}${adjustment} pts`);
       onSuccess();
-    } catch (err) {
-      showToast('error', 'Adjust Failed', 'Failed to adjust strikes');
+    } catch (err: any) {
+      showToast('error', 'Adjust Failed', err?.response?.data?.detail || 'Failed to adjust strikes');
     } finally {
       setLoading(false);
     }
@@ -1219,11 +1286,17 @@ const AddToPositionModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
   const handleAdd = async () => {
     setLoading(true);
     try {
-      showToast('info', 'Adding', `Adding ${quantity} more contracts to position`);
-      // TODO: Execute additional legs with same strikes
+      // Execute same ticket with additional lots
+      const newTicket = { ...trade.ticket, lots: quantity };
+      await directExecuteAPI.execute({
+        underlying: trade.underlying,
+        strategy: trade.strategy,
+        ticket: newTicket,
+      });
+      showToast('success', 'Position Scaled', `Added ${quantity} lot${quantity > 1 ? 's' : ''} to ${trade.underlying} ${trade.strategy}`);
       onSuccess();
-    } catch (err) {
-      showToast('error', 'Add Failed', 'Failed to add to position');
+    } catch (err: any) {
+      showToast('error', 'Add Failed', err?.response?.data?.detail || 'Failed to add to position');
     } finally {
       setLoading(false);
     }
@@ -1533,16 +1606,38 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
     if (!legs.length || greeksLoading) return;
     setGreeksLoading(true);
     try {
-      const spot = trade?.spot || trade?.entry_credit || 0;
-      const payload = legs.map((leg: any) => ({
-        symbol: leg.symbol,
-        strike: leg.strike,
-        option_type: leg.type,
-        side: leg.side,
-        spot_price: spot,
-        expiry: trade?.expiry,
-      }));
-      const res = await greeksAPI.calculate({ legs: payload });
+      const spot = Number(trade?.spot || trade?.entry_credit || 0);
+      const expiryStr: string = trade?.expiry || trade?.ticket?.expiry || '';
+
+      // Compute days to expiry from stored expiry string
+      let expiryDays = 7;
+      if (expiryStr) {
+        const exp = new Date(expiryStr);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const diff = Math.round((exp.getTime() - today.getTime()) / 86400000);
+        expiryDays = Math.max(1, diff);
+      }
+
+      // Default IV: 15% for NIFTY/FINNIFTY, 18% for BANKNIFTY
+      const underlying = (trade?.underlying || '').toUpperCase();
+      const defaultIV = underlying === 'BANKNIFTY' ? 18 : 15;
+
+      const payload = {
+        spot,
+        rate: 6.5,
+        legs: legs.map((leg: any) => ({
+          type: leg.side === 'SELL' ? 'SELL' : 'BUY',
+          option_type: leg.type,          // CE or PE
+          strike: Number(leg.strike),
+          spot,
+          expiry_days: expiryDays,
+          volatility: defaultIV,
+          quantity: 1,
+        })),
+      };
+
+      const res = await greeksAPI.calculate(payload);
       setGreeks(res?.data);
     } catch {
       // silently fail
@@ -1802,7 +1897,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
         </div>
       )}
 
-      {/* Greeks Overlay (Tier 1) */}
+      {/* Greeks Overlay */}
       {(trade?.ticket?.legs || []).length > 0 && (
         <div className="mt-3 border-t border-slate-700 pt-3">
           <button
@@ -1810,24 +1905,52 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
             disabled={greeksLoading}
             className="text-xs text-slate-400 hover:text-blue-400 transition flex items-center gap-2"
           >
-            <span>δθνρ</span>
+            <span className="font-mono tracking-widest">δ θ ν ρ</span>
             <span>{greeksLoading ? 'Loading Greeks...' : greeks ? 'Refresh Greeks' : 'Show Greeks'}</span>
           </button>
           {greeks && (
-            <div className="mt-2 grid grid-cols-4 gap-2">
-              {(['delta', 'theta', 'vega', 'gamma'] as const).map((g) => {
-                const val = greeks?.portfolio?.[g] ?? greeks?.[g];
-                return val !== undefined && val !== null ? (
-                  <div key={g} className="bg-slate-800/50 rounded p-2 text-center">
-                    <p className="text-[10px] text-slate-400 uppercase">{g}</p>
-                    <p className={`text-sm font-bold ${
-                      g === 'theta' ? 'text-red-400' :
-                      g === 'delta' ? (val >= 0 ? 'text-green-400' : 'text-red-400') :
-                      'text-blue-400'
-                    }`}>{Number(val).toFixed(3)}</p>
+            <div className="mt-3 space-y-2">
+              {/* Portfolio Greeks row */}
+              <div className="grid grid-cols-5 gap-2">
+                {([
+                  { key: 'delta',  label: 'Δ Delta',  color: (v: number) => v >= 0 ? 'text-green-400' : 'text-red-400',  hint: 'Price sensitivity' },
+                  { key: 'theta',  label: 'Θ Theta',  color: () => 'text-red-400',                                         hint: 'Daily time decay' },
+                  { key: 'vega',   label: 'ν Vega',   color: () => 'text-blue-400',                                        hint: 'IV sensitivity' },
+                  { key: 'gamma',  label: 'Γ Gamma',  color: () => 'text-purple-400',                                      hint: 'Delta change rate' },
+                  { key: 'rho',    label: 'ρ Rho',    color: (v: number) => v >= 0 ? 'text-slate-300' : 'text-slate-400', hint: 'Rate sensitivity' },
+                ] as { key: string; label: string; color: (v: number) => string; hint: string }[]).map(({ key, label, color, hint }) => {
+                  const val = greeks?.[key] ?? greeks?.portfolio?.[key];
+                  if (val === undefined || val === null) return null;
+                  const num = Number(val);
+                  return (
+                    <div key={key} className="bg-slate-800/60 rounded-lg p-2 text-center border border-slate-700/60" title={hint}>
+                      <p className="text-[10px] text-slate-500 mb-1">{label}</p>
+                      <p className={`text-sm font-bold font-mono ${color(num)}`}>
+                        {num >= 0 ? '' : ''}{num.toFixed(key === 'gamma' ? 4 : 3)}
+                      </p>
+                      <p className="text-[9px] text-slate-600 mt-0.5">{hint}</p>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Per-leg breakdown */}
+              {Array.isArray(greeks?.legs_details) && greeks.legs_details.length > 0 && (
+                <div className="mt-2">
+                  <p className="text-[10px] text-slate-500 mb-1 uppercase tracking-wider">Per Leg</p>
+                  <div className="space-y-1">
+                    {greeks.legs_details.map((lg: any, i: number) => (
+                      <div key={i} className="flex items-center gap-3 text-[11px] bg-slate-800/40 rounded px-2 py-1">
+                        <span className={`w-8 font-semibold ${lg.type === 'SELL' ? 'text-red-400' : 'text-green-400'}`}>{lg.type}</span>
+                        <span className="text-slate-400 w-16">{lg.strike} {lg.option_type}</span>
+                        <span className="text-slate-300">Δ <span className={Number(lg.delta) >= 0 ? 'text-green-400' : 'text-red-400'}>{Number(lg.delta).toFixed(3)}</span></span>
+                        <span className="text-slate-300">Θ <span className="text-red-400">{Number(lg.theta).toFixed(3)}</span></span>
+                        <span className="text-slate-300">ν <span className="text-blue-400">{Number(lg.vega).toFixed(3)}</span></span>
+                        <span className="text-slate-500 ml-auto">₹{Number(lg.premium).toFixed(1)}</span>
+                      </div>
+                    ))}
                   </div>
-                ) : null;
-              })}
+                </div>
+              )}
             </div>
           )}
         </div>

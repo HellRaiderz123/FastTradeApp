@@ -1,0 +1,1 @@
+# Scalp trading module

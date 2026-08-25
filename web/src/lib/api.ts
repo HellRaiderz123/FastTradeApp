@@ -182,6 +182,17 @@ export const exitAPI = {
     api.post(`/exit/manual/${intentId}`, {}),
 };
 
+// Direct ticket execution (Hedge / Adjust / Add-to-Position)
+export const directExecuteAPI = {
+  execute: (payload: {
+    underlying: string;
+    strategy: string;
+    ticket: any;
+    tp?: number;
+    sl?: number;
+  }) => api.post('/execute/direct-ticket', payload),
+};
+
 // Paper Trading APIs
 export const paperAPI = {
   updateMtM: () => api.post('/paper/mtm/update', {}),

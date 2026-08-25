@@ -35,6 +35,7 @@ import AIAnalysis from './pages/AIAnalysis';
 import SignalReconciliation from './pages/SignalReconciliation';
 import CandleBackfill from './pages/CandleBackfill';
 import ScheduledJobs from './pages/ScheduledJobs';
+import ScalpTrading from './pages/ScalpTrading';
 import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import CommandPalette from './components/CommandPalette';
@@ -121,6 +122,7 @@ function AppInner() {
                   <Route path="/journal" element={<Journal />} />
                   <Route path="/trade-costs" element={<TradeCostTracker />} />
                   <Route path="/auto-trader" element={<AutoTrader />} />
+                  <Route path="/scalp-trading" element={<ScalpTrading />} />
                   <Route path="/watchlists" element={<CustomWatchlists />} />
                   <Route path="/multi-timeframe" element={<MultiTimeframe />} />
                   <Route path="/calendar" element={<Calendar />} />

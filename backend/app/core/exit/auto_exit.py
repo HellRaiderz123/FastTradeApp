@@ -51,8 +51,15 @@ def run_auto_exit(db: Session):
         entry_credit = intent.entry_credit or 0.0
         strategy = (intent.strategy or "").upper()
         is_credit_spread = strategy in ("BULL_PUT", "BEAR_CALL", "IRON_CONDOR", "SHORT_STRADDLE", "SHORT_STRANGLE")
+        is_naked_buy = strategy in ("LONG_CALL", "LONG_PUT")
+        is_scalp = strategy in ("SCALP_CALL", "SCALP_PUT")
+        
         if is_credit_spread and entry_credit > 0 and current_pnl >= entry_credit * 0.5:
             reason = "PROFIT_50PCT"
+        
+        # Scalp: Quick exit at 25% profit (don't wait for full TP)
+        if not reason and is_scalp and entry_credit > 0 and current_pnl >= entry_credit * 0.25:
+            reason = "SCALP_PROFIT"
 
         # --- Fix 6: Time-based exit (on expiry day only, if profitable) ---
         if not reason and intent.expiry and current_pnl > 0:

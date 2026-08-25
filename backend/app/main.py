@@ -68,6 +68,7 @@ from app.api.routes import alexa
 from app.api.routes import simple_ai
 from app.api.routes import ai_analysis
 from app.api.routes import holdings as holdings_routes
+from app.api.routes import scalp
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -85,6 +86,8 @@ from app.core.market.scheduler import (
     start_strategy_discovery_scheduler,
     start_strategy_decay_scheduler,
     start_watchlist_analysis_scheduler,
+    start_scalp_trading_scheduler,
+    start_holdings_auto_exit_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -128,6 +131,13 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
         ensure_auto_trader_schema(engine)
         ensure_ai_decisions_schema(engine)
+        # Run column migrations (ADD COLUMN IF NOT EXISTS — safe to re-run)
+        from app.db.init_db import _MIGRATIONS
+        from sqlalchemy import text as _text
+        with engine.connect() as _conn:
+            for _stmt in _MIGRATIONS:
+                _conn.execute(_text(_stmt))
+            _conn.commit()
         logger.info("✅ Database tables initialized")
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")
@@ -156,6 +166,8 @@ async def lifespan(app: FastAPI):
             start_strategy_discovery_scheduler()
             start_strategy_decay_scheduler()
             start_watchlist_analysis_scheduler()
+            start_scalp_trading_scheduler()
+            start_holdings_auto_exit_scheduler()
             logger.info("✅ Schedulers started")
         except Exception as e:
             logger.warning(f"⚠️ Schedulers failed to start: {e}")
@@ -408,5 +420,6 @@ app.include_router(alexa.router)
 app.include_router(simple_ai.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(ai_analysis.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(holdings_routes.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(scalp.router, dependencies=[Depends(require_authenticated_user)])
 
 logger.info(" All routers registered (including Phase 5 features)")

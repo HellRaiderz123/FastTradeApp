@@ -136,6 +136,32 @@ def calculate_tp_sl(
         logger.info(f"IRON_CONDOR TP/SL: Spread Width: {spread_width}, "
                    f"Inherent Risk: {inherent_risk}, Adjusted TP: {tp}, SL: {sl}")
     
+    elif strategy_type in ["LONG_CALL", "LONG_PUT"]:
+        # Naked option buys: Limited risk (premium paid)
+        # TP: 100% gain on premium (2:1 R:R)
+        # SL: 50% loss on premium
+        # Premium estimate: ~2% of notional in LOW IV
+        premium_estimate = max_risk  # Use max_risk as proxy for premium
+        
+        tp = premium_estimate * 1.0   # 100% gain target
+        sl = -premium_estimate * 0.5  # 50% loss limit
+        
+        logger.info(f"NAKED_BUY TP/SL: {strategy_type} - "
+                   f"Premium Est: {premium_estimate}, TP: {tp}, SL: {sl}")
+    
+    elif strategy_type in ["SCALP_CALL", "SCALP_PUT"]:
+        # Scalp trades: Quick in/out with tight TP/SL
+        # TP: 30% gain (quick profit)
+        # SL: 20% loss (tight stop)
+        # R:R = 1.5:1
+        premium_estimate = max_risk * 0.5  # Smaller position for scalps
+        
+        tp = premium_estimate * 0.3   # 30% gain target
+        sl = -premium_estimate * 0.2  # 20% loss limit
+        
+        logger.info(f"SCALP TP/SL: {strategy_type} - "
+                   f"Premium Est: {premium_estimate}, TP: {tp}, SL: {sl}")
+    
     # =========================================
     # RETURN RESULT
     # =========================================

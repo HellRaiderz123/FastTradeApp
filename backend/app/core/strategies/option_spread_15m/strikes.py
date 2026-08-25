@@ -22,6 +22,11 @@ class SpreadStrikes(TypedDict):
     # Ratio Backspreads: (short_strike, long_strike_near, long_strike_far)
     call_ratio_backspread: Tuple[int, int, int]
     put_ratio_backspread: Tuple[int, int, int]
+    # Naked options: single strike
+    long_call: int
+    long_put: int
+    scalp_call: int
+    scalp_put: int
     meta: Dict[str, int]
 
 
@@ -29,7 +34,7 @@ def get_step(underlying: str) -> int:
     """
     Strike step based on underlying.
     """
-    return 50 if underlying == "NIFTY" else 100
+    return {"NIFTY": 50, "FINNIFTY": 50, "BANKNIFTY": 100}.get(underlying, 50)
 
 
 def compute_spread_strikes(
@@ -150,6 +155,20 @@ def compute_spread_strikes(
     put_ratio_long_near = atm - step  # OTM
     put_ratio_long_far = atm - (step * 2)  # Further OTM
 
+    # ============================
+    # NAKED OPTIONS (LOW IV buys)
+    # ============================
+    # Slightly OTM for directional plays
+    long_call_strike = atm + step  # 1 step OTM
+    long_put_strike = atm - step   # 1 step OTM
+
+    # ============================
+    # SCALP OPTIONS (momentum plays)
+    # ============================
+    # ATM for maximum delta/gamma
+    scalp_call_strike = atm
+    scalp_put_strike = atm
+
     return {
         "bull": (bull_short, bull_long),
         "bear": (bear_short, bear_long),
@@ -160,6 +179,10 @@ def compute_spread_strikes(
         "butterfly_put": (butterfly_lower, butterfly_middle, butterfly_upper),
         "call_ratio_backspread": (call_ratio_short, call_ratio_long_near, call_ratio_long_far),
         "put_ratio_backspread": (put_ratio_short, put_ratio_long_near, put_ratio_long_far),
+        "long_call": long_call_strike,
+        "long_put": long_put_strike,
+        "scalp_call": scalp_call_strike,
+        "scalp_put": scalp_put_strike,
         "meta": {
             "step": step,
             "width": width,

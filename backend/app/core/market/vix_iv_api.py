@@ -199,23 +199,54 @@ def determine_iv_regime(
 
     RULES:
     - India VIX is primary
-    - VIX Rank can only soften extremes
+    - VIX Rank can override when at extremes
+    
+    Updated thresholds (2024+):
+    - India VIX has been structurally lower (10-15 range typical)
+    - Old thresholds (14/20) were too high for current market
+    - New: <12 LOW, 12-16 NORMAL, >=16 HIGH
+    
+    VIX Rank interpretation:
+    - LOW rank (<20) = VIX near 52w lows = calm market = LOW IV regime
+    - HIGH rank (>70) = VIX near 52w highs = fear = HIGH IV regime
     """
 
-    # Primary regime from India VIX
-    if india_vix >= 20:
+    # Primary regime from India VIX (updated for 2024+ market)
+    if india_vix >= 16:
         base = "HIGH"
-    elif india_vix >= 14:
+    elif india_vix >= 12:
         base = "NORMAL"
     else:
         base = "LOW"
 
     # Secondary adjustment using VIX Rank
+    # VIX Rank tells us where current VIX sits in its own historical range (0-100 scale)
     if vix_rank is not None:
-        if base == "LOW" and vix_rank >= 80:
+        # VIX Rank is already on 0-100 scale from iv_rank_calculator
+        rank = float(vix_rank)
+        
+        # VIX Rank interpretation:
+        # - High rank (>70) means VIX is elevated vs its history → more fear → bump UP
+        # - Low rank (<20) means VIX is depressed vs its history → calm → bump DOWN
+        # - Current VIX at 52w lows = rank near 0 = very calm market
+        
+        # If VIX is LOW but rank is high (VIX rising from lows) → NORMAL
+        if base == "LOW" and rank >= 50:
             return "NORMAL"
-        if base == "HIGH" and vix_rank <= 20:
+        if base == "LOW" and rank >= 70:
+            return "HIGH"
+        
+        # If VIX is NORMAL but rank is very high → HIGH
+        if base == "NORMAL" and rank >= 80:
+            return "HIGH"
+        
+        # If VIX is HIGH but rank is low (VIX falling from highs) → NORMAL
+        if base == "HIGH" and rank <= 30:
             return "NORMAL"
+        
+        # If VIX is NORMAL but rank is very low → LOW
+        if base == "NORMAL" and rank <= 20:
+            return "LOW"
 
     return base
 

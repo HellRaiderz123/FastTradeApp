@@ -3,7 +3,13 @@ decision.py
 ------------
 Pure strategy-decision logic.
 Decides WHAT strategy to take, not HOW.
-Now with regime-based strategy unlocking.
+
+Key principles for profitability:
+1. SELL premium in HIGH IV (theta works for you)
+2. BUY premium in LOW IV only with strong directional conviction
+3. Use mean-reversion signals (oversold/overbought) for directional spreads
+4. Avoid premium selling in LOW IV (poor risk/reward)
+5. Require OI/PCR confirmation for directional trades
 """
 
 from typing import Dict, Any, Tuple
@@ -20,14 +26,6 @@ def decide_strategy(
 
     Returns:
         (strategy_mode, reason)
-
-    strategy_mode:
-        - BULL_PUT
-        - BEAR_CALL
-        - IRON_CONDOR
-        - CALL_RATIO_BACKSPREAD
-        - PUT_RATIO_BACKSPREAD
-        - NO_TRADE
     """
 
     bias = ctx.get("bias", "NEUTRAL")
@@ -36,157 +34,223 @@ def decide_strategy(
     quality_score = ctx.get("quality_score", 0)
     indicators = ctx.get("indicators", {})
 
-    adx = indicators.get("adx", 0)
+    adx = float(indicators.get("adx", 0))
+    rsi = float(indicators.get("rsi", 50))
+    stoch_k = float(indicators.get("stoch_k", 50))
+    pcr = float(indicators.get("option_pcr", 1.0) or 1.0)
 
-    # ================================================
-    # DAY CHANGE CONTEXT
-    # How the market is trading today relative to yesterday's close.
-    # A flat or near-flat open after a strong prior-day directional
-    # move means the market has ABSORBED (not continued) that impulse.
-    # Aggressive continuation strategies like Ratio Backspreads need
-    # the market to actually be moving in the expected direction today.
-    # ================================================
-    day_change_pct = ctx.get("day_change_pct", 0.0)
+    day_change_pct = float(ctx.get("day_change_pct", 0.0))
     open_type = ctx.get("open_type", "UNKNOWN")
 
-    # True if today's intraday move has confirmed the directional bias
+    # OI confirmation from option chain
+    oi_confirm = ctx.get("quality_checks", {}).get("oi_bias_confirm", True)
+
+    # ================================================
+    # MEAN REVERSION DETECTION (key for profitability)
+    # Oversold/overbought extremes often precede reversals
+    # ================================================
+    deeply_oversold = rsi <= 35 and stoch_k <= 20
+    deeply_overbought = rsi >= 65 and stoch_k >= 80
+    moderately_oversold = rsi <= 40 and stoch_k <= 30
+    moderately_overbought = rsi >= 60 and stoch_k >= 70
+
+    # PCR extremes (contrarian signals)
+    pcr_bullish = pcr >= 1.2  # High put buying = potential bottom
+    pcr_bearish = pcr <= 0.6  # High call buying = potential top
+
+    # Day confirmation
     bullish_day_confirmed = (
-        day_change_pct > 0.5
+        day_change_pct > 0.3
         or open_type in ("GAP_UP", "STRONG_GAP_UP")
-        or (open_type == "UNKNOWN")   # no data → don't block
+        or (open_type == "UNKNOWN")
     )
     bearish_day_confirmed = (
-        day_change_pct < -0.5
+        day_change_pct < -0.3
         or open_type in ("GAP_DOWN", "STRONG_GAP_DOWN")
-        or (open_type == "UNKNOWN")   # no data → don't block
+        or (open_type == "UNKNOWN")
     )
 
     # ================================================
-    # QUALITY GATE
+    # QUALITY GATE (relaxed for high-probability setups)
     # ================================================
-    if quality_score < 4:
-        return "NO_TRADE", f"Insufficient quality score ({quality_score}/8 - minimum 4 required)"
-
-    take_bull = bias == "BULLISH"
-    take_bear = bias == "BEARISH"
-
-    # Confidence thresholds (minimum 65% for all trades)
-    spread_min_conf = max(65, min_confidence)
-    if iv_regime == "LOW":
-        spread_min_conf = max(65, min_confidence - 5)
-    elif iv_regime == "NORMAL":
-        spread_min_conf = max(65, min_confidence)
-
-    # Ratio strategies require stronger conviction
-    ratio_min_conf = max(65, min_confidence)
-    ratio_quality_min = 6
+    base_quality_ok = quality_score >= 4
+    high_quality = quality_score >= 6
 
     # ================================================
-    # BREAKOUT / STRONG TREND → RATIO BACKSPREADS OR LONG STRADDLE/STRANGLE
+    # 1. HIGH IV REGIME → PREMIUM SELLING (best edge)
+    # This is where option sellers make money
     # ================================================
-    if market_mode in ["TRENDING", "BREAKOUT_SETUP"]:
-        # Strong directional conviction + low/normal IV → Ratio Backspreads
-        # Also require that today's price action has CONFIRMED the directional move
-        # (flat/neutral open after a strong prior-day move is NOT confirmation).
-        if (
-            adx >= 20
-            and iv_regime in ["LOW", "NORMAL"]
-            and confidence >= ratio_min_conf
-            and quality_score >= ratio_quality_min
-        ):
-            if take_bull and bullish_day_confirmed:
+    if iv_regime == "HIGH":
+        # RANGE + HIGH IV = ideal for premium selling
+        if market_mode == "RANGE":
+            if high_quality and confidence >= 70:
                 return (
-                    "CALL_RATIO_BACKSPREAD",
-                    f"Strong bullish move expected (ADX={adx:.1f}, IV={iv_regime}, conf={confidence:.0f}%, day={day_change_pct:+.2f}%)",
+                    "SHORT_STRANGLE",
+                    f"HIGH IV + RANGE = premium selling edge (VIX elevated, conf={confidence:.0f}%)"
                 )
-            if take_bear and bearish_day_confirmed:
+            if base_quality_ok:
                 return (
-                    "PUT_RATIO_BACKSPREAD",
-                    f"Strong bearish move expected (ADX={adx:.1f}, IV={iv_regime}, conf={confidence:.0f}%, day={day_change_pct:+.2f}%)",
+                    "IRON_CONDOR",
+                    f"HIGH IV + RANGE = defined-risk premium collection (conf={confidence:.0f}%)"
                 )
 
-            # Indicators show directional bias but today's price action has NOT confirmed it
-            # (e.g., flat open after yesterday's strong move). Downgrade to a safer spread.
-            if take_bull and not bullish_day_confirmed:
+        # TRENDING + HIGH IV + directional bias → directional spreads
+        if market_mode in ["TRENDING", "BREAKOUT_SETUP"]:
+            if bias == "BULLISH" and confidence >= 60 and oi_confirm:
                 return (
                     "BULL_PUT",
-                    f"Bullish TA but flat/weak open ({day_change_pct:+.2f}% today, open_type={open_type}) — waiting for day move to confirm; using safer spread",
+                    f"HIGH IV + bullish trend = sell puts for premium (ADX={adx:.1f}, conf={confidence:.0f}%)"
                 )
-            if take_bear and not bearish_day_confirmed:
+            if bias == "BEARISH" and confidence >= 60 and oi_confirm:
                 return (
                     "BEAR_CALL",
-                    f"Bearish TA but flat/weak open ({day_change_pct:+.2f}% today, open_type={open_type}) — waiting for day move to confirm; using safer spread",
+                    f"HIGH IV + bearish trend = sell calls for premium (ADX={adx:.1f}, conf={confidence:.0f}%)"
                 )
-        
-        # Expecting volatility spike (low IV currently) + no strong directional bias
-        if iv_regime == "LOW" and confidence < 60 and quality_score >= 5:
-            # Neutral/uncertain direction but expect big move → Long Straddle/Strangle
-            return (
-                "LONG_STRANGLE",
-                f"Expecting volatility spike without clear direction (IV={iv_regime}, conf={confidence:.0f}%)"
-            )
+            # No clear direction but high IV → still sell premium
+            if base_quality_ok:
+                return (
+                    "IRON_CONDOR",
+                    f"HIGH IV but unclear direction = wide Iron Condor (ADX={adx:.1f})"
+                )
 
-        # Fallback inside trend → safer spreads
-        if confidence >= spread_min_conf:
-            if take_bull:
-                return "BULL_PUT", f"Trending bullish but breakout not strong enough (ADX={adx:.1f})"
-            if take_bear:
-                return "BEAR_CALL", f"Trending bearish but breakout not strong enough (ADX={adx:.1f})"
-
-        return "NO_TRADE", "Trend present but conviction insufficient"
+        return "NO_TRADE", f"HIGH IV but unfavorable setup (mode={market_mode}, qual={quality_score})"
 
     # ================================================
-    # RANGE + HIGH IV → PREMIUM SELLING STRATEGIES
+    # 2. NORMAL IV REGIME → BALANCED APPROACH
     # ================================================
-    if market_mode == "RANGE" and iv_regime == "HIGH":
-        # VERY HIGH CONFIDENCE → SHORT STRADDLE (aggressive)
-        if quality_score >= 6 and confidence >= 80:
-            return (
-                "SHORT_STRADDLE",
-                f"Very high confidence range-bound with high IV (conf={confidence:.0f}%, qual={quality_score}/8)"
-            )
-        
-        # HIGH CONFIDENCE → SHORT STRANGLE (less aggressive)
-        if quality_score >= 6 and confidence >= 75:
-            return (
-                "SHORT_STRANGLE",
-                f"High confidence range-bound with high IV (conf={confidence:.0f}%, qual={quality_score}/8)"
-            )
-        
-        # MODERATE CONFIDENCE → IRON CONDOR (defined risk)
-        if quality_score >= 5:
-            return "IRON_CONDOR", "Range-bound market with high IV"
-        
-        return "NO_TRADE", "Range + high IV but insufficient quality"
+    if iv_regime == "NORMAL":
+        # MEAN REVERSION SETUPS (high probability)
+        if deeply_oversold and (pcr_bullish or oi_confirm):
+            if bullish_day_confirmed or day_change_pct > -0.8:
+                return (
+                    "BULL_PUT",
+                    f"Oversold bounce setup (RSI={rsi:.1f}, Stoch={stoch_k:.1f}, PCR={pcr:.2f})"
+                )
+        if deeply_overbought and (pcr_bearish or oi_confirm):
+            if bearish_day_confirmed or day_change_pct < 0.8:
+                return (
+                    "BEAR_CALL",
+                    f"Overbought pullback setup (RSI={rsi:.1f}, Stoch={stoch_k:.1f}, PCR={pcr:.2f})"
+                )
 
-    # ================================================
-    # RANGE + LOW/NORMAL IV → DIRECTIONAL SPREADS OR BUTTERFLY
-    # ================================================
-    if market_mode == "RANGE" and iv_regime in ["LOW", "NORMAL"]:
-        # Directional bias with enough confidence → spreads first
-        if confidence >= spread_min_conf:
-            if take_bull:
-                return "BULL_PUT", f"Range but bullish bias (conf={confidence:.0f}%)"
-            if take_bear:
-                return "BEAR_CALL", f"Range but bearish bias (conf={confidence:.0f}%)"
+        # TRENDING with confirmation
+        if market_mode in ["TRENDING", "BREAKOUT_SETUP"] and adx >= 22:
+            if bias == "BULLISH" and confidence >= 60 and oi_confirm:
+                return (
+                    "BULL_PUT",
+                    f"Bullish trend confirmed (ADX={adx:.1f}, conf={confidence:.0f}%)"
+                )
+            if bias == "BEARISH" and confidence >= 60 and oi_confirm:
+                return (
+                    "BEAR_CALL",
+                    f"Bearish trend confirmed (ADX={adx:.1f}, conf={confidence:.0f}%)"
+                )
 
-        # Weak directional bias (confidence 55-65) → still use spreads, lower bar
-        if confidence >= 55 and quality_score >= 5:
-            if take_bull:
-                return "BULL_PUT", f"Range with moderate bullish bias (conf={confidence:.0f}%)"
-            if take_bear:
-                return "BEAR_CALL", f"Range with moderate bearish bias (conf={confidence:.0f}%)"
-
-        # Truly neutral (no bias, low confidence) + days_to_expiry context needed
-        # Butterfly only makes sense near expiry when pinning is likely
-        # For intraday 15m system, prefer Iron Condor over Butterfly
-        if confidence < 55 and quality_score >= 5:
+        # RANGE with moderate confidence → Iron Condor
+        if market_mode == "RANGE" and base_quality_ok and confidence >= 50:
             return (
                 "IRON_CONDOR",
-                f"Range-bound with neutral bias and low/normal IV — Iron Condor preferred over Butterfly for intraday (conf={confidence:.0f}%)"
+                f"NORMAL IV + RANGE = balanced Iron Condor (conf={confidence:.0f}%)"
             )
 
-        return "NO_TRADE", "Range + low/normal IV without sufficient conviction"
+        # Moderate oversold/overbought with directional bias
+        if moderately_oversold and bias != "BEARISH" and base_quality_ok:
+            return (
+                "BULL_PUT",
+                f"Moderate oversold with neutral/bullish bias (RSI={rsi:.1f})"
+            )
+        if moderately_overbought and bias != "BULLISH" and base_quality_ok:
+            return (
+                "BEAR_CALL",
+                f"Moderate overbought with neutral/bearish bias (RSI={rsi:.1f})"
+            )
+
+        return "NO_TRADE", f"NORMAL IV but no clear edge (mode={market_mode}, bias={bias})"
+
+    # ================================================
+    # 3. LOW IV REGIME → BUY OPTIONS (cheap premium)
+    # Options are cheap - ideal for directional buys & scalping
+    # ================================================
+    if iv_regime == "LOW":
+        # Momentum detection for scalping
+        strong_momentum_up = day_change_pct >= 0.5 and rsi >= 55
+        strong_momentum_down = day_change_pct <= -0.5 and rsi <= 45
+
+        # ------------------------------------------------
+        # SCALPING: Quick momentum plays (tight SL, quick exit)
+        # Best when price is moving with momentum
+        # ------------------------------------------------
+        if market_mode == "TRENDING" and adx >= 25:
+            if strong_momentum_up and bias == "BULLISH":
+                return (
+                    "SCALP_CALL",
+                    f"LOW IV scalp: momentum up (day={day_change_pct:+.1f}%, ADX={adx:.1f}, RSI={rsi:.1f})"
+                )
+            if strong_momentum_down and bias == "BEARISH":
+                return (
+                    "SCALP_PUT",
+                    f"LOW IV scalp: momentum down (day={day_change_pct:+.1f}%, ADX={adx:.1f}, RSI={rsi:.1f})"
+                )
+
+        # ------------------------------------------------
+        # NAKED BUYS: Directional conviction plays
+        # Cheap options = limited risk, unlimited reward
+        # ------------------------------------------------
+        # Mean reversion bounce - buy calls on oversold
+        if deeply_oversold and (pcr_bullish or oi_confirm):
+            return (
+                "LONG_CALL",
+                f"LOW IV + oversold = cheap calls (RSI={rsi:.1f}, Stoch={stoch_k:.1f}, PCR={pcr:.2f})"
+            )
+        # Mean reversion drop - buy puts on overbought
+        if deeply_overbought and (pcr_bearish or oi_confirm):
+            return (
+                "LONG_PUT",
+                f"LOW IV + overbought = cheap puts (RSI={rsi:.1f}, Stoch={stoch_k:.1f}, PCR={pcr:.2f})"
+            )
+
+        # Strong trend with confirmation - ride the move
+        if market_mode == "TRENDING" and adx >= 22 and confidence >= 60:
+            if bias == "BULLISH" and bullish_day_confirmed:
+                return (
+                    "LONG_CALL",
+                    f"LOW IV + bullish trend = buy calls (ADX={adx:.1f}, conf={confidence:.0f}%)"
+                )
+            if bias == "BEARISH" and bearish_day_confirmed:
+                return (
+                    "LONG_PUT",
+                    f"LOW IV + bearish trend = buy puts (ADX={adx:.1f}, conf={confidence:.0f}%)"
+                )
+
+        # ------------------------------------------------
+        # BREAKOUT: Volatility expansion expected
+        # ------------------------------------------------
+        if market_mode == "BREAKOUT_SETUP" and adx >= 20 and high_quality:
+            if bias == "BULLISH" and confidence >= 65:
+                return (
+                    "LONG_CALL",
+                    f"LOW IV + breakout setup = buy calls before expansion (ADX={adx:.1f})"
+                )
+            if bias == "BEARISH" and confidence >= 65:
+                return (
+                    "LONG_PUT",
+                    f"LOW IV + breakout setup = buy puts before expansion (ADX={adx:.1f})"
+                )
+
+        # Moderate setups with directional bias
+        if moderately_oversold and bias != "BEARISH" and base_quality_ok:
+            return (
+                "LONG_CALL",
+                f"LOW IV + moderate oversold = speculative call buy (RSI={rsi:.1f})"
+            )
+        if moderately_overbought and bias != "BULLISH" and base_quality_ok:
+            return (
+                "LONG_PUT",
+                f"LOW IV + moderate overbought = speculative put buy (RSI={rsi:.1f})"
+            )
+
+        # No clear setup - still avoid (preserve capital)
+        return "NO_TRADE", f"LOW IV but no clear directional setup (ADX={adx:.1f}, RSI={rsi:.1f})"
 
     # ================================================
     # FALLBACK

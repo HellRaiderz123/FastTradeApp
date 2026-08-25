@@ -34,6 +34,7 @@ from app.core.strategies.option_spread_15m.risk import (
     check_straddle_strangle_risk,
     check_butterfly_risk,
     check_ratio_backspread_risk,
+    check_naked_option_risk,
 )
 from app.core.risk.risk_limits_config import get_risk_limits
 
@@ -192,9 +193,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # Fallback to standard lot sizes
         lot_size_map = {
-            "NIFTY": 50,
-            "BANKNIFTY": 20,
-            "FINNIFTY": 40,
+            "NIFTY": 75,
+            "BANKNIFTY": 30,
+            "FINNIFTY": 65,
         }
         lot_size = lot_size_map.get(underlying, 50)
         import logging
@@ -228,6 +229,12 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         ratio_short, ratio_long_near, ratio_long_far = strikes["call_ratio_backspread"]
     elif strategy_mode == "PUT_RATIO_BACKSPREAD":
         ratio_short, ratio_long_near, ratio_long_far = strikes["put_ratio_backspread"]
+    elif strategy_mode in ["LONG_CALL", "SCALP_CALL"]:
+        naked_strike = strikes["long_call"] if strategy_mode == "LONG_CALL" else strikes["scalp_call"]
+        opt_type = "CE"
+    elif strategy_mode in ["LONG_PUT", "SCALP_PUT"]:
+        naked_strike = strikes["long_put"] if strategy_mode == "LONG_PUT" else strikes["scalp_put"]
+        opt_type = "PE"
     else:
         return {
             "strategy": strategy_mode,
@@ -333,6 +340,28 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             lots=lots,
             iv_regime=iv_regime_str,
             is_call=False,
+            risk_config=risk_config,
+        )
+    elif strategy_mode in ["LONG_CALL", "LONG_PUT"]:
+        ok, risk_reason, risk_metrics = check_naked_option_risk(
+            strike=naked_strike,
+            spot=spot,
+            capital=capital,
+            lot_size=lot_size,
+            lots=lots,
+            iv_regime=iv_regime_str,
+            is_scalp=False,
+            risk_config=risk_config,
+        )
+    elif strategy_mode in ["SCALP_CALL", "SCALP_PUT"]:
+        ok, risk_reason, risk_metrics = check_naked_option_risk(
+            strike=naked_strike,
+            spot=spot,
+            capital=capital,
+            lot_size=lot_size,
+            lots=lots,
+            iv_regime=iv_regime_str,
+            is_scalp=True,
             risk_config=risk_config,
         )
     else:
@@ -742,6 +771,31 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                         expiry=expiry,
                         strike=ratio_long_far,
                         option_type="PE",
+                    ),
+                },
+            ],
+        }
+    
+    # ============================
+    # NAKED OPTION BUYS (LOW IV)
+    # ============================
+    elif strategy_mode in ["LONG_CALL", "LONG_PUT", "SCALP_CALL", "SCALP_PUT"]:
+        ticket = {
+            "strategy": strategy_mode,
+            "underlying": underlying,
+            "lot_size": lot_size,
+            "lots": lots,
+            "expiry": str(expiry),
+            "legs": [
+                {
+                    "side": "BUY",
+                    "strike": naked_strike,
+                    "type": opt_type,
+                    "symbol": build_zerodha_option_symbol(
+                        underlying=underlying,
+                        expiry=expiry,
+                        strike=naked_strike,
+                        option_type=opt_type,
                     ),
                 },
             ],
