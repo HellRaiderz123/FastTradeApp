@@ -26,6 +26,7 @@ xgboost>=2.0.0
 lightgbm>=4.0.0
 shap>=0.44.0
 optuna>=3.5.0
+tensorflow>=2.15.0
 
 # ===============================
 # Plotting (optional for now, keep for parity)

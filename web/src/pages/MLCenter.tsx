@@ -31,10 +31,11 @@ import {
 } from './MLIntelligence';
 
 // ========================= TAB DEFINITIONS ==============================
-type Tab = 'overview' | 'ensemble' | 'shap' | 'signal-backtest' | 'news-sentiment' | 'correlation' | 'walk-forward';
+type Tab = 'overview' | 'lstm' | 'ensemble' | 'shap' | 'signal-backtest' | 'news-sentiment' | 'correlation' | 'walk-forward';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'overview', label: 'Overview', icon: Brain },
+  { id: 'lstm', label: 'LSTM', icon: Activity },
   { id: 'ensemble', label: 'Ensemble', icon: Layers },
   { id: 'shap', label: 'Feature Importance', icon: BarChart3 },
   { id: 'signal-backtest', label: 'Signal Backtest', icon: Target },

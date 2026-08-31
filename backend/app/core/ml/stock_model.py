@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
 
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import (
@@ -95,31 +95,26 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
 
     x_train, x_val, x_test, y_train, y_val, y_test = _per_symbol_split(x, y)
 
-    # Undersample majority class in training set only to remove directional bias.
-    # Sort by index to preserve chronological order within each symbol.
-    train_df = x_train.copy()
-    train_df["__label__"] = y_train.values
-    minority_n = train_df["__label__"].value_counts().min()
-    train_balanced = pd.concat([
-        train_df[train_df["__label__"] == cls]
-        .sample(minority_n, random_state=42)
-        .sort_index()          # restore chronological order
-        for cls in [0, 1]
-    ]).sort_index()            # interleave both classes chronologically
-    x_train = train_balanced.drop(columns=["__label__"])
-    y_train = train_balanced["__label__"]
-    logger.info(f"📊 Balanced train: {len(x_train)} rows (UP={minority_n} DOWN={minority_n})")
+    # Calculate class weights for imbalanced data
+    n_samples = len(y_train)
+    n_pos = y_train.sum()
+    n_neg = n_samples - n_pos
+    logger.info(f"📊 Class balance - UP: {n_pos}, DOWN: {n_neg}")
 
+    # Use HistGradientBoostingClassifier - faster, handles NaN, better generalization
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
-        ("clf", GradientBoostingClassifier(
-            n_estimators=200,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            min_samples_split=30,
-            min_samples_leaf=15,
-            max_features="sqrt",
+        ("clf", HistGradientBoostingClassifier(
+            max_iter=300,
+            max_depth=5,
+            learning_rate=0.03,
+            min_samples_leaf=50,
+            max_leaf_nodes=31,
+            l2_regularization=1.0,
+            early_stopping=True,
+            validation_fraction=0.15,
+            n_iter_no_change=20,
+            class_weight="balanced",
             random_state=42,
         )),
     ])
@@ -153,18 +148,18 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
     # Get classification report
     class_report = classification_report(y_test, y_pred, output_dict=True, zero_division=0) if len(x_test) else {}
 
-    # Feature importance from GradientBoosting
+    # Feature importance from HistGradientBoosting
     try:
         feature_importance = dict(zip(FEATURE_COLUMNS, pipeline.named_steps["clf"].feature_importances_.tolist()))
-        top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:5]
-        logger.info(f"📊 Top 5 features: {top_features}")
+        top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:10]
+        logger.info(f"📊 Top 10 features: {top_features}")
     except Exception:
         feature_importance = {}
 
     logger.info(f"✅ Model trained: accuracy={accuracy:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}, roc_auc={roc_auc:.4f}")
 
     metadata = {
-        "model_type": "GradientBoosting",
+        "model_type": "HistGradientBoosting",
         "timeframe": config.timeframe,
         "horizon": config.horizon,
         "return_threshold": config.return_threshold,

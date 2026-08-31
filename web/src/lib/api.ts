@@ -495,6 +495,14 @@ export const mlAPI = {
   predict: (symbol: string) => api.get(`/ml/predict/${symbol}`),
   predictBulk: (symbols: string[]) => api.post('/ml/predict-bulk', { symbols }),
 
+  // --- LSTM Model -------------------------------------------------
+  trainLSTM: (params?: { seq_length?: number; epochs?: number; batch_size?: number }) =>
+    api.post('/ml/lstm/train', params || {}),
+  getLSTMInfo: () => api.get('/ml/lstm/info'),
+  lstmPredict: (symbol: string) => api.get(`/ml/lstm/predict/${symbol}`),
+  lstmPredictBulk: (symbols: string[]) => api.post('/ml/lstm/predict-bulk', { symbols }),
+  lstmCompare: (symbol: string) => api.get(`/ml/lstm/compare/${symbol}`),
+
   // --- Tier 3: ML Intelligence -------------------------------------------------
   // #15 Ensemble
   trainEnsemble: () => api.post('/ml/ensemble/train'),

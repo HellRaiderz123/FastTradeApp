@@ -11,12 +11,18 @@ FEATURE_COLUMNS: List[str] = [
     "ret_1",
     "ret_short",
     "ret_long",
+    # Lag features (autocorrelation)
+    "ret_1_lag1",
+    "ret_1_lag2",
+    "ret_1_lag3",
     # Volatility
     "volatility",
     "atr_norm",
+    "volatility_change",
     # Trend indicators
     "rsi",
     "macd_hist",
+    "macd_hist_change",
     "adx",
     # EMA slopes (price-relative, not raw price)
     "ema_fast_slope",
@@ -31,6 +37,7 @@ FEATURE_COLUMNS: List[str] = [
     # Volume
     "volume_ratio",
     "obv_slope",
+    "volume_price_corr",
     # Candle patterns
     "body_ratio",
     "upper_shadow",
@@ -40,6 +47,9 @@ FEATURE_COLUMNS: List[str] = [
     "ret_5_vs_vol",
     "close_vs_high20",
     "close_vs_low20",
+    # Momentum divergence
+    "price_rsi_divergence",
+    "momentum_acceleration",
     # Regime features (binary market condition flags)
     "high_vol_regime",
     "low_vol_regime",
@@ -59,6 +69,11 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     data["ret_1"] = data["close"].pct_change()
     data["ret_short"] = data["close"].pct_change(config.ret_short_window)
     data["ret_long"] = data["close"].pct_change(config.ret_long_window)
+    
+    # --- Lag features (capture autocorrelation patterns) ---
+    data["ret_1_lag1"] = data["ret_1"].shift(1)
+    data["ret_1_lag2"] = data["ret_1"].shift(2)
+    data["ret_1_lag3"] = data["ret_1"].shift(3)
 
     # --- Volatility ---
     data["volatility"] = data["close"].pct_change().rolling(config.vol_window).std()
@@ -70,6 +85,7 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
         (data["low"] - data["close"].shift(1)).abs(),
     ], axis=1).max(axis=1)
     data["atr_norm"] = tr.rolling(14).mean() / data["close"]
+    data["volatility_change"] = data["volatility"].pct_change(5)  # Volatility momentum
 
     # --- Trend Indicators ---
     data["rsi"] = compute_rsi(data["close"], period=config.rsi_period)
@@ -77,6 +93,7 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     data["macd_hist"] = macd_hist
 
     data["adx"] = compute_adx(data)
+    data["macd_hist_change"] = data["macd_hist"].diff(3)  # MACD momentum
 
     # --- Moving Averages ---
     data["ema_fast"] = data["close"].ewm(span=config.ema_fast).mean()
@@ -107,6 +124,9 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     obv_direction = ((data["close"] > data["close"].shift(1)).astype(int) * 2 - 1)
     data["obv_slope"] = obv_direction.rolling(10).mean()  # -1 to +1 smoothed direction
     
+    # Volume-price correlation (smart money indicator)
+    data["volume_price_corr"] = data["ret_1"].rolling(20).corr(data["volume_ratio"])
+    
     # --- Candle Body Patterns ---
     candle_range = data["high"] - data["low"]
     candle_range = candle_range.replace(0, np.nan)  # Avoid division by zero
@@ -121,6 +141,14 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     rolling_low = data["low"].rolling(20).min()
     data["close_vs_high20"] = (data["close"] - rolling_high) / rolling_high  # proximity to 20d high
     data["close_vs_low20"] = (data["close"] - rolling_low) / rolling_low    # proximity to 20d low
+    
+    # --- Momentum divergence (price vs RSI direction mismatch) ---
+    price_direction = data["ret_short"].rolling(5).mean()
+    rsi_direction = data["rsi"].diff(5) / 100
+    data["price_rsi_divergence"] = price_direction - rsi_direction
+    
+    # Momentum acceleration (2nd derivative of price)
+    data["momentum_acceleration"] = data["ret_1"].diff(3)
 
     # --- Regime features (from reference: high_vol, low_vol, trend_up, trend_strength) ---
     # These binary regime flags help the model separate market conditions

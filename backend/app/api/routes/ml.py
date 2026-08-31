@@ -20,6 +20,12 @@ from app.db.session import SessionLocal
 from app.db.models_candles import CandleDaily
 from app.core.market.candles import fetch_daily_candles
 
+# LSTM imports (optional - requires tensorflow)
+try:
+    from app.core.ml.lstm_model import train_lstm_model, predict_lstm_signal, load_lstm_model, TF_AVAILABLE
+except ImportError:
+    TF_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ml", tags=["ML"])
 
@@ -915,3 +921,168 @@ async def get_job_status(job_id: str) -> Dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+# ===========================================================================
+# LSTM MODEL ENDPOINTS
+# ===========================================================================
+
+class LSTMTrainRequest(BaseModel):
+    seq_length: int = 20
+    epochs: int = 50
+    batch_size: int = 64
+
+
+@router.post("/lstm/train")
+async def train_lstm_endpoint(
+    req: LSTMTrainRequest = LSTMTrainRequest(),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Train LSTM model for stock prediction (runs in background).
+    Requires TensorFlow: pip install tensorflow
+    """
+    if not TF_AVAILABLE:
+        raise HTTPException(
+            status_code=400, 
+            detail="TensorFlow not installed. Run: pip install tensorflow"
+        )
+    
+    from app.core.ml.job_store import submit_job, get_running_by_type
+    
+    running = get_running_by_type("lstm-train")
+    if running:
+        return {
+            "status": "already_running",
+            "job_id": running["job_id"],
+            "message": "LSTM training already in progress",
+        }
+    
+    symbols = _get_nifty100_symbols(db)
+    if not symbols:
+        raise HTTPException(status_code=400, detail="No stock data found")
+    
+    def _run_lstm_training():
+        local_db = SessionLocal()
+        start = datetime.now()
+        try:
+            result = train_lstm_model(
+                local_db, symbols, ML_CONFIG,
+                seq_length=req.seq_length,
+                epochs=req.epochs,
+                batch_size=req.batch_size
+            )
+            result["training_duration"] = (datetime.now() - start).total_seconds()
+            result["status"] = "success"
+            return result
+        finally:
+            local_db.close()
+    
+    job_id = submit_job("lstm-train", _run_lstm_training, {
+        "symbols_count": len(symbols),
+        "seq_length": req.seq_length,
+        "epochs": req.epochs,
+    })
+    
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "message": f"LSTM training started for {len(symbols)} symbols. Poll /ml/jobs/{job_id} for results.",
+        "symbols_count": len(symbols),
+    }
+
+
+@router.get("/lstm/info")
+async def get_lstm_info() -> Dict[str, Any]:
+    """Get LSTM model metadata and metrics."""
+    if not TF_AVAILABLE:
+        return {"status": "tensorflow_not_installed", "message": "Install with: pip install tensorflow"}
+    
+    meta_path = ML_CONFIG.model_dir / "lstm_model.json"
+    if not meta_path.exists():
+        return {"status": "not_trained"}
+    
+    with open(meta_path, "r") as f:
+        metadata = json.load(f)
+    
+    return {"status": "ready", **metadata}
+
+
+@router.get("/lstm/predict/{symbol}")
+async def lstm_predict(symbol: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Get LSTM prediction for a symbol."""
+    if not TF_AVAILABLE:
+        raise HTTPException(status_code=400, detail="TensorFlow not installed")
+    
+    result = predict_lstm_signal(db, symbol.upper(), ML_CONFIG)
+    result["symbol"] = symbol.upper()
+    result["timestamp"] = datetime.now().isoformat()
+    result["model_type"] = "LSTM"
+    return result
+
+
+class LSTMBulkRequest(BaseModel):
+    symbols: list[str]
+
+
+@router.post("/lstm/predict-bulk")
+async def lstm_predict_bulk(
+    request: LSTMBulkRequest, 
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """Bulk LSTM predictions (max 20 symbols)."""
+    if not TF_AVAILABLE:
+        raise HTTPException(status_code=400, detail="TensorFlow not installed")
+    
+    predictions = {}
+    for sym in request.symbols[:20]:
+        s = sym.upper()
+        try:
+            predictions[s] = predict_lstm_signal(db, s, ML_CONFIG)
+        except Exception as e:
+            predictions[s] = {
+                "signal": "NO_TRADE", 
+                "confidence": 0, 
+                "bias": "NEUTRAL", 
+                "reason": str(e)
+            }
+    
+    return {
+        "predictions": predictions,
+        "count": len(predictions),
+        "model_type": "LSTM",
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+@router.get("/lstm/compare/{symbol}")
+async def lstm_vs_gbm(symbol: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Compare LSTM vs GradientBoosting predictions for a symbol."""
+    sym = symbol.upper()
+    
+    # GBM prediction
+    try:
+        from app.core.ml.stock_model import predict_stock_signal
+        gbm = predict_stock_signal(db, sym, ML_CONFIG)
+        gbm["model"] = "HistGradientBoosting"
+    except Exception as e:
+        gbm = {"signal": "ERROR", "confidence": 0, "reason": str(e), "bias": "NEUTRAL"}
+    
+    # LSTM prediction
+    if TF_AVAILABLE:
+        try:
+            lstm = predict_lstm_signal(db, sym, ML_CONFIG)
+            lstm["model"] = "LSTM"
+        except Exception as e:
+            lstm = {"signal": "ERROR", "confidence": 0, "reason": str(e), "bias": "NEUTRAL"}
+    else:
+        lstm = {"signal": "N/A", "confidence": 0, "reason": "TensorFlow not installed", "bias": "NEUTRAL"}
+    
+    return {
+        "symbol": sym,
+        "gbm_model": gbm,
+        "lstm_model": lstm,
+        "agreement": gbm.get("signal") == lstm.get("signal"),
+        "timestamp": datetime.now().isoformat(),
+    }
+
