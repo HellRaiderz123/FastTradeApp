@@ -28,20 +28,23 @@ import {
   NewsSentimentTab,
   CorrelationTab,
   WalkForwardTab,
+  LSTMTab,
+  OverfittingTab,
 } from './MLIntelligence';
 
 // ========================= TAB DEFINITIONS ==============================
-type Tab = 'overview' | 'lstm' | 'ensemble' | 'shap' | 'signal-backtest' | 'news-sentiment' | 'correlation' | 'walk-forward';
+type Tab = 'overview' | 'overfitting' | 'lstm' | 'ensemble' | 'shap' | 'signal-backtest' | 'news-sentiment' | 'correlation' | 'walk-forward';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'overview', label: 'Overview', icon: Brain },
-  { id: 'lstm', label: 'LSTM', icon: Activity },
-  { id: 'ensemble', label: 'Ensemble', icon: Layers },
-  { id: 'shap', label: 'Feature Importance', icon: BarChart3 },
-  { id: 'signal-backtest', label: 'Signal Backtest', icon: Target },
-  { id: 'news-sentiment', label: 'News Sentiment', icon: Newspaper },
-  { id: 'correlation', label: 'Correlation', icon: Grid },
-  { id: 'walk-forward', label: 'Walk-Forward', icon: GitBranch },
+  { id: 'overview',       label: 'Overview',          icon: Brain },
+  { id: 'overfitting',    label: 'Overfitting Check',  icon: AlertCircle },
+  { id: 'lstm',           label: 'LSTM',               icon: Activity },
+  { id: 'ensemble',       label: 'Ensemble',           icon: Layers },
+  { id: 'shap',           label: 'Feature Importance', icon: BarChart3 },
+  { id: 'signal-backtest',label: 'Signal Backtest',    icon: Target },
+  { id: 'news-sentiment', label: 'News Sentiment',     icon: Newspaper },
+  { id: 'correlation',    label: 'Correlation',        icon: Grid },
+  { id: 'walk-forward',   label: 'Walk-Forward',       icon: GitBranch },
 ];
 
 // ========================= INTERFACES ===================================
@@ -103,13 +106,15 @@ const MLCenter: React.FC = () => {
 
       {/* Tab content */}
       <div>
-        {activeTab === 'overview' && <OverviewTab />}
-        {activeTab === 'ensemble' && <EnsembleTab />}
-        {activeTab === 'shap' && <ShapTab />}
+        {activeTab === 'overview'        && <OverviewTab />}
+        {activeTab === 'overfitting'     && <OverfittingTab />}
+        {activeTab === 'lstm'            && <LSTMTab />}
+        {activeTab === 'ensemble'        && <EnsembleTab />}
+        {activeTab === 'shap'            && <ShapTab />}
         {activeTab === 'signal-backtest' && <SignalBacktestTab />}
-        {activeTab === 'news-sentiment' && <NewsSentimentTab />}
-        {activeTab === 'correlation' && <CorrelationTab />}
-        {activeTab === 'walk-forward' && <WalkForwardTab />}
+        {activeTab === 'news-sentiment'  && <NewsSentimentTab />}
+        {activeTab === 'correlation'     && <CorrelationTab />}
+        {activeTab === 'walk-forward'    && <WalkForwardTab />}
       </div>
     </div>
   );
@@ -306,7 +311,7 @@ const OverviewTab: React.FC = () => {
 
       const jobId = data.job_id;
       let attempts = 0;
-      const MAX_ATTEMPTS = 120; // 6 minutes max (120 × 3s)
+      const MAX_ATTEMPTS = 400; // 20 minutes max (400 × 3s)
 
       const poll = async (): Promise<void> => {
         attempts++;

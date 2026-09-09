@@ -32,10 +32,10 @@ class MomentumStrategy(BaseStrategy):
             strategy_type=StrategyType.MOMENTUM,
             asset_types=[AssetType.STOCK]
         )
-        self.min_confidence = 65
-        self.rsi_threshold = 50
-        self.risk_percent = 2.0  # 2% stop loss
-        self.reward_multiple = 1.5  # 1.5x risk for target
+        self.min_confidence = 68
+        self.rsi_threshold = 52
+        self.risk_percent = 1.5
+        self.reward_multiple = 2.0
     
     def initialize(self) -> bool:
         """Validate configuration"""

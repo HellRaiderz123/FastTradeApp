@@ -19,6 +19,7 @@ from app.db.finance_repo import (
     get_transactions,
     update_category,
     delete_all_transactions,
+    backfill_merchants,
     create_recurring_transaction,
     get_recurring_transactions,
     update_recurring_transaction,
@@ -62,6 +63,13 @@ router = APIRouter(prefix="/finance", tags=["Finance"])
 
 
 # ============= TRANSACTIONS =============
+@router.post("/transactions/backfill-merchants")
+def run_merchant_backfill(db: Session = Depends(get_db)):
+    """One-time: infer merchant name for existing rows that have merchant=NULL."""
+    updated = backfill_merchants(db)
+    return {"status": "ok", "updated": updated}
+
+
 @router.post("/transactions")
 def bulk_create_transactions(
     payload: list[FinanceTransactionCreate],

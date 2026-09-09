@@ -78,8 +78,15 @@ export default function TransactionsTable({
                   {t.date}
                 </td>
 
-                <td className="max-w-xl truncate">
-                  {t.particulars}
+                <td className="max-w-xl">
+                  <div className="font-medium text-slate-100">
+                    {t.merchant || t.particulars}
+                  </div>
+                  {t.merchant && t.particulars !== t.merchant && (
+                    <div className="text-xs text-slate-500 truncate max-w-xs" title={t.particulars}>
+                      {t.particulars}
+                    </div>
+                  )}
                 </td>
 
                 <td className="p-3 text-right text-red-400">

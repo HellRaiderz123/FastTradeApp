@@ -1008,6 +1008,33 @@ async def get_lstm_info() -> Dict[str, Any]:
     return {"status": "ready", **metadata}
 
 
+@router.get("/overfitting/{model_type}")
+async def get_overfitting_report(model_type: str = "single") -> Dict[str, Any]:
+    """
+    Return the saved overfitting diagnostics report for a trained model.
+    model_type: single | ensemble | lstm
+    """
+    if model_type == "lstm":
+        meta_path = ML_CONFIG.model_dir / "lstm_model.json"
+    elif model_type == "ensemble":
+        meta_path = ML_CONFIG.model_dir / "ensemble_model.json"
+    else:
+        meta_path = ML_CONFIG.model_path.with_suffix(".json")
+
+    if not meta_path.exists():
+        return {"status": "not_trained", "model_type": model_type}
+
+    with open(meta_path, "r") as f:
+        metadata = json.load(f)
+
+    report = metadata.get("overfitting")
+    if not report:
+        return {"status": "no_report", "model_type": model_type,
+                "message": "Retrain the model to generate an overfitting report."}
+
+    return {"status": "ready", "model_type": model_type, **report}
+
+
 @router.get("/lstm/predict/{symbol}")
 async def lstm_predict(symbol: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Get LSTM prediction for a symbol."""

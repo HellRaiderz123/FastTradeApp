@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class FinanceTransactionCreate(BaseModel):
     tran_date: date
     description: str
+    merchant: Optional[str] = None
     debit: float = 0
     credit: float = 0
     balance: float = 0
@@ -21,6 +22,7 @@ class FinanceTransactionOut(BaseModel):
     id: int
     tran_date: date
     description: str
+    merchant: Optional[str] = None
     debit: float
     credit: float
     balance: float

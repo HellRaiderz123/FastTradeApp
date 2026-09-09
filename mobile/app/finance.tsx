@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Line, Path, Rect } from 'react-native-svg';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { financeAPI } from '../lib/api';
+import { getCategoryInfo } from '../lib/smsScanner';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { EmptyState, GlassCard, LoadingSpinner, PrimaryButton, ProgressBar, ScreenHeader, StatCard, Tag } from '../components/ui';
 
@@ -24,6 +25,7 @@ type Transaction = {
   id?: number;
   tran_date?: string;
   description?: string;
+  merchant?: string;
   debit?: number;
   credit?: number;
   balance?: number;
@@ -181,7 +183,10 @@ export default function FinanceScreen() {
 
       let nextTransactions: Transaction[] = [];
       if (txRes.status === 'fulfilled' && Array.isArray(txRes.value.data)) {
-        nextTransactions = txRes.value.data;
+        nextTransactions = txRes.value.data.map((t: any) => ({
+          ...t,
+          merchant: t.merchant || undefined,
+        }));
         setTransactions(nextTransactions);
       }
       if (goalRes.status === 'fulfilled') setGoals(Array.isArray(goalRes.value.data) ? goalRes.value.data : []);
@@ -559,20 +564,34 @@ export default function FinanceScreen() {
                 const credit = Number(tx.credit || 0);
                 const amount = credit > 0 ? credit : debit;
                 const isCredit = credit > 0;
+                const cat = getCategoryInfo(tx.category || 'Uncategorized');
+                const dateLabel = tx.tran_date
+                  ? new Date(tx.tran_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+                  : '-';
                 return (
                   <View key={`${tx.id || tx.tran_date}-${idx}`} style={styles.txRow}>
+                    {/* Category icon */}
+                    <View style={[styles.txIcon, { backgroundColor: cat.bg }]}>
+                      <Text style={styles.txIconEmoji}>{cat.emoji}</Text>
+                    </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.itemTitle}>{tx.description || 'Transaction'}</Text>
-                      <Text style={styles.itemSub}>{tx.tran_date || '-'}</Text>
+                      <Text style={styles.itemTitle} numberOfLines={1}>
+                        {tx.merchant || tx.description || 'Transaction'}
+                      </Text>
+                      <Text style={styles.itemSub} numberOfLines={1}>
+                        {dateLabel} · {tx.description || ''}
+                      </Text>
                       <TouchableOpacity onPress={() => setCategoryModalTx(tx)} style={styles.categoryChip}>
                         <Text style={styles.categoryChipText}>{tx.category || 'Uncategorized'}</Text>
                         <Ionicons name="pencil-outline" size={11} color={Colors.accent} style={{ marginLeft: 4 }} />
                       </TouchableOpacity>
                     </View>
                     <View style={styles.txRight}>
-                      <Text style={[styles.itemValue, { color: isCredit ? Colors.green : Colors.textPrimary }]}>{isCredit ? '+' : '-'}{money(amount)}</Text>
+                      <Text style={[styles.itemValue, { color: isCredit ? Colors.green : Colors.red, fontSize: 14 }]}>
+                        {isCredit ? '+' : '-'}{money(amount)}
+                      </Text>
                       <TouchableOpacity onPress={() => deleteTransaction(tx)} style={styles.deleteButton}>
-                        <Ionicons name="trash-outline" size={16} color={Colors.red} />
+                        <Ionicons name="trash-outline" size={16} color={Colors.textMuted} />
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -964,6 +983,16 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.border,
     gap: 8,
   },
+  txIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 4,
+    flexShrink: 0,
+  },
+  txIconEmoji: { fontSize: 18 },
   txRight: { alignItems: 'flex-end', marginLeft: 10 },
   deleteButton: { marginTop: 6, padding: 4 },
   categoryChip: {

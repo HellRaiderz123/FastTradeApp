@@ -38,6 +38,7 @@ services:
       - ./backend/app:/app/app
       - ./backend/models:/app/models
       - ./backend/data/ml_models:/app/data/ml_models
+      - ./backend/scripts:/app/scripts
     ports:
       - "8000:8000"
     depends_on:

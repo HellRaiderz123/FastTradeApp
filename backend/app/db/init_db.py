@@ -12,6 +12,7 @@ from app.core.scalp.scalp_paper_trader import ScalpTrade
 _MIGRATIONS = [
     "ALTER TABLE execution_intents ADD COLUMN IF NOT EXISTS execution_mode VARCHAR;",
     "ALTER TABLE risk_limits ADD COLUMN IF NOT EXISTS per_trade_risk_pct FLOAT DEFAULT 2.0;",
+    "ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS merchant VARCHAR;",
 ]
 
 

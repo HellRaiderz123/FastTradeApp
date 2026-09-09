@@ -17,6 +17,7 @@ export interface Transaction {
   id?: number;
   date: string;
   particulars: string;
+  merchant?: string;
   debit: number;
   credit: number;
   balance: number;
@@ -101,6 +102,7 @@ export default function FinanceTracker() {
       id: t.id,
       date: t.tran_date,
       particulars: t.description,
+      merchant: t.merchant || undefined,
       debit: t.debit,
       credit: t.credit,
       balance: t.balance,

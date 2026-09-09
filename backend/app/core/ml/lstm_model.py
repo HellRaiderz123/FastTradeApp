@@ -3,7 +3,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 
 import numpy as np
@@ -14,8 +14,9 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import joblib
 
 from app.core.ml.config import StockMLConfig
-from app.core.ml.dataset import _load_candles_df
+from app.core.ml.dataset import _load_candles_df, build_stock_ml_dataset
 from app.core.ml.feature_builder import build_features_from_df, FEATURE_COLUMNS
+from app.core.ml.overfitting import check_overfitting
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +38,14 @@ def _create_sequences(X: np.ndarray, y: np.ndarray, seq_length: int) -> Tuple[np
         return np.empty((0, seq_length, X.shape[1])), np.empty((0,))
     
     # Vectorized sliding window
-    num_seq = len(X) - seq_length
     X_seq = np.lib.stride_tricks.sliding_window_view(X[:-1], window_shape=(seq_length, X.shape[1])).squeeze(1)
     y_seq = y[seq_length:]
     return X_seq, y_seq
 
 
 def _per_symbol_split_lstm(
-    df: pd.DataFrame, 
+    x: pd.DataFrame, 
+    y: pd.Series,
     feature_cols: List[str],
     seq_length: int,
     test_ratio: float = 0.2, 
@@ -62,7 +63,7 @@ def _per_symbol_split_lstm(
     train_raw_list = []
     symbol_groups = []
     
-    for symbol, grp in df.groupby("symbol", sort=False):
+    for symbol, grp in x.groupby("symbol", sort=False):
         grp = grp.sort_index()
         n = len(grp)
         min_required = seq_length * 3 + 20
@@ -73,7 +74,8 @@ def _per_symbol_split_lstm(
         v_cut = int(n * (1.0 - test_ratio))
         
         train_raw_list.append(grp[feature_cols].iloc[:t_cut].values)
-        symbol_groups.append((grp, t_cut, v_cut))
+        grp_y = y.loc[grp.index]
+        symbol_groups.append((grp, grp_y, t_cut, v_cut))
         
     if not train_raw_list:
         return (np.array([]),) * 6 + (scaler,)
@@ -81,9 +83,9 @@ def _per_symbol_split_lstm(
     scaler.fit(np.vstack(train_raw_list))
     
     # Pass 2: Scale and create sequences with warm-up lookback padding
-    for grp, t_cut, v_cut in symbol_groups:
+    for grp, grp_y, t_cut, v_cut in symbol_groups:
         X_all = scaler.transform(grp[feature_cols].values)
-        y_all = grp["label"].values
+        y_all = grp_y.values
         
         # Train slice
         X_tr, y_tr = _create_sequences(X_all[:t_cut], y_all[:t_cut], seq_length)
@@ -115,24 +117,25 @@ def _per_symbol_split_lstm(
 
 
 def _build_lstm_model(seq_length: int, n_features: int) -> "Sequential":
-    """Build causal LSTM architecture with LayerNormalization."""
+    """Regularised LSTM architecture to reduce overfitting."""
+    from tensorflow.keras.regularizers import l2
     model = Sequential([
         Input(shape=(seq_length, n_features)),
-        LSTM(48, return_sequences=True),
+        LSTM(32, return_sequences=True, dropout=0.3, recurrent_dropout=0.2,
+             kernel_regularizer=l2(1e-4)),
         LayerNormalization(),
-        Dropout(0.25),
-        
-        LSTM(24, return_sequences=False),
+
+        LSTM(16, return_sequences=False, dropout=0.3, recurrent_dropout=0.2,
+             kernel_regularizer=l2(1e-4)),
         LayerNormalization(),
-        Dropout(0.25),
-        
-        Dense(16, activation='relu'),
-        Dropout(0.15),
+
+        Dense(8, activation='relu', kernel_regularizer=l2(1e-4)),
+        Dropout(0.3),
         Dense(1, activation='sigmoid')
     ])
-    
+
     model.compile(
-        optimizer=Adam(learning_rate=0.0005, clipnorm=1.0),
+        optimizer=Adam(learning_rate=0.001, clipnorm=1.0),
         loss='binary_crossentropy',
         metrics=['accuracy', tf.keras.metrics.AUC(name='roc_auc')]
     )
@@ -140,15 +143,21 @@ def _build_lstm_model(seq_length: int, n_features: int) -> "Sequential":
 
 
 def _optimize_threshold_on_val(y_val: np.ndarray, y_proba_val: np.ndarray) -> float:
-    """Find the optimal decision threshold maximizing F1 score on VALIDATION data only."""
-    best_t, best_f1 = 0.50, 0.0
-    for t in np.arange(0.40, 0.60, 0.01):
+    """Find threshold maximising F1 on val set.
+    Pred rate must be 15-55%. Prefers higher precision on ties.
+    Falls back to 0.45 if no valid threshold found.
+    """
+    best_t, best_f1, best_p = 0.45, 0.0, 0.0
+    for t in np.arange(0.30, 0.75, 0.01):
         preds = (y_proba_val >= t).astype(int)
-        if preds.mean() < 0.10 or preds.mean() > 0.90:
+        rate = preds.mean()
+        if rate < 0.15 or rate > 0.55:
             continue
-        score = f1_score(y_val, preds, zero_division=0)
-        if score > best_f1:
-            best_f1, best_t = score, t
+        p = precision_score(y_val, preds, zero_division=0)
+        r = recall_score(y_val, preds, zero_division=0)
+        f1 = f1_score(y_val, preds, zero_division=0)
+        if f1 > best_f1 or (f1 == best_f1 and p > best_p):
+            best_f1, best_p, best_t = f1, p, t
     return round(float(best_t), 3)
 
 
@@ -156,20 +165,20 @@ def train_lstm_model(
     db: Session, 
     symbols: List[str], 
     config: StockMLConfig,
-    seq_length: int = 20,
+    seq_length: int = 15,
     epochs: int = 40,
-    batch_size: int = 64
+    batch_size: int = 256
 ) -> Dict:
     """Train and evaluate the LSTM model."""
     if not TF_AVAILABLE:
         raise ImportError("TensorFlow is required.")
         
-    dataset = build_lstm_dataset(db, symbols, config)
-    if dataset.empty or len(dataset) < config.min_rows:
-        raise ValueError(f"Insufficient data: {len(dataset)} rows")
+    x, y = build_stock_ml_dataset(db, symbols, config)
+    if x.empty or len(x) < config.min_rows:
+        raise ValueError(f"Insufficient data: {len(x)} rows")
         
     X_train, y_train, X_val, y_val, X_test, y_test, scaler = _per_symbol_split_lstm(
-        dataset, FEATURE_COLUMNS, seq_length, test_ratio=0.15, val_ratio=0.15
+        x, y, FEATURE_COLUMNS, seq_length, test_ratio=0.15, val_ratio=0.15
     )
     
     if len(X_train) == 0 or len(X_val) == 0:
@@ -186,16 +195,20 @@ def train_lstm_model(
     model = _build_lstm_model(seq_length, len(FEATURE_COLUMNS))
     
     callbacks = [
-        EarlyStopping(monitor='val_roc_auc', mode='max', patience=8, restore_best_weights=True),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=4, min_lr=1e-5)
+        EarlyStopping(monitor='val_loss', mode='min', patience=12, restore_best_weights=True),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
     ]
     
+    # Shuffle train sequences to break per-symbol block ordering
+    idx = np.random.permutation(len(X_train))
+    X_train, y_train = X_train[idx], y_train[idx]
+
+    # No class weighting — let precision floor in threshold search handle imbalance
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val),
         epochs=epochs,
-        batch_size=batch_size,
-        class_weight=class_weight,
+        batch_size=max(batch_size, 256),
         callbacks=callbacks,
         verbose=1
     )
@@ -214,6 +227,26 @@ def train_lstm_model(
     f1 = float(f1_score(y_test, y_test_pred, zero_division=0))
     roc_auc = float(roc_auc_score(y_test, y_test_proba)) if len(np.unique(y_test)) > 1 else 0.5
     
+    # Train accuracy for overfitting check
+    y_train_proba = model.predict(X_train, verbose=0).flatten()
+    y_train_pred = (y_train_proba >= best_threshold).astype(int)
+    train_accuracy = float(accuracy_score(y_train, y_train_pred))
+
+    # Overfitting diagnostics (includes LSTM loss divergence check)
+    overfit_report = check_overfitting(
+        train_accuracy=train_accuracy,
+        test_accuracy=accuracy,
+        test_precision=precision,
+        test_recall=recall,
+        test_f1=f1,
+        test_roc_auc=roc_auc,
+        y_test=y_test,
+        y_pred=y_test_pred,
+        train_loss_history=history.history.get("loss"),
+        val_loss_history=history.history.get("val_loss"),
+    )
+    logger.info(f"🔍 LSTM verdict: {overfit_report['verdict']} (score={overfit_report['usability_score']})")
+
     # Persist artifacts
     model_dir = Path(config.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +259,7 @@ def train_lstm_model(
         "seq_length": seq_length,
         "n_features": len(FEATURE_COLUMNS),
         "decision_threshold": best_threshold,
+        "train_accuracy": round(train_accuracy, 4),
         "accuracy": round(accuracy, 4),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
@@ -236,12 +270,36 @@ def train_lstm_model(
         "test_samples": int(len(X_test)),
         "epochs_trained": len(history.history['loss']),
         "training_date": datetime.now().isoformat(),
+        "overfitting": overfit_report,
     }
     
     with open(model_dir / "lstm_model.json", "w") as f:
         json.dump(metadata, f, indent=2)
         
     return metadata
+
+
+def load_lstm_model(config: StockMLConfig) -> Optional[Tuple]:
+    """Load the saved model, scaler, and metadata configuration."""
+    if not TF_AVAILABLE:
+        return None
+        
+    model_path = config.model_dir / "lstm_model.keras"
+    scaler_path = config.model_dir / "lstm_scaler.joblib"
+    meta_path = config.model_dir / "lstm_model.json"
+    
+    if not model_path.exists():
+        return None
+        
+    model = keras_load(model_path)
+    scaler = joblib.load(scaler_path) if scaler_path.exists() else None
+    
+    metadata = {}
+    if meta_path.exists():
+        with open(meta_path) as f:
+            metadata = json.load(f)
+            
+    return model, scaler, metadata
 
 
 def predict_lstm_signal(db: Session, symbol: str, config: StockMLConfig) -> Dict:
@@ -271,19 +329,15 @@ def predict_lstm_signal(db: Session, symbol: str, config: StockMLConfig) -> Dict
     deadband = 0.04
     if prob_up >= threshold + deadband:
         bias = "BULLISH"
-        # Scale between [threshold + deadband, 1.0] -> [0.0, 1.0]
         confidence = (prob_up - threshold) / max(1.0 - threshold, 0.01)
     elif prob_up <= threshold - deadband:
         bias = "BEARISH"
-        # Scale between [0.0, threshold - deadband] -> [0.0, 1.0]
         confidence = (threshold - prob_up) / max(threshold, 0.01)
     else:
         bias = "NEUTRAL"
         confidence = 0.0
         
     confidence = float(np.clip(confidence, 0.0, 1.0))
-    
-    # Minimum execution conviction filter (e.g. 40% confidence)
     signal = bias if confidence >= 0.40 else "NO_TRADE"
     
     return {

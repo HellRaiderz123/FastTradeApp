@@ -10,6 +10,7 @@ class FinanceTransaction(Base):
 
     tran_date = Column(Date, nullable=False)
     description = Column(String, nullable=False)
+    merchant = Column(String, nullable=True)  # clean display name e.g. "Airtel", "Swiggy"
 
     debit = Column(Float, default=0)
     credit = Column(Float, default=0)

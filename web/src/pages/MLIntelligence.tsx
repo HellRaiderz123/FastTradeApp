@@ -957,4 +957,376 @@ export const WalkForwardTab: React.FC = () => {
   );
 };
 
+// ========================= OVERFITTING TAB ===============================
+export const OverfittingTab: React.FC = () => {
+  const [modelType, setModelType] = useState<'single' | 'ensemble' | 'lstm'>('single');
+  const [report, setReport] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async (mt: 'single' | 'ensemble' | 'lstm') => {
+    setLoading(true);
+    setReport(null);
+    try {
+      const res = await mlAPI.getOverfittingReport(mt);
+      setReport(res.data);
+    } catch { setReport({ status: 'error' }); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(modelType); }, [modelType]);
+
+  const verdictStyle = (v: string) => {
+    if (v === 'GOOD')       return 'text-green-400 bg-green-500/10 border-green-500/30';
+    if (v === 'ACCEPTABLE') return 'text-blue-400 bg-blue-500/10 border-blue-500/30';
+    if (v === 'WEAK')       return 'text-amber-400 bg-amber-500/10 border-amber-500/30';
+    return 'text-red-400 bg-red-500/10 border-red-500/30';
+  };
+
+  const levelIcon = (level: string) => {
+    if (level === 'critical') return <span className="text-red-400 font-bold">✗</span>;
+    if (level === 'warning')  return <span className="text-amber-400 font-bold">⚠</span>;
+    return <span className="text-blue-400">ℹ</span>;
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Model selector */}
+      <div className="flex items-center gap-3">
+        <label className="text-slate-400 text-sm">Model:</label>
+        {(['single', 'ensemble', 'lstm'] as const).map(mt => (
+          <button key={mt} onClick={() => setModelType(mt)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              modelType === mt ? 'bg-purple-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
+            }`}>
+            {mt === 'single' ? 'GBM' : mt === 'ensemble' ? 'Ensemble' : 'LSTM'}
+          </button>
+        ))}
+        <button onClick={() => load(modelType)} className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg">
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      {loading && <LoadingSpinner text="Running diagnostics…" />}
+
+      {report?.status === 'not_trained' && (
+        <div className="bg-slate-800 rounded-xl p-6 text-slate-400 text-center">
+          Model not trained yet. Train it first to see the overfitting report.
+        </div>
+      )}
+
+      {report?.status === 'no_report' && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-5 text-amber-300">
+          {report.message}
+        </div>
+      )}
+
+      {report?.verdict && (
+        <>
+          {/* Verdict banner */}
+          <div className={`border rounded-xl p-5 flex items-start gap-4 ${verdictStyle(report.verdict)}`}>
+            <div className="text-3xl">
+              {report.verdict === 'GOOD' ? '✅' : report.verdict === 'ACCEPTABLE' ? '🔵' : report.verdict === 'WEAK' ? '⚠️' : '🚫'}
+            </div>
+            <div>
+              <p className="font-bold text-lg">{report.verdict}</p>
+              <p className="text-sm opacity-80 mt-1">{report.verdict_message}</p>
+            </div>
+            <div className="ml-auto text-right">
+              <p className="text-3xl font-bold">{report.usability_score}</p>
+              <p className="text-xs opacity-60">/ 100</p>
+            </div>
+          </div>
+
+          {/* Metrics summary */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Metric label="Train Accuracy" value={`${(report.metrics_summary?.train_accuracy * 100).toFixed(1)}%`} />
+            <Metric label="Test Accuracy"  value={`${(report.metrics_summary?.test_accuracy  * 100).toFixed(1)}%`} color="text-blue-400" />
+            <Metric label="Train/Test Gap" value={`${(report.metrics_summary?.train_test_gap * 100).toFixed(1)}%`}
+              color={report.metrics_summary?.train_test_gap > 0.12 ? 'text-red-400' : 'text-green-400'} />
+            <Metric label="ROC-AUC" value={`${(report.metrics_summary?.roc_auc * 100).toFixed(1)}%`}
+              color={report.metrics_summary?.roc_auc < 0.55 ? 'text-red-400' : 'text-green-400'} />
+          </div>
+
+          {/* Flags */}
+          {report.flags?.length > 0 ? (
+            <Card title={`Diagnostic Flags (${report.critical_count} critical, ${report.warning_count} warnings)`}>
+              <div className="space-y-3">
+                {report.flags.map((flag: any, i: number) => (
+                  <div key={i} className={`flex items-start gap-3 p-3 rounded-lg border ${
+                    flag.level === 'critical' ? 'bg-red-500/10 border-red-500/20' :
+                    flag.level === 'warning'  ? 'bg-amber-500/10 border-amber-500/20' :
+                    'bg-slate-800 border-slate-700'
+                  }`}>
+                    <span className="mt-0.5 text-lg">{levelIcon(flag.level)}</span>
+                    <div className="flex-1">
+                      <p className="text-white text-sm font-medium">{flag.code}</p>
+                      <p className="text-slate-300 text-xs mt-0.5">{flag.message}</p>
+                    </div>
+                    {flag.value != null && (
+                      <div className="text-right text-xs shrink-0">
+                        <p className="text-slate-400">value</p>
+                        <p className="text-white font-mono">{flag.value}</p>
+                        {flag.threshold != null && (
+                          <p className="text-slate-500">threshold: {flag.threshold}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ) : (
+            <Card title="Diagnostic Flags">
+              <p className="text-green-400 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5" /> No issues detected — model passed all checks.
+              </p>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
+// ========================= LSTM TAB =====================================
+export const LSTMTab: React.FC = () => {
+  const [info, setInfo] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [training, setTraining] = useState(false);
+  const [trainingLog, setTrainingLog] = useState('');
+  const [symbol, setSymbol] = useState('RELIANCE');
+  const [prediction, setPrediction] = useState<any>(null);
+  const [predicting, setPredicting] = useState(false);
+  const [comparison, setComparison] = useState<any>(null);
+  const [comparing, setComparing] = useState(false);
+  const [seqLength, setSeqLength] = useState(20);
+  const [epochs, setEpochs] = useState(50);
+
+  const loadInfo = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await mlAPI.getLSTMInfo();
+      setInfo(res.data);
+    } catch { setInfo(null); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { loadInfo(); }, [loadInfo]);
+
+  const handleTrain = async () => {
+    setTraining(true);
+    setTrainingLog('Starting LSTM training...\n');
+    try {
+      const res = await mlAPI.trainLSTM({ seq_length: seqLength, epochs });
+      const data = res.data;
+      if (data?.status === 'already_running') {
+        setTrainingLog(prev => prev + `⚠ Already running (job: ${data.job_id})\n`);
+      } else {
+        setTrainingLog(prev => prev + `⏳ Training started (job: ${data.job_id}). Polling...\n`);
+        const jobId = data.job_id;
+        let attempts = 0;
+        const poll = async (): Promise<void> => {
+          if (++attempts > 200) { setTrainingLog(prev => prev + '✗ Timed out'); setTraining(false); return; }
+          try {
+            const jr = await mlAPI.getJobStatus(jobId);
+            const job = jr.data;
+            if (job.status === 'completed') {
+              const r = job.result || {};
+              setTrainingLog(prev => prev +
+                `✓ Done — Accuracy: ${r.accuracy != null ? (r.accuracy * 100).toFixed(2) + '%' : '—'} | ` +
+                `Precision: ${r.precision != null ? (r.precision * 100).toFixed(2) + '%' : '—'} | ` +
+                `F1: ${r.f1_score != null ? (r.f1_score * 100).toFixed(2) + '%' : '—'} | ` +
+                `Epochs: ${r.epochs_trained ?? '—'} | Duration: ${r.training_duration?.toFixed(1) ?? '—'}s\n`);
+              setTraining(false);
+              loadInfo();
+            } else if (job.status === 'failed') {
+              setTrainingLog(prev => prev + `✗ Failed: ${job.error}`);
+              setTraining(false);
+            } else { setTimeout(poll, 4000); }
+          } catch { setTimeout(poll, 4000); }
+        };
+        setTimeout(poll, 4000);
+        return;
+      }
+    } catch (e: any) {
+      setTrainingLog(prev => prev + `✗ Error: ${e?.response?.data?.detail || e?.message}`);
+    }
+    setTraining(false);
+  };
+
+  const handlePredict = async () => {
+    setPredicting(true);
+    setPrediction(null);
+    try {
+      const res = await mlAPI.lstmPredict(symbol);
+      setPrediction(res.data);
+    } catch (e: any) {
+      setPrediction({ error: e?.response?.data?.detail || e?.message });
+    }
+    setPredicting(false);
+  };
+
+  const handleCompare = async () => {
+    setComparing(true);
+    setComparison(null);
+    try {
+      const res = await mlAPI.lstmCompare(symbol);
+      setComparison(res.data);
+    } catch (e: any) {
+      setComparison({ error: e?.response?.data?.detail || e?.message });
+    }
+    setComparing(false);
+  };
+
+  const signalColor = (s: string) =>
+    s === 'BULLISH' ? 'text-green-400' : s === 'BEARISH' ? 'text-red-400' : 'text-slate-400';
+
+  if (loading) return <LoadingSpinner text="Loading LSTM info…" />;
+
+  return (
+    <div className="space-y-6">
+
+      {/* Status banner */}
+      {info?.status === 'tensorflow_not_installed' && (
+        <div className="flex items-center gap-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
+          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+          <div>
+            <p className="text-amber-300 font-medium">TensorFlow not installed</p>
+            <p className="text-slate-400 text-sm">Run <code className="bg-slate-800 px-1 rounded">pip install tensorflow</code> then restart the backend.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Train section */}
+      <Card title="Train LSTM Model">
+        <div className="flex items-center gap-4 flex-wrap mb-4">
+          <div className="flex items-center gap-2">
+            <label className="text-slate-400 text-sm">Seq Length:</label>
+            <input type="number" value={seqLength} min={5} max={60}
+              onChange={(e) => setSeqLength(+e.target.value)}
+              className="bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-700 w-20" />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-slate-400 text-sm">Epochs:</label>
+            <input type="number" value={epochs} min={10} max={200}
+              onChange={(e) => setEpochs(+e.target.value)}
+              className="bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-700 w-20" />
+          </div>
+          <button onClick={handleTrain} disabled={training || info?.status === 'tensorflow_not_installed'}
+            className="flex items-center gap-2 px-5 py-2.5 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg transition-colors">
+            {training ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            {training ? 'Training LSTM…' : 'Train LSTM'}
+          </button>
+          {info?.status === 'ready' && (
+            <span className="text-green-400 text-sm flex items-center gap-1">
+              <CheckCircle2 className="w-4 h-4" /> LSTM trained
+            </span>
+          )}
+        </div>
+        {trainingLog && (
+          <pre className="bg-slate-950 text-xs text-slate-300 font-mono p-3 rounded-lg whitespace-pre-wrap max-h-36 overflow-y-auto">
+            {trainingLog}
+          </pre>
+        )}
+      </Card>
+
+      {/* Metrics (if trained) */}
+      {info?.status === 'ready' && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <Metric label="Accuracy" value={`${(info.accuracy * 100).toFixed(1)}%`} color="text-green-400" />
+            <Metric label="Precision" value={`${(info.precision * 100).toFixed(1)}%`} color="text-blue-400" />
+            <Metric label="Recall" value={`${(info.recall * 100).toFixed(1)}%`} color="text-cyan-400" />
+            <Metric label="F1 Score" value={`${(info.f1_score * 100).toFixed(1)}%`} color="text-purple-400" />
+            <Metric label="ROC AUC" value={`${(info.roc_auc * 100).toFixed(1)}%`} color="text-amber-400" />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Metric label="Seq Length" value={info.seq_length} />
+            <Metric label="Features" value={info.n_features} />
+            <Metric label="Epochs Trained" value={info.epochs_trained} />
+            <Metric label="Train Samples" value={info.train_samples?.toLocaleString()} />
+          </div>
+        </>
+      )}
+
+      {/* Predict + Compare */}
+      <Card title="Predict & Compare">
+        <div className="flex items-center gap-3 flex-wrap mb-5">
+          <input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+            className="bg-slate-800 text-white px-3 py-2 rounded-lg border border-slate-700 w-40" placeholder="Symbol" />
+          <button onClick={handlePredict} disabled={predicting || info?.status !== 'ready'}
+            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center gap-2">
+            {predicting && <RefreshCw className="w-4 h-4 animate-spin" />}
+            {predicting ? 'Predicting…' : 'LSTM Predict'}
+          </button>
+          <button onClick={handleCompare} disabled={comparing || info?.status !== 'ready'}
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg transition-colors flex items-center gap-2">
+            {comparing && <RefreshCw className="w-4 h-4 animate-spin" />}
+            {comparing ? 'Comparing…' : 'LSTM vs GBM'}
+          </button>
+        </div>
+
+        {/* Single prediction result */}
+        {prediction && !prediction.error && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-xs mb-1">Signal</p>
+              <p className={`text-2xl font-bold ${signalColor(prediction.signal)}`}>{prediction.signal}</p>
+              <p className="text-slate-500 text-xs mt-1">{prediction.reason}</p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-xs mb-1">Confidence</p>
+              <p className="text-2xl font-bold text-white">{prediction.confidence}%</p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-xs mb-1">LSTM Prob Up</p>
+              <p className="text-2xl font-bold text-cyan-400">
+                {prediction.indicators?.lstm_prob_up != null
+                  ? `${(prediction.indicators.lstm_prob_up * 100).toFixed(1)}%`
+                  : '—'}
+              </p>
+            </div>
+          </div>
+        )}
+        {prediction?.error && <p className="text-red-400 text-sm mb-4">{prediction.error}</p>}
+
+        {/* LSTM vs GBM comparison */}
+        {comparison && !comparison.error && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-xs mb-1">GBM Signal</p>
+              <p className={`text-xl font-bold ${signalColor(comparison.gbm_model?.signal)}`}>
+                {comparison.gbm_model?.signal} ({comparison.gbm_model?.confidence}%)
+              </p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-xs mb-1">LSTM Signal</p>
+              <p className={`text-xl font-bold ${signalColor(comparison.lstm_model?.signal)}`}>
+                {comparison.lstm_model?.signal} ({comparison.lstm_model?.confidence}%)
+              </p>
+            </div>
+            <div className="bg-slate-800 rounded-lg p-4">
+              <p className="text-slate-400 text-xs mb-1">Agreement</p>
+              <p className={`text-xl font-bold ${comparison.agreement ? 'text-green-400' : 'text-amber-400'}`}>
+                {comparison.agreement ? 'Yes ✓' : 'No ✗'}
+              </p>
+              <p className="text-slate-500 text-xs mt-1">Trade only when both agree</p>
+            </div>
+          </div>
+        )}
+        {comparison?.error && <p className="text-red-400 text-sm">{comparison.error}</p>}
+      </Card>
+
+      {/* Info box */}
+      <div className="bg-slate-900/50 border border-slate-700 rounded-xl p-5 space-y-2 text-sm text-slate-300">
+        <p className="text-white font-semibold mb-2">How LSTM works here</p>
+        <p>• <span className="text-cyan-400">Bidirectional LSTM</span> reads sequences of {seqLength} daily candles to capture temporal patterns GBM misses.</p>
+        <p>• Uses the same <span className="text-purple-400">40+ features</span> as the GBM model (RSI, MACD, EMA, volume, regime flags…).</p>
+        <p>• <span className="text-green-400">Early stopping</span> prevents overfitting — training stops when val loss stops improving.</p>
+        <p>• Best used alongside GBM: <span className="text-amber-400">take signals only when both models agree</span> to reduce false positives.</p>
+      </div>
+    </div>
+  );
+};
+
 export default MLIntelligence;

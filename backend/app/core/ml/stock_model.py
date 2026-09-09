@@ -17,6 +17,7 @@ from app.core.ml.config import StockMLConfig
 from app.core.ml.dataset import build_stock_ml_dataset, _load_candles_df
 from app.core.ml.feature_builder import build_features_from_df, FEATURE_COLUMNS
 from app.core.ml.model_registry import save_model, load_model
+from app.core.ml.overfitting import check_overfitting
 
 logger = logging.getLogger(__name__)
 
@@ -63,25 +64,25 @@ def _per_symbol_split(
 
 
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-    """Find threshold that maximises geometric-mean of precision & recall on val set.
-    Rejects thresholds predicting <20% or >70% as UP (tighter guard against recall bias).
-    Falls back to 0.5 if no valid threshold found.
+    """Find threshold that maximises F1 on val set.
+    Pred rate must be 15-55% (not degenerate).
+    Prefers higher precision by breaking ties with precision.
+    Falls back to 0.45 if no valid threshold found.
     """
-    from sklearn.metrics import precision_score as _p, recall_score as _r
+    from sklearn.metrics import precision_score as _p, recall_score as _r, f1_score as _f1
     n = len(y_true)
-    best_t, best_score = 0.5, 0.0
+    best_t, best_f1, best_p = 0.45, 0.0, 0.0
     for t in np.arange(0.30, 0.75, 0.01):
         preds = (y_proba >= t).astype(int)
         pred_rate = preds.sum() / n
-        # Guard: reject if predicting <10% or >80% as BUY
-        if pred_rate < 0.10 or pred_rate > 0.80:
+        if pred_rate < 0.15 or pred_rate > 0.55:
             continue
         p = _p(y_true, preds, zero_division=0)
         r = _r(y_true, preds, zero_division=0)
-        # Geometric mean penalises imbalance between precision and recall
-        score = (p * r) ** 0.5 if p > 0 and r > 0 else 0.0
-        if score > best_score:
-            best_score, best_t = score, t
+        f1 = _f1(y_true, preds, zero_division=0)
+        # Among equal F1, prefer higher precision (fewer false BUYs)
+        if f1 > best_f1 or (f1 == best_f1 and p > best_p):
+            best_f1, best_p, best_t = f1, p, t
     return round(float(best_t), 2)
 
 
@@ -106,15 +107,14 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
         ("scaler", StandardScaler()),
         ("clf", HistGradientBoostingClassifier(
             max_iter=300,
-            max_depth=5,
-            learning_rate=0.03,
-            min_samples_leaf=50,
+            max_depth=4,
+            learning_rate=0.05,
+            min_samples_leaf=30,
             max_leaf_nodes=31,
-            l2_regularization=1.0,
+            l2_regularization=2.0,
             early_stopping=True,
             validation_fraction=0.15,
             n_iter_no_change=20,
-            class_weight="balanced",
             random_state=42,
         )),
     ])
@@ -156,6 +156,24 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
     except Exception:
         feature_importance = {}
 
+    # Train accuracy for overfitting check
+    y_train_proba = pipeline.predict_proba(x_train)[:, 1]
+    y_train_pred = (y_train_proba >= best_threshold).astype(int)
+    train_accuracy = float((y_train_pred == y_train.values).mean())
+
+    # Overfitting diagnostics
+    overfit_report = check_overfitting(
+        train_accuracy=train_accuracy,
+        test_accuracy=accuracy,
+        test_precision=precision,
+        test_recall=recall,
+        test_f1=f1,
+        test_roc_auc=roc_auc,
+        y_test=y_test.values,
+        y_pred=y_pred,
+    )
+    logger.info(f"🔍 GBM verdict: {overfit_report['verdict']} (score={overfit_report['usability_score']})")
+
     logger.info(f"✅ Model trained: accuracy={accuracy:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}, roc_auc={roc_auc:.4f}")
 
     metadata = {
@@ -168,6 +186,7 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
         "val_rows": int(len(x_val)),
         "test_rows": int(len(x_test)),
         "total_samples": int(len(x)),
+        "train_accuracy": round(train_accuracy, 4),
         "accuracy": round(accuracy, 4),
         "precision": round(precision, 4),
         "recall": round(recall, 4),
@@ -180,6 +199,7 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
         "symbols_count": len(symbols),
         "class_distribution": {str(k): int(v) for k, v in class_counts.items()},
         "training_date": datetime.now().isoformat(),
+        "overfitting": overfit_report,
     }
 
     save_model(pipeline, metadata, config)

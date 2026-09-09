@@ -795,13 +795,24 @@ def generate_signal(
 
     if use_ml:
         ml = ml_signal(symbol)
-        if ml.get("confidence", 0) > ta_sig.get("confidence", 0):
+        ml_bias = ml.get("bias", "NEUTRAL")
+        ml_conf = ml.get("confidence", 0)
+        ta_bias = ta_sig.get("bias", "NEUTRAL")
+        # Apply ML if: it has a directional signal AND either TA agrees or ML is high confidence
+        if ml_bias != "NEUTRAL" and ml_conf >= 55 and (ml_bias == ta_bias or ml_conf >= 65):
             final_sig = merge_signals(ta_sig, ml_signal=ml)
+        else:
+            final_sig = ta_sig
 
     elif ml_app_response:
         ml = parse_ml_app_response(ml_app_response)
-        if ml.get("confidence", 0) > ta_sig.get("confidence", 0):
+        ml_bias = ml.get("bias", "NEUTRAL")
+        ml_conf = ml.get("confidence", 0)
+        ta_bias = ta_sig.get("bias", "NEUTRAL")
+        if ml_bias != "NEUTRAL" and ml_conf >= 55 and (ml_bias == ta_bias or ml_conf >= 65):
             final_sig = merge_signals(ta_sig, ml_signal=ml)
+        else:
+            final_sig = ta_sig
 
     # =====================================================
     # STEP 6: Ensure IV fields are present in response

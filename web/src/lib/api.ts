@@ -502,6 +502,8 @@ export const mlAPI = {
   lstmPredict: (symbol: string) => api.get(`/ml/lstm/predict/${symbol}`),
   lstmPredictBulk: (symbols: string[]) => api.post('/ml/lstm/predict-bulk', { symbols }),
   lstmCompare: (symbol: string) => api.get(`/ml/lstm/compare/${symbol}`),
+  getOverfittingReport: (modelType: 'single' | 'ensemble' | 'lstm') =>
+    api.get(`/ml/overfitting/${modelType}`),
 
   // --- Tier 3: ML Intelligence -------------------------------------------------
   // #15 Ensemble

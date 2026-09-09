@@ -134,54 +134,47 @@ def _ta_signal_15m_from_df(df: pd.DataFrame) -> Dict:
     deeply_oversold = rsi_val <= 28 and stoch_val <= 15 and not ema_trend_bearish
     deeply_overbought = rsi_val >= 72 and stoch_val >= 85 and not ema_trend_bullish
 
-    # STRONG TREND SIGNALS first — trend takes priority over mean-reversion
-    if ema_trend_bullish and ema_slope_positive and rsi_val > 50 and adx_strong:
+    # STRONG TREND SIGNALS — all 4 conditions must align for high confidence
+    if ema_trend_bullish and ema_slope_positive and rsi_val > 55 and adx_strong:
         signal = "BULLISH"
         bias = "BULLISH"
-        confidence = 70 + min(10, quality_score * 2)
-        reason = "EMA trend up + RSI > 50 + ADX strong"
-    elif ema_trend_bearish and ema_slope_negative and rsi_val < 50 and adx_strong:
+        confidence = 65 + min(10, quality_score * 2)  # max 85
+        reason = "EMA trend up + RSI > 55 + ADX strong"
+    elif ema_trend_bearish and ema_slope_negative and rsi_val < 45 and adx_strong:
         signal = "BEARISH"
         bias = "BEARISH"
-        confidence = 70 + min(10, quality_score * 2)
-        reason = "EMA trend down + RSI < 50 + ADX strong"
+        confidence = 65 + min(10, quality_score * 2)
+        reason = "EMA trend down + RSI < 45 + ADX strong"
 
-    # MEAN REVERSION (only after trend check, only at extremes)
+    # MEAN REVERSION — only at deep extremes with no opposing trend
     elif deeply_oversold:
         signal = "BULLISH"
         bias = "BULLISH"
-        confidence = 65 + min(10, quality_score * 2)
+        confidence = 60 + min(8, quality_score * 2)
         reason = f"Extreme oversold reversal (RSI={rsi_val:.1f}, Stoch={stoch_val:.1f}) — no bearish trend"
     elif deeply_overbought:
         signal = "BEARISH"
         bias = "BEARISH"
-        confidence = 65 + min(10, quality_score * 2)
+        confidence = 60 + min(8, quality_score * 2)
         reason = f"Extreme overbought reversal (RSI={rsi_val:.1f}, Stoch={stoch_val:.1f}) — no bullish trend"
 
-    # MEDIUM SIGNALS: EMA trend + ADX strong, but RSI/slope divergence
-    elif adx_strong and ema_trend_bearish:
+    # MEDIUM SIGNALS — trend + ADX but RSI/slope divergence: lower confidence, no trade unless quality high
+    elif adx_strong and ema_trend_bearish and rsi_val < 50:
         signal = "BEARISH"
         bias = "BEARISH"
-        confidence = 55 + min(7, quality_score)
-        if rsi_val > 50:
-            reason = "EMA bearish + strong ADX but RSI divergence (caution: potential reversal)"
-        else:
-            reason = "EMA bearish + strong ADX but slope divergence (weakening trend)"
-    elif adx_strong and ema_trend_bullish:
+        confidence = 50 + min(5, quality_score)
+        reason = "EMA bearish + strong ADX but slope divergence (weakening trend)"
+    elif adx_strong and ema_trend_bullish and rsi_val > 50:
         signal = "BULLISH"
         bias = "BULLISH"
-        confidence = 55 + min(7, quality_score)
-        if rsi_val < 50:
-            reason = "EMA bullish + strong ADX but RSI divergence (caution: potential reversal)"
-        else:
-            reason = "EMA bullish + strong ADX but slope divergence (weakening trend)"
+        confidence = 50 + min(5, quality_score)
+        reason = "EMA bullish + strong ADX but slope divergence (weakening trend)"
 
-    # TRUE RANGE: Weak ADX or no clear trend
+    # TRUE RANGE or conflicting signals
     else:
         signal = "RANGE"
         bias = "NEUTRAL"
-        # Use quality score to differentiate a clean range from a noisy one
-        confidence = 35 + min(15, quality_score * 2)
+        confidence = 30 + min(10, quality_score * 2)
         reason = "No directional edge or ADX weak"
 
     # ================================================================
@@ -743,33 +736,27 @@ def _ta_signal_daily_from_df(df: pd.DataFrame) -> Dict:
     if ema_trend_bullish and ema_slope_positive and rsi_bullish and adx_strong:
         signal = "BULLISH"
         bias = "BULLISH"
-        confidence = 65 + min(15, quality_score * 2)
+        confidence = 62 + min(13, quality_score * 2)
         reason = "Daily EMA 50/200 cross up + RSI favorable + ADX strong"
     elif ema_trend_bearish and ema_slope_negative and rsi_bearish and adx_strong:
         signal = "BEARISH"
         bias = "BEARISH"
-        confidence = 65 + min(15, quality_score * 2)
+        confidence = 62 + min(13, quality_score * 2)
         reason = "Daily EMA 50/200 cross down + RSI favorable + ADX strong"
-    
-    # MEDIUM SIGNALS: EMA trend + ADX strong, but RSI/slope divergence
-    elif adx_strong and ema_trend_bearish:
+
+    # MEDIUM SIGNALS: trend + ADX but RSI/slope divergence — only fire when RSI confirms direction
+    elif adx_strong and ema_trend_bearish and rsi_bearish:
         signal = "BEARISH"
         bias = "BEARISH"
-        confidence = 50 + min(10, quality_score)
-        if rsi_bullish:
-            reason = "Daily EMA bearish + strong ADX but RSI divergence (potential reversal watch)"
-        else:
-            reason = "Daily EMA bearish + strong ADX but slope divergence (weakening trend)"
-    elif adx_strong and ema_trend_bullish:
+        confidence = 48 + min(8, quality_score)
+        reason = "Daily EMA bearish + strong ADX but slope divergence (weakening trend)"
+    elif adx_strong and ema_trend_bullish and rsi_bullish:
         signal = "BULLISH"
         bias = "BULLISH"
-        confidence = 50 + min(10, quality_score)
-        if rsi_bearish:
-            reason = "Daily EMA bullish + strong ADX but RSI divergence (potential reversal watch)"
-        else:
-            reason = "Daily EMA bullish + strong ADX but slope divergence (weakening trend)"
-    
-    # TRUE RANGE: Weak ADX or no clear trend
+        confidence = 48 + min(8, quality_score)
+        reason = "Daily EMA bullish + strong ADX but slope divergence (weakening trend)"
+
+    # TRUE RANGE: Weak ADX or conflicting signals
     else:
         signal = "RANGE"
         bias = "NEUTRAL"

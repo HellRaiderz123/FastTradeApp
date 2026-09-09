@@ -29,6 +29,7 @@ from app.core.ml.config import StockMLConfig
 from app.core.ml.dataset import build_stock_ml_dataset
 from app.core.ml.feature_builder import FEATURE_COLUMNS
 from app.core.ml.model_registry import ensure_model_dir
+from app.core.ml.overfitting import check_overfitting
 
 logger = logging.getLogger(__name__)
 
@@ -140,22 +141,23 @@ def _per_symbol_split(
 
 
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-    """Find threshold maximising geometric-mean of precision & recall on val set.
-    Rejects thresholds predicting <10% or >80% as UP.
-    Falls back to 0.5 if no valid threshold found.
+    """Find threshold maximising F1 on val set.
+    Pred rate must be 15-55% (not degenerate).
+    Prefers higher precision by breaking ties with precision.
+    Falls back to 0.45 if no valid threshold found.
     """
-    best_t, best_score = 0.5, 0.0
+    best_t, best_f1, best_p = 0.45, 0.0, 0.0
     n = len(y_true)
     for t in np.arange(0.30, 0.75, 0.01):
         preds = (y_proba >= t).astype(int)
         rate = preds.sum() / n
-        if rate < 0.10 or rate > 0.80:
+        if rate < 0.15 or rate > 0.55:
             continue
         p = precision_score(y_true, preds, zero_division=0)
         r = recall_score(y_true, preds, zero_division=0)
-        score = (p * r) ** 0.5 if p > 0 and r > 0 else 0.0
-        if score > best_score:
-            best_score, best_t = score, t
+        f1 = f1_score(y_true, preds, zero_division=0)
+        if f1 > best_f1 or (f1 == best_f1 and p > best_p):
+            best_f1, best_p, best_t = f1, p, t
     return round(float(best_t), 2)
 
 
@@ -164,7 +166,7 @@ def _build_gbm_pipeline() -> Pipeline:
         ("scaler", StandardScaler()),
         ("clf", GradientBoostingClassifier(
             n_estimators=200, max_depth=4, learning_rate=0.05,
-            subsample=0.8, min_samples_split=30, min_samples_leaf=15,
+            subsample=0.8, min_samples_split=40, min_samples_leaf=20,
             max_features="sqrt", random_state=42,
         )),
     ])
@@ -174,36 +176,25 @@ def _build_rf_pipeline() -> Pipeline:
     return Pipeline([
         ("scaler", StandardScaler()),
         ("clf", RandomForestClassifier(
-            n_estimators=300, max_depth=8, min_samples_split=30,
-            min_samples_leaf=15, max_features="sqrt",
-            class_weight="balanced", random_state=42, n_jobs=-1,
+            n_estimators=300, max_depth=8, min_samples_split=40,
+            min_samples_leaf=20, max_features="sqrt",
+            random_state=42, n_jobs=-1,
         )),
     ])
 
 
-def _build_xgb_pipeline() -> Pipeline:
+def _build_xgb_pipeline(y_train: pd.Series) -> Pipeline:
     XGBClassifier = _get_xgb()
     return Pipeline([
         ("scaler", StandardScaler()),
         ("clf", XGBClassifier(
             n_estimators=250, max_depth=4, learning_rate=0.05,
             subsample=0.8, colsample_bytree=0.8,
-            min_child_weight=15, reg_alpha=0.1, reg_lambda=1.0,
+            min_child_weight=20, reg_alpha=0.5, reg_lambda=2.0,
             eval_metric="logloss", random_state=42, n_jobs=-1, verbosity=0,
         )),
     ])
 
-
-def _balance_train(x_train: pd.DataFrame, y_train: pd.Series):
-    """Undersample majority class, preserving chronological order."""
-    df = x_train.copy()
-    df["__label__"] = y_train.values
-    minority_n = df["__label__"].value_counts().min()
-    balanced = pd.concat([
-        df[df["__label__"] == cls].sample(minority_n, random_state=42).sort_index()
-        for cls in [0, 1]
-    ]).sort_index()
-    return balanced.drop(columns=["__label__"]), balanced["__label__"]
 
 
 def train_ensemble(
@@ -224,13 +215,13 @@ def train_ensemble(
     x_train, x_val, x_test, y_train, y_val, y_test = _per_symbol_split(x, y)
 
     # Balance training set — undersample majority class
-    x_train, y_train = _balance_train(x_train, y_train)
-    logger.info(f"📊 Balanced train: {len(x_train)} rows")
+    # x_train, y_train = _balance_train(x_train, y_train) //as per google
+    logger.info(f"📊 Full chronological train: {len(x_train)} rows")
 
     # Build & fit each pipeline
     gbm = _build_gbm_pipeline()
     rf  = _build_rf_pipeline()
-    xgb = _build_xgb_pipeline()
+    xgb = _build_xgb_pipeline(y_train)
 
     logger.info("🔧 Training GBM …")
     gbm.fit(x_train, y_train)
@@ -270,6 +261,24 @@ def train_ensemble(
 
     feat_imp = ensemble.feature_importances()
 
+    # Train accuracy for overfitting check
+    y_train_proba = ensemble.predict_proba(x_train)[:, 1]
+    y_train_pred = (y_train_proba >= best_threshold).astype(int)
+    train_accuracy = float((y_train_pred == y_train.values).mean())
+
+    # Overfitting diagnostics
+    overfit_report = check_overfitting(
+        train_accuracy=train_accuracy,
+        test_accuracy=accuracy,
+        test_precision=precision,
+        test_recall=recall_val,
+        test_f1=f1,
+        test_roc_auc=roc_auc,
+        y_test=y_test.values,
+        y_pred=y_pred,
+    )
+    logger.info(f"🔍 Ensemble verdict: {overfit_report['verdict']} (score={overfit_report['usability_score']})")
+
     logger.info(
         f"✅ Ensemble trained: acc={accuracy:.4f}, prec={precision:.4f}, "
         f"recall={recall_val:.4f}, f1={f1:.4f}, roc_auc={roc_auc:.4f}"
@@ -287,6 +296,7 @@ def train_ensemble(
         "val_rows": int(len(x_val)),
         "test_rows": int(len(x_test)),
         "total_samples": int(len(x)),
+        "train_accuracy": round(train_accuracy, 4),
         "accuracy": round(accuracy, 4),
         "precision": round(precision, 4),
         "recall": round(recall_val, 4),
@@ -300,6 +310,7 @@ def train_ensemble(
         "symbols_count": len(symbols),
         "class_distribution": {str(k): int(v) for k, v in class_counts.items()},
         "training_date": datetime.now().isoformat(),
+        "overfitting": overfit_report,
     }
 
     # Persist

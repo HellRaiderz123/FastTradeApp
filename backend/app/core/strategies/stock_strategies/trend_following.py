@@ -32,9 +32,9 @@ class TrendFollowingStrategy(BaseStrategy):
             strategy_type=StrategyType.DIRECTIONAL,
             asset_types=[AssetType.STOCK]
         )
-        self.min_confidence = 65
-        self.risk_percent = 2.5  # 2.5% stop loss
-        self.reward_multiple = 2.0  # 2x risk for target
+        self.min_confidence = 70
+        self.risk_percent = 2.0
+        self.reward_multiple = 2.5
     
     def initialize(self) -> bool:
         """Validate configuration"""

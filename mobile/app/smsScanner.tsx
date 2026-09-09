@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { financeAPI } from '../lib/api';
-import { scanBankSms, type ParsedTransaction } from '../lib/smsScanner';
+import { scanBankSms, getCategoryInfo, type ParsedTransaction } from '../lib/smsScanner';
 import { Colors, Radius, Spacing } from '../lib/theme';
 import { GlassCard, LoadingSpinner, PrimaryButton, ScreenHeader, Tag } from '../components/ui';
 
@@ -58,7 +58,7 @@ export default function SmsScannerScreen() {
       }
 
       setPermissionDenied(false);
-      const parsed = await scanBankSms(300);
+      const parsed = await scanBankSms(1000);
 
       const withIds: SelectableTransaction[] = parsed.map((tx, i) => ({
         ...tx,
@@ -99,9 +99,10 @@ export default function SmsScannerScreen() {
 
     try {
       await financeAPI.bulkCreateTransactions(
-        selected.map(({ tran_date, description, debit, credit, balance, category, source }) => ({
+        selected.map(({ tran_date, description, merchant, debit, credit, balance, category, source }) => ({
           tran_date,
           description,
+          merchant,
           debit,
           credit,
           balance,
@@ -227,41 +228,49 @@ export default function SmsScannerScreen() {
                 keyExtractor={(item) => item.id}
                 style={styles.list}
                 contentContainerStyle={{ paddingBottom: 120 }}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => toggleSelect(item.id)}
-                    style={[styles.txRow, item.selected && styles.txRowSelected]}
-                  >
-                    <View style={styles.txCheck}>
-                      <Ionicons
-                        name={item.selected ? 'checkbox' : 'square-outline'}
-                        size={20}
-                        color={item.selected ? Colors.accent : Colors.textMuted}
-                      />
-                    </View>
-                    <View style={styles.txBody}>
-                      <Text style={styles.txDesc} numberOfLines={1}>
-                        {item.description}
-                      </Text>
-                      <Text style={styles.txMeta}>
-                        {item.tran_date} · {item.category}
-                      </Text>
-                      {item.raw_sms ? (
-                        <Text style={styles.txRaw} numberOfLines={1}>
-                          {item.raw_sms}
+                renderItem={({ item }) => {
+                  const cat = getCategoryInfo(item.category);
+                  const dateLabel = new Date(item.tran_date).toLocaleDateString('en-IN', {
+                    day: 'numeric', month: 'short',
+                  });
+                  return (
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => toggleSelect(item.id)}
+                      style={[styles.txRow, item.selected && styles.txRowSelected]}
+                    >
+                      {/* Category icon */}
+                      <View style={[styles.txIcon, { backgroundColor: cat.bg }]}>
+                        <Text style={styles.txIconEmoji}>{cat.emoji}</Text>
+                      </View>
+
+                      {/* Body */}
+                      <View style={styles.txBody}>
+                        <Text style={styles.txDesc} numberOfLines={1}>
+                          {item.merchant}
                         </Text>
-                      ) : null}
-                    </View>
-                    <View style={styles.txAmount}>
-                      {item.debit > 0 ? (
-                        <Text style={styles.txDebit}>-{money(item.debit)}</Text>
-                      ) : (
-                        <Text style={styles.txCredit}>+{money(item.credit)}</Text>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                )}
+                        <Text style={styles.txMeta} numberOfLines={1}>
+                          {dateLabel} · {item.raw_sms ?? item.description}
+                        </Text>
+                      </View>
+
+                      {/* Amount + checkbox */}
+                      <View style={styles.txRight}>
+                        {item.debit > 0 ? (
+                          <Text style={styles.txDebit}>-{money(item.debit)}</Text>
+                        ) : (
+                          <Text style={styles.txCredit}>+{money(item.credit)}</Text>
+                        )}
+                        <Ionicons
+                          name={item.selected ? 'checkmark-circle' : 'ellipse-outline'}
+                          size={16}
+                          color={item.selected ? Colors.accent : Colors.textMuted}
+                          style={{ marginTop: 4 }}
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
               />
 
               {/* Import bar */}
@@ -328,14 +337,21 @@ const styles = StyleSheet.create({
     borderColor: Colors.accent,
     backgroundColor: Colors.accentGlow,
   },
-  txCheck: { marginRight: 10 },
+  txIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  txIconEmoji: { fontSize: 20 },
   txBody: { flex: 1 },
-  txDesc: { fontSize: 13, fontWeight: '600', color: Colors.textPrimary },
-  txMeta: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
-  txRaw: { fontSize: 10, color: Colors.textFaint, marginTop: 2, fontStyle: 'italic' },
-  txAmount: { marginLeft: 8, alignItems: 'flex-end' },
-  txDebit: { fontSize: 13, fontWeight: '700', color: Colors.red },
-  txCredit: { fontSize: 13, fontWeight: '700', color: Colors.green },
+  txDesc: { fontSize: 14, fontWeight: '600', color: Colors.textPrimary },
+  txMeta: { fontSize: 11, color: Colors.textMuted, marginTop: 3, lineHeight: 15 },
+  txRight: { marginLeft: 8, alignItems: 'flex-end' },
+  txDebit: { fontSize: 14, fontWeight: '700', color: Colors.red },
+  txCredit: { fontSize: 14, fontWeight: '700', color: Colors.green },
   importBar: {
     position: 'absolute',
     bottom: 0,

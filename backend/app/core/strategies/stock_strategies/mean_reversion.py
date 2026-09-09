@@ -32,11 +32,11 @@ class MeanReversionStrategy(BaseStrategy):
             strategy_type=StrategyType.MEAN_REVERSION,
             asset_types=[AssetType.STOCK]
         )
-        self.min_confidence = 60
-        self.rsi_oversold = 40
-        self.rsi_overbought = 70
-        self.risk_percent = 3.0  # 3% stop loss (wider for reversions)
-        self.reward_multiple = 1.5
+        self.min_confidence = 65
+        self.rsi_oversold = 35
+        self.rsi_overbought = 72
+        self.risk_percent = 2.5
+        self.reward_multiple = 2.0
     
     def initialize(self) -> bool:
         """Validate configuration"""

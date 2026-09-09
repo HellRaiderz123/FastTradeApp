@@ -18,6 +18,53 @@ from app.api.schemas.finance import (
 )
 
 
+import re
+
+BRAND_PATTERNS = [
+    (r'airtel', 'Airtel'), (r'jio', 'Jio'), (r'vodafone|\bvi\b', 'Vi'),
+    (r'bsnl', 'BSNL'), (r'swiggy', 'Swiggy'), (r'zomato', 'Zomato'),
+    (r'amazon', 'Amazon'), (r'flipkart', 'Flipkart'), (r'myntra', 'Myntra'),
+    (r'bigbasket', 'BigBasket'), (r'blinkit', 'Blinkit'), (r'zepto', 'Zepto'),
+    (r'dmart', 'DMart'), (r'netflix', 'Netflix'), (r'spotify', 'Spotify'),
+    (r'hotstar', 'Hotstar'), (r'prime video', 'Prime Video'),
+    (r'\buber\b', 'Uber'), (r'\bola\b', 'Ola'), (r'irctc', 'IRCTC'),
+    (r'zerodha', 'Zerodha'), (r'groww', 'Groww'), (r'phonepe', 'PhonePe'),
+    (r'gpay|google pay', 'Google Pay'), (r'paytm', 'Paytm'),
+    (r'hdfc', 'HDFC'), (r'icici', 'ICICI'), (r'axis bank', 'Axis Bank'),
+    (r'\bsbi\b', 'SBI'), (r'kotak', 'Kotak'), (r'\brbl\b', 'RBL'),
+    (r'indusind', 'IndusInd'), (r'yes bank', 'Yes Bank'),
+    (r'\bpnb\b', 'PNB'), (r'canara', 'Canara Bank'), (r'union bank', 'Union Bank'),
+]
+
+def _infer_merchant(description: str) -> str | None:
+    if not description:
+        return None
+    lower = description.lower()
+    for pattern, name in BRAND_PATTERNS:
+        if re.search(pattern, lower):
+            return name
+    upi = re.search(r'(?:to|from)\s+([A-Za-z][A-Za-z0-9 .]{1,25}?)\s*[\w.\-]+@[\w]+', description, re.I)
+    if upi:
+        return upi.group(1).strip()
+    pos = re.search(r'(?:at|to)\s+([A-Z][A-Za-z0-9 &.\-]{2,28}?)(?:\s+on|\s+for|\.|,|$)', description, re.I)
+    if pos:
+        return pos.group(1).strip()
+    return None
+
+
+def backfill_merchants(db: Session) -> int:
+    """One-time fix: set merchant on rows where it is NULL."""
+    rows = db.query(FinanceTransaction).filter(FinanceTransaction.merchant.is_(None)).all()
+    updated = 0
+    for row in rows:
+        merchant = _infer_merchant(row.description or '')
+        if merchant:
+            row.merchant = merchant
+            updated += 1
+    db.commit()
+    return updated
+
+
 # ============= TRANSACTIONS =============
 def _sync_postgres_id_sequence(db: Session, model):
     """Safely reset the PK sequence so bulk inserts don't collide."""

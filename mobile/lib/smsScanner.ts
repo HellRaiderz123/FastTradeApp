@@ -3,6 +3,7 @@ import { Platform, NativeModules } from 'react-native';
 export type ParsedTransaction = {
   tran_date: string;
   description: string;
+  merchant: string;       // clean display name, e.g. "Airtel", "Swiggy"
   debit: number;
   credit: number;
   balance: number;
@@ -102,12 +103,34 @@ function extractDate(smsBody: string, smsDate: number): string {
   return new Date(smsDate).toISOString().slice(0, 10);
 }
 
+type CategoryInfo = { label: string; emoji: string; color: string; bg: string };
+
+const CATEGORIES: Record<string, CategoryInfo> = {
+  Food:              { label: 'Food',         emoji: '🍔', color: '#F97316', bg: 'rgba(249,115,22,0.15)' },
+  Shopping:         { label: 'Shopping',      emoji: '🛍️', color: '#A855F7', bg: 'rgba(168,85,247,0.15)' },
+  'Mobile / Internet': { label: 'Mobile',     emoji: '📱', color: '#EF4444', bg: 'rgba(239,68,68,0.15)' },
+  'UPI Transfer':   { label: 'UPI',           emoji: '💸', color: '#3B82F6', bg: 'rgba(59,130,246,0.15)' },
+  Bills:            { label: 'Bills',         emoji: '🧾', color: '#F59E0B', bg: 'rgba(245,158,11,0.15)' },
+  Investment:       { label: 'Investment',    emoji: '📈', color: '#10B981', bg: 'rgba(16,185,129,0.15)' },
+  Travel:           { label: 'Travel',        emoji: '✈️', color: '#06B6D4', bg: 'rgba(6,182,212,0.15)' },
+  Entertainment:    { label: 'Entertainment', emoji: '🎬', color: '#EC4899', bg: 'rgba(236,72,153,0.15)' },
+  Health:           { label: 'Health',        emoji: '🏥', color: '#14B8A6', bg: 'rgba(20,184,166,0.15)' },
+  Education:        { label: 'Education',     emoji: '📚', color: '#8B5CF6', bg: 'rgba(139,92,246,0.15)' },
+  Grocery:          { label: 'Grocery',       emoji: '🛒', color: '#84CC16', bg: 'rgba(132,204,22,0.15)' },
+  Income:           { label: 'Income',        emoji: '💰', color: '#10B981', bg: 'rgba(16,185,129,0.15)' },
+  Other:            { label: 'Other',         emoji: '🏧', color: '#64748B', bg: 'rgba(100,116,139,0.15)' },
+  Uncategorized:    { label: 'Others',        emoji: '💳', color: '#475569', bg: 'rgba(71,85,105,0.15)' },
+};
+
+export function getCategoryInfo(category: string): CategoryInfo {
+  return CATEGORIES[category] ?? CATEGORIES['Uncategorized'];
+}
+
 function categorize(smsBody: string): string {
   const lower = smsBody.toLowerCase();
   if (/swiggy|zomato|food|restaurant|cafe|hotel|dining/.test(lower)) return 'Food';
   if (/amazon|flipkart|myntra|shopping|mall|store|mart/.test(lower)) return 'Shopping';
   if (/airtel|jio|vodafone|bsnl|recharge|mobile|internet|broadband/.test(lower)) return 'Mobile / Internet';
-  if (/upi|phonepe|gpay|paytm|bhim/.test(lower)) return 'UPI Transfer';
   if (/electricity|water|gas|bill|utility/.test(lower)) return 'Bills';
   if (/mutual fund|sip|stock|zerodha|groww|invest|nse|bse/.test(lower)) return 'Investment';
   if (/uber|ola|metro|bus|train|irctc|flight|travel/.test(lower)) return 'Travel';
@@ -116,7 +139,65 @@ function categorize(smsBody: string): string {
   if (/school|college|fees|education|tuition/.test(lower)) return 'Education';
   if (/grocery|bigbasket|blinkit|zepto|dmart/.test(lower)) return 'Grocery';
   if (/atm|cash|withdrawal/.test(lower)) return 'Other';
+  if (/upi|phonepe|gpay|paytm|bhim/.test(lower)) return 'UPI Transfer';
   return 'Uncategorized';
+}
+
+// Known brand name extraction from SMS body
+const BRAND_PATTERNS: Array<[RegExp, string]> = [
+  [/airtel/i, 'Airtel'],
+  [/jio/i, 'Jio'],
+  [/vodafone|vi\b/i, 'Vi'],
+  [/bsnl/i, 'BSNL'],
+  [/swiggy/i, 'Swiggy'],
+  [/zomato/i, 'Zomato'],
+  [/amazon/i, 'Amazon'],
+  [/flipkart/i, 'Flipkart'],
+  [/myntra/i, 'Myntra'],
+  [/bigbasket/i, 'BigBasket'],
+  [/blinkit/i, 'Blinkit'],
+  [/zepto/i, 'Zepto'],
+  [/dmart/i, 'DMart'],
+  [/netflix/i, 'Netflix'],
+  [/spotify/i, 'Spotify'],
+  [/hotstar/i, 'Hotstar'],
+  [/prime video/i, 'Prime Video'],
+  [/uber/i, 'Uber'],
+  [/ola\b/i, 'Ola'],
+  [/irctc/i, 'IRCTC'],
+  [/zerodha/i, 'Zerodha'],
+  [/groww/i, 'Groww'],
+  [/phonepe/i, 'PhonePe'],
+  [/gpay|google pay/i, 'Google Pay'],
+  [/paytm/i, 'Paytm'],
+  [/hdfc/i, 'HDFC'],
+  [/icici/i, 'ICICI'],
+  [/axis bank/i, 'Axis Bank'],
+  [/sbi/i, 'SBI'],
+  [/kotak/i, 'Kotak'],
+  [/rbl/i, 'RBL'],
+  [/indusind/i, 'IndusInd'],
+  [/yes bank/i, 'Yes Bank'],
+  [/pnb/i, 'PNB'],
+  [/canara/i, 'Canara Bank'],
+  [/union bank/i, 'Union Bank'],
+  [/federal bank/i, 'Federal Bank'],
+];
+
+function extractMerchant(smsBody: string, description: string, category: string): string {
+  // Check known brands first
+  for (const [pattern, name] of BRAND_PATTERNS) {
+    if (pattern.test(smsBody)) return name;
+  }
+  // UPI: extract payee name before @
+  const upiName = smsBody.match(/(?:to|from)\s+([A-Za-z][A-Za-z0-9 .]{1,25}?)\s*[\w.\-]+@[\w]+/i);
+  if (upiName) return upiName[1].trim();
+  // POS merchant
+  const posMerchant = smsBody.match(/(?:at|to)\s+([A-Z][A-Za-z0-9 &.\-]{2,28}?)(?:\s+on|\s+for|\.|,|$)/i);
+  if (posMerchant) return posMerchant[1].trim();
+  // Fall back to first word of description
+  const firstWord = description.split(/[\s|\-]/)[0];
+  return firstWord || (category === 'UPI Transfer' ? 'UPI Transfer' : 'Others');
 }
 
 export function parseSms(smsBody: string, smsDate: number, sender: string): ParsedTransaction | null {
@@ -180,13 +261,15 @@ export function parseSms(smsBody: string, smsDate: number, sender: string): Pars
     if (refMatch) description += ` | Ref: ${refMatch[1]}`;
   }
 
+  const category = categorize(body);
   return {
     tran_date: extractDate(body, smsDate),
     description,
+    merchant: extractMerchant(body, description, category),
     debit,
     credit,
     balance,
-    category: categorize(body),
+    category,
     source: 'SMS_SCAN',
     raw_sms: body.slice(0, 120),
   };
