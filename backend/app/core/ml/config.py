@@ -43,7 +43,7 @@ class StockMLConfig:
     min_rows: int = _int_env("STOCK_ML_MIN_ROWS", 300)
 
     horizon: int = _int_env("STOCK_ML_HORIZON", 5)
-    return_threshold: float = _float_env("STOCK_ML_RETURN_THRESHOLD", 0.015)
+    return_threshold: float = _float_env("STOCK_ML_RETURN_THRESHOLD", 0.025)
 
     min_confidence: int = _int_env("STOCK_ML_MIN_CONFIDENCE", 65)
     bullish_prob_threshold: float = _float_env("STOCK_ML_BULLISH_PROB", 0.60)

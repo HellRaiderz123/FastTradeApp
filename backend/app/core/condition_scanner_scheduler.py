@@ -109,6 +109,169 @@ def _run_all_strategies(db: Session):
         except Exception as exc:
             logger.error(f"Condition scanner: strategy '{row.name}' failed: {exc}")
 
+        # ── Exit scan: check open positions for this strategy ──────────────
+        try:
+            _scan_and_execute_exits(row, db)
+        except Exception as exc:
+            logger.error(f"Condition scanner: exit scan for '{row.name}' failed: {exc}")
+
+
+def _scan_and_execute_exits(row, db: Session):
+    """
+    Check all open positions for a strategy against exit conditions.
+    Auto-executes exits when conditions fire.
+    """
+    from app.db.models_stock_holding import StockHolding
+    from app.api.routes.condition_scanner import (
+        TIMEFRAME_CANDLE_MAP, _build_price_series, _evaluate_condition,
+    )
+
+    holdings = (
+        db.query(StockHolding)
+        .filter(
+            StockHolding.strategy_name == row.name,
+            StockHolding.status == "OPEN",
+        )
+        .all()
+    )
+    if not holdings:
+        return
+
+    symbols = [h.symbol for h in holdings]
+    ltps: dict = {}
+    try:
+        quotes = _kite_service.get_bulk_quotes(symbols) or {}
+        for sym in symbols:
+            q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
+            if q:
+                ltps[sym] = float(q.get("last_price") or 0)
+    except Exception:
+        pass
+
+    exit_conditions = row.exit_config_dict.get("exit_conditions") or []
+    entry_conditions = row.entry_conditions_list
+    candle_info = TIMEFRAME_CANDLE_MAP.get(row.timeframe or "Day", TIMEFRAME_CANDLE_MAP["Day"])
+    CandleModel, date_attr, _ = candle_info
+    date_col = getattr(CandleModel, date_attr)
+    mode = get_execution_mode()
+
+    for h in holdings:
+        ltp = ltps.get(h.symbol) or h.current_price or h.entry_price
+        should_exit = False
+        exit_reason = None
+
+        try:
+            candles = (
+                db.query(CandleModel)
+                .filter(CandleModel.symbol == h.symbol)
+                .order_by(desc(date_col))
+                .limit(200)
+                .all()
+            )
+            if len(candles) < 30:
+                continue
+            candles = candles[::-1]
+            closes, highs, lows, volumes = _build_price_series(candles, ltp=ltp)
+
+            if exit_conditions and all(_evaluate_condition(ec, closes, highs, lows, volumes) for ec in exit_conditions):
+                should_exit = True
+                exit_reason = "COND_EXIT"
+
+            if not should_exit and entry_conditions:
+                conditions_met = sum(
+                    1 for c in entry_conditions
+                    if _evaluate_condition(c, closes, highs, lows, volumes)
+                )
+                if conditions_met == 0:
+                    should_exit = True
+                    exit_reason = "ENTRY_REVERSAL"
+        except Exception as e:
+            logger.warning(f"Exit scan error for {h.symbol}: {e}")
+            continue
+
+        if not should_exit:
+            continue
+
+        logger.info(f"  🔔 Exit signal: {h.symbol} ({exit_reason}) @ ₹{ltp}")
+
+        # Execute the exit
+        exit_direction = "SELL" if h.direction == "BUY" else "BUY"
+        order_id = None
+        status = "FAILED"
+
+        try:
+            if is_paper_mode(mode) or mode == "ZERODHA_DRY_RUN":
+                order_id = f"EXIT-PAPER-{datetime.now().strftime('%Y%m%d%H%M%S')}-{h.symbol}"
+                status = "FILLED_PAPER"
+            elif is_live_mode(mode):
+                from app.core.broker.zerodha.client import get_kite_client
+                kite = get_kite_client()
+                tx = kite.TRANSACTION_TYPE_SELL if exit_direction == "SELL" else kite.TRANSACTION_TYPE_BUY
+                order_id = str(kite.place_order(
+                    variety=kite.VARIETY_REGULAR,
+                    exchange=kite.EXCHANGE_NSE,
+                    tradingsymbol=h.symbol,
+                    transaction_type=tx,
+                    quantity=h.quantity,
+                    product=kite.PRODUCT_CNC,
+                    order_type=kite.ORDER_TYPE_MARKET,
+                ))
+                status = "PLACED_LIVE"
+            else:
+                order_id = f"EXIT-DRY-{datetime.now().strftime('%Y%m%d%H%M%S')}-{h.symbol}"
+                status = "DRY_RUN"
+        except Exception as e:
+            logger.error(f"    ❌ Auto exit order failed for {h.symbol}: {e}")
+            continue
+
+        if h.direction == "BUY":
+            pnl = round((ltp - h.entry_price) * h.quantity, 2)
+        else:
+            pnl = round((h.entry_price - ltp) * h.quantity, 2)
+
+        from app.core.utils.time import now_ist
+        h.status = "CLOSED"
+        h.exit_price = ltp
+        h.exit_reason = exit_reason
+        h.closed_at = now_ist()
+        h.pnl = pnl
+        h.current_price = ltp
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            continue
+
+        logger.info(f"    ✅ Auto exit done: {exit_direction} {h.symbol} @ ₹{ltp}, P&L=₹{pnl:+,.2f}")
+
+        try:
+            from app.services.notifications import NotificationService
+            svc = NotificationService(db)
+            emoji = "🟢" if pnl >= 0 else "🔴"
+            svc._send_telegram(
+                f"{emoji} <b>Auto Exit: {row.name}</b>\n"
+                f"{exit_direction} {h.symbol} @ ₹{ltp}\n"
+                f"Reason: {exit_reason} | P&L: ₹{pnl:+,.2f} | Mode: {mode}"
+            )
+        except Exception:
+            pass
+
+        try:
+            from app.db.models_auto_trader import AutoTraderLog
+            log = AutoTraderLog(
+                strategy=row.name,
+                action="AUTO_EXIT",
+                underlying=h.symbol,
+                reason=f"{exit_direction} @ {ltp} pnl={pnl} reason={exit_reason} mode={mode}",
+                details={"order_id": order_id, "status": status, "exit_reason": exit_reason},
+                severity="SUCCESS",
+            )
+            db.add(log)
+            db.commit()
+        except Exception:
+            pass
+
 
 def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session):
     """Scan one strategy and auto-execute any signals."""

@@ -117,6 +117,11 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     data["bb_position"] = (data["close"] - bb_lower) / (bb_upper - bb_lower)  # 0-1 position within bands
 
     # --- Volume ---
+    # Volume zero-check BEFORE computing volume-based features
+    zero_vol_mask = data["volume"].fillna(0) == 0
+    if zero_vol_mask.any():
+        data.loc[zero_vol_mask, "volume"] = np.nan
+
     data["volume_ma"] = data["volume"].rolling(config.vol_window).mean()
     data["volume_ratio"] = data["volume"] / data["volume_ma"]
     
@@ -135,16 +140,16 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     data["lower_shadow"] = (data[["open", "close"]].min(axis=1) - data["low"]) / candle_range
 
     # --- Additional momentum / mean-reversion features ---
-    data["rsi_slope"] = data["rsi"].pct_change(3)  # RSI momentum
+    data["rsi_slope"] = data["rsi"].diff(3) / 100.0  # RSI momentum, normalized to [-1, 1] range
     data["ret_5_vs_vol"] = data["ret_short"] / (data["volatility"] + 1e-8)  # Sharpe-like ratio
-    rolling_high = data["high"].rolling(20).max()
-    rolling_low = data["low"].rolling(20).min()
+    rolling_high = data["high"].rolling(20).max().shift(1)
+    rolling_low = data["low"].rolling(20).min().shift(1)
     data["close_vs_high20"] = (data["close"] - rolling_high) / rolling_high  # proximity to 20d high
     data["close_vs_low20"] = (data["close"] - rolling_low) / rolling_low    # proximity to 20d low
     
     # --- Momentum divergence (price vs RSI direction mismatch) ---
-    price_direction = data["ret_short"].rolling(5).mean()
-    rsi_direction = data["rsi"].diff(5) / 100
+    price_direction = data["ret_short"].shift(1).rolling(5).mean()
+    rsi_direction = data["rsi"].shift(1).diff(5) / 100
     data["price_rsi_divergence"] = price_direction - rsi_direction
     
     # Momentum acceleration (2nd derivative of price)
@@ -167,10 +172,6 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
         data["ema_fast_slope"].clip(-0.02, 0.02) +
         data["macd_hist"].clip(-0.5, 0.5) / 10
     )
-
-    if float(data["volume"].fillna(0).sum()) == 0.0:
-        data["volume_ratio"] = 1.0
-        data["obv_slope"] = 0.0
 
     data = data.replace([np.inf, -np.inf], np.nan).dropna()
     return data

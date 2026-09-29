@@ -75,8 +75,8 @@ def run_signal_backtest(
     config: StockMLConfig,
     *,
     model_type: str = "single",
-    threshold_bullish: float = 0.55,
-    threshold_bearish: float = 0.45,
+    threshold_bullish: Optional[float] = None,
+    threshold_bearish: Optional[float] = None,
     horizon: int = 5,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -89,14 +89,23 @@ def run_signal_backtest(
     """
     # Load model
     if model_type == "ensemble":
-        from app.core.ml.ensemble import load_ensemble
+        from app.core.ml.ensemble import load_ensemble, load_ensemble_metadata
         model = load_ensemble(config)
+        meta = load_ensemble_metadata(config)
     else:
-        from app.core.ml.model_registry import load_model
+        from app.core.ml.model_registry import load_model, load_metadata
         model = load_model(config)
+        meta = load_metadata(config)
 
     if model is None:
         return {"error": f"Model ({model_type}) not trained"}
+
+    # Use calibrated threshold from metadata, matching live predict logic
+    calibrated = meta.get("decision_threshold", 0.5)
+    if threshold_bullish is None:
+        threshold_bullish = calibrated + 0.05
+    if threshold_bearish is None:
+        threshold_bearish = calibrated - 0.05
 
     # Load candles
     raw = _load_candles_df(db, symbol, config.timeframe, config.max_candles)
@@ -215,17 +224,21 @@ def run_signal_backtest(
             losses += abs(directional_return)
     pf = round(gains / losses, 2) if losses > 0 else None
 
-    # Simulated equity curve (start at 100k, invest per signal)
+    # Simulated equity curve — enforce minimum holding period to avoid overlapping trades
     equity = 100000.0
     equity_curve = [equity]
+    last_trade_idx = -horizon  # allow first trade immediately
     for e in events:
         if e.signal == "NO_TRADE" or e.forward_return is None:
             equity_curve.append(equity)
             continue
-        # BULLISH = long, BEARISH = short
+        if e.idx - last_trade_idx < horizon:  # still in previous trade's holding period
+            equity_curve.append(equity)
+            continue
         direction = 1 if e.signal == "BULLISH" else -1
         pnl = direction * e.forward_return * equity * 0.1  # 10% position sizing
         equity += pnl
+        last_trade_idx = e.idx
         equity_curve.append(round(equity, 2))
 
     # Confidence buckets

@@ -1,37 +1,43 @@
+import logging
 import pandas as pd
 import numpy as np
 from app.core.ml.config import StockMLConfig
 
+logger = logging.getLogger(__name__)
+
 def add_future_return_labels(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFrame:
     """
     Label rows based on forward return over horizon.
-    PRESERVES ALL ROWS to maintain chronological continuity for LSTM sequences.
+    Simple fixed threshold — no adaptive correction that can silently override config.
+    BUY=1 if forward return > return_threshold, else 0.
     """
     data = df.copy()
 
     future_close = data["close"].shift(-config.horizon)
     data["_future_return"] = (future_close / data["close"]) - 1.0
-
     data = data.dropna(subset=["_future_return"]).copy()
 
-    # Adaptive threshold: max(config.return_threshold, 1.5x rolling vol)
-    rolling_vol = data["close"].pct_change().rolling(20).std().shift(1).fillna(config.return_threshold)
-    adaptive_threshold = (rolling_vol * 1.5).clip(lower=config.return_threshold, upper=0.06)
-    data["label"] = (data["_future_return"] > adaptive_threshold).astype(int)
+    # Fixed threshold label — clean, no look-ahead, no adaptive override
+    data["label"] = (data["_future_return"] > config.return_threshold).astype(int)
 
-    # Enforce BUY rate in 25-45% range for balanced, high-precision labels
     buy_rate = data["label"].mean()
-    if buy_rate > 0.45:
-        # Too many BUYs — raise threshold to the Nth percentile of future returns
-        target_pct = 100 * (1 - 0.40)  # target ~40% BUY rate
-        cutoff = np.percentile(data["_future_return"], target_pct)
-        data["label"] = (data["_future_return"] > max(cutoff, config.return_threshold)).astype(int)
-    elif buy_rate < 0.25:
-        # Too few BUYs — lower to 25th percentile of positive returns
-        pos = data["_future_return"][data["_future_return"] > 0]
-        if len(pos) > 0:
-            cutoff = np.percentile(pos, 25)
-            data["label"] = (data["_future_return"] > cutoff).astype(int)
+    logger.info(
+        f"Label stats: buy_rate={buy_rate:.3f}, threshold={config.return_threshold}, "
+        f"horizon={config.horizon}, rows={len(data)}"
+    )
+
+    # Warn if label distribution is degenerate — but do NOT silently fix it
+    # (fixing it with global percentiles causes look-ahead leakage)
+    if buy_rate > 0.55:
+        logger.warning(
+            f"High BUY rate {buy_rate:.1%} — return_threshold={config.return_threshold} may be too low. "
+            f"Consider raising STOCK_ML_RETURN_THRESHOLD."
+        )
+    elif buy_rate < 0.20:
+        logger.warning(
+            f"Low BUY rate {buy_rate:.1%} — return_threshold={config.return_threshold} may be too high. "
+            f"Consider lowering STOCK_ML_RETURN_THRESHOLD."
+        )
 
     data = data.drop(columns=["_future_return"])
     return data

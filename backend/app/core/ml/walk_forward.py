@@ -143,6 +143,12 @@ def run_walk_forward(
             "folds": [],
         }
 
+    # Drop symbol column and sort by index to get a consistent chronological order
+    if "symbol" in x.columns:
+        x = x.drop(columns=["symbol"])
+    x = x.reset_index(drop=True)
+    y = y.reset_index(drop=True)
+
     splits = _walk_forward_splits(len(x), min_train=min_train, test_size=test_size, step=step)
     if not splits:
         return {"error": "Could not generate walk-forward splits", "folds": []}
@@ -186,11 +192,21 @@ def run_walk_forward(
         pipe = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
         pipe.fit(x_train, y_train)
 
-        y_pred = pipe.predict(x_test)
+        # Calibrate threshold on last 10% of training data (chronological)
+        cal_split = int(len(x_train) * 0.90)
+        x_cal, y_cal = x_train.iloc[cal_split:], y_train.iloc[cal_split:]
+        try:
+            y_cal_proba = pipe.predict_proba(x_cal)[:, 1]
+            from app.core.ml.stock_model import _find_best_threshold
+            fold_threshold = _find_best_threshold(y_cal.values, y_cal_proba)
+        except Exception:
+            fold_threshold = 0.5
+
         try:
             y_proba = pipe.predict_proba(x_test)[:, 1]
         except Exception:
             y_proba = np.zeros(len(y_test))
+        y_pred = (y_proba >= fold_threshold).astype(int)
 
         acc = float(accuracy_score(y_test, y_pred))
         prec = float(precision_score(y_test, y_pred, zero_division=0))

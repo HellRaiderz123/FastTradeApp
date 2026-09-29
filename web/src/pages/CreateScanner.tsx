@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, Play, Save, ChevronRight, ChevronDown,
   Zap, Filter, Star, Search, MoreVertical, Activity,
   TrendingUp, TrendingDown, Settings2, Eye, Download,
   AlertTriangle, CheckCircle, XCircle, Loader2, ArrowRight,
-  BarChart3, Calendar, Sparkles
+  BarChart3, Calendar, Sparkles, Bell, BellRing, LogOut
 } from 'lucide-react';
 import { useToast } from '../components/Toast';
 import api, { tradeCostAPI } from '../lib/api';
@@ -223,6 +223,33 @@ interface DiscoverySnapshot {
   completed_cycle?: boolean;
 }
 
+interface OpenPosition {
+  id: number;
+  symbol: string;
+  direction: string;
+  quantity: number;
+  entry_price: number;
+  ltp: number;
+  pnl: number;
+  pnl_pct: number;
+  exit_signal: boolean;
+  exit_reason: string | null;
+  strategy_name: string;
+  execution_mode: string;
+  created_at: string;
+}
+
+interface NewSignalAlert {
+  id: number;
+  symbol: string;
+  direction: string;
+  status: string;
+  ltp: number;
+  strategy_name: string;
+  signal_date: string;
+  first_seen_at: string;
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const COMPARATORS = [
@@ -359,6 +386,144 @@ const DEFAULT_ZERODHA_CONFIG: BrokerageConfig = {
   stamp_duty_cap: 300,
 };
 
+// ── Value Input (number or indicator expression) ─────────────────────────
+
+const INDICATOR_VALUE_OPTIONS = [
+  { label: 'SMA(20)', value: 'SMA(20)' },
+  { label: 'SMA(50)', value: 'SMA(50)' },
+  { label: 'SMA(200)', value: 'SMA(200)' },
+  { label: 'EMA(9)', value: 'EMA(9)' },
+  { label: 'EMA(20)', value: 'EMA(20)' },
+  { label: 'EMA(50)', value: 'EMA(50)' },
+  { label: 'TEMA(20)', value: 'TEMA(20)' },
+  { label: 'DEMA(20)', value: 'DEMA(20)' },
+  { label: 'WMA(20)', value: 'WMA(20)' },
+  { label: 'VWAP', value: 'VWAP' },
+  { label: 'Close(0)', value: 'Close(0)' },
+  { label: 'Open(0)', value: 'Open(0)' },
+  { label: 'High(0)', value: 'High(0)' },
+  { label: 'Low(0)', value: 'Low(0)' },
+  { label: 'RSI(14)', value: 'RSI(14)' },
+  { label: 'ATR(14)', value: 'ATR(14)' },
+  { label: 'ADX(14)', value: 'ADX(14)' },
+  { label: 'CCI(20)', value: 'CCI(20)' },
+  { label: 'ROC(10)', value: 'ROC(10)' },
+  { label: 'BB_Upper(20)', value: 'BB_Upper(20)' },
+  { label: 'BB_Lower(20)', value: 'BB_Lower(20)' },
+  { label: 'BB_Mid(20)', value: 'BB_Mid(20)' },
+  { label: 'Supertrend(10,3)', value: 'Supertrend(10,3)' },
+  { label: 'Supertrend(7,3)', value: 'Supertrend(7,3)' },
+  { label: 'Supertrend(14,2)', value: 'Supertrend(14,2)' },
+];
+
+const isIndicatorValue = (v: string) =>
+  /^[A-Za-z_]+\s*\(/.test(v.trim()) || ['VWAP', 'OBV', 'Close(0)', 'Open(0)', 'High(0)', 'Low(0)'].includes(v.trim());
+
+interface ConditionValueInputProps {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}
+
+const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChange, placeholder }) => {
+  const [mode, setMode] = React.useState<'number' | 'indicator'>(
+    () => isIndicatorValue(value) ? 'indicator' : 'number'
+  );
+  const [showDropdown, setShowDropdown] = React.useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  React.useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const switchToIndicator = () => {
+    setMode('indicator');
+    if (!isIndicatorValue(value)) onChange('SMA(20)');
+    setShowDropdown(true);
+  };
+
+  const switchToNumber = () => {
+    setMode('number');
+    if (isIndicatorValue(value)) onChange('0');
+    setShowDropdown(false);
+  };
+
+  return (
+    <div className="relative flex items-center gap-1" ref={dropdownRef}>
+      {mode === 'indicator' ? (
+        <button
+          type="button"
+          onClick={() => setShowDropdown(v => !v)}
+          className="flex items-center gap-1.5 bg-indigo-600/20 border border-indigo-500/50 hover:border-indigo-400 rounded-lg px-3 py-2 text-sm text-indigo-200 font-medium transition min-w-[90px] max-w-[160px] truncate"
+          title={value}
+        >
+          <span className="text-indigo-400 text-xs">ƒ</span>
+          <span className="truncate">{value || 'Pick…'}</span>
+        </button>
+      ) : (
+        <input
+          type="text"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder || 'Value'}
+          className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-blue-500 focus:outline-none"
+        />
+      )}
+
+      {/* Toggle button */}
+      <button
+        type="button"
+        onClick={mode === 'number' ? switchToIndicator : switchToNumber}
+        title={mode === 'number' ? 'Switch to indicator value' : 'Switch to number value'}
+        className={`px-1.5 py-2 rounded-lg border text-xs font-bold transition ${
+          mode === 'indicator'
+            ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300 hover:bg-slate-800'
+            : 'bg-slate-800 border-slate-600 text-slate-400 hover:text-indigo-300 hover:border-indigo-500/50'
+        }`}
+      >
+        ƒ
+      </button>
+
+      {/* Indicator dropdown */}
+      {showDropdown && mode === 'indicator' && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-44 max-h-64 overflow-y-auto custom-scrollbar">
+          <div className="p-1.5">
+            <input
+              type="text"
+              placeholder="Custom e.g. EMA(9)"
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded-lg text-xs text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none mb-1"
+              autoFocus
+            />
+            {INDICATOR_VALUE_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => { onChange(opt.value); setShowDropdown(false); }}
+                className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition ${
+                  value === opt.value
+                    ? 'bg-indigo-600/30 text-indigo-200'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <span className="text-indigo-400 mr-1">ƒ</span>{opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 const CreateScanner: React.FC = () => {
@@ -434,6 +599,18 @@ const CreateScanner: React.FC = () => {
   const [explaining, setExplaining] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
 
+  // Open positions + exit scan state
+  const [openPositions, setOpenPositions] = useState<OpenPosition[]>([]);
+  const [loadingPositions, setLoadingPositions] = useState(false);
+  const [exitingId, setExitingId] = useState<number | null>(null);
+  const [showPositionsPanel, setShowPositionsPanel] = useState(false);
+
+  // New signal alerts (polling)
+  const [newSignalAlerts, setNewSignalAlerts] = useState<NewSignalAlert[]>([]);
+  const [lastAlertCount, setLastAlertCount] = useState(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const seenSignalIds = useRef<Set<number>>(new Set());
+
   const explainStrategy = useCallback(async () => {
     if (!selectedId) return;
     setExplaining(true);
@@ -448,6 +625,66 @@ const CreateScanner: React.FC = () => {
       setExplaining(false);
     }
   }, [selectedId]);
+
+  const loadOpenPositions = useCallback(async (stratId: number) => {
+    setLoadingPositions(true);
+    try {
+      const res = await api.get(`/condition-scanner/open-positions/${stratId}`);
+      setOpenPositions(res.data.positions || []);
+      if ((res.data.positions || []).length > 0) setShowPositionsPanel(true);
+    } catch {
+      setOpenPositions([]);
+    } finally {
+      setLoadingPositions(false);
+    }
+  }, []);
+
+  const executeExit = useCallback(async (holdingId: number) => {
+    setExitingId(holdingId);
+    try {
+      const res = await api.post(`/condition-scanner/execute-exit/${holdingId}`);
+      showToast('success', `Exit: ${res.data.message} | P&L: ₹${res.data.pnl?.toFixed(2)}`);
+      if (selectedId) loadOpenPositions(selectedId);
+    } catch (err: any) {
+      showToast('error', err?.response?.data?.detail || 'Exit failed');
+    } finally {
+      setExitingId(null);
+    }
+  }, [selectedId, loadOpenPositions, showToast]);
+
+  // Poll for new signals every 30s when a strategy is selected
+  useEffect(() => {
+    if (!selectedId) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const res = await api.get('/condition-scanner/new-signals', {
+          params: { since_minutes: 5, strategy_id: selectedId },
+        });
+        const signals: NewSignalAlert[] = res.data.signals || [];
+        const fresh = signals.filter(s => !seenSignalIds.current.has(s.id));
+        if (fresh.length > 0) {
+          fresh.forEach(s => seenSignalIds.current.add(s.id));
+          setNewSignalAlerts(prev => [...fresh, ...prev].slice(0, 20));
+          setLastAlertCount(c => c + fresh.length);
+          // Show toast for new BUY signals
+          const buyAlerts = fresh.filter(s => s.direction === 'BUY' && s.status === 'SIGNAL_GENERATED');
+          if (buyAlerts.length > 0) {
+            showToast('success', `🔔 ${buyAlerts.length} new signal(s): ${buyAlerts.map(s => s.symbol).join(', ')}`);
+          }
+        }
+        // Also refresh positions
+        loadOpenPositions(selectedId);
+      } catch { /* silent */ }
+    };
+
+    poll(); // immediate
+    pollRef.current = setInterval(poll, 30000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [selectedId, loadOpenPositions, showToast]);
 
   // ── Data loading ───────────────────────────────────────────────────────
 
@@ -491,6 +728,10 @@ const CreateScanner: React.FC = () => {
     setEditing(true);
     setScanResult(null);
     setExplanation(null);
+    setOpenPositions([]);
+    setNewSignalAlerts([]);
+    seenSignalIds.current.clear();
+    loadOpenPositions(strategy.id);
 
     if (strategy.last_backtest_result?.summary) {
       setBacktestResult(strategy.last_backtest_result);
@@ -1104,12 +1345,22 @@ const CreateScanner: React.FC = () => {
               <Zap className="w-5 h-5 text-yellow-400" />
               Create Scanner
             </h1>
-            <button
-              onClick={newStrategy}
-              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5" /> New
-            </button>
+            <div className="flex items-center gap-2">
+              {lastAlertCount > 0 && (
+                <div className="relative">
+                  <BellRing className="w-4 h-4 text-yellow-400" />
+                  <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 rounded-full text-[8px] text-white flex items-center justify-center font-bold">
+                    {lastAlertCount > 9 ? '9+' : lastAlertCount}
+                  </span>
+                </div>
+              )}
+              <button
+                onClick={newStrategy}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" /> New
+              </button>
+            </div>
           </div>
 
           {/* Type filters */}
@@ -1270,6 +1521,16 @@ const CreateScanner: React.FC = () => {
                       )}
                       {s.auto_scan_enabled && (
                         <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1 py-0.5 rounded font-semibold">AUTO</span>
+                      )}
+                      {selectedId === s.id && openPositions.length > 0 && (
+                        <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 py-0.5 rounded font-semibold">
+                          {openPositions.length} open
+                        </span>
+                      )}
+                      {selectedId === s.id && openPositions.some(p => p.exit_signal) && (
+                        <span className="text-[9px] bg-orange-500/20 text-orange-300 px-1 py-0.5 rounded font-semibold flex items-center gap-0.5">
+                          <AlertTriangle className="w-2.5 h-2.5" /> Exit
+                        </span>
                       )}
                     </div>
                   </div>
@@ -1599,14 +1860,38 @@ const CreateScanner: React.FC = () => {
                                   ))}
                                 </select>
 
-                                {/* Value */}
-                                <input
-                                  type="text"
-                                  value={cond.value}
-                                  onChange={e => updateCondition(idx, 'value', e.target.value)}
-                                  placeholder="Value or Close(0)"
-                                  className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-blue-500 focus:outline-none"
-                                />
+                                {/* Value — between gets two inputs, others get the indicator-aware input */}
+                                {cond.comparator === 'between' ? (
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      value={(cond.value ?? '').split(',')[0]?.trim() || ''}
+                                      onChange={e => {
+                                        const hi = (cond.value ?? '').split(',')[1]?.trim() || '100';
+                                        updateCondition(idx, 'value', `${e.target.value},${hi}`);
+                                      }}
+                                      placeholder="lo"
+                                      className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-2 text-sm text-white w-16 text-center focus:border-blue-500 focus:outline-none"
+                                    />
+                                    <span className="text-slate-500 text-xs">–</span>
+                                    <input
+                                      type="number"
+                                      value={(cond.value ?? '').split(',')[1]?.trim() || ''}
+                                      onChange={e => {
+                                        const lo = (cond.value ?? '').split(',')[0]?.trim() || '0';
+                                        updateCondition(idx, 'value', `${lo},${e.target.value}`);
+                                      }}
+                                      placeholder="hi"
+                                      className="bg-slate-900 border border-slate-600 rounded-lg px-2 py-2 text-sm text-white w-16 text-center focus:border-blue-500 focus:outline-none"
+                                    />
+                                  </div>
+                                ) : (
+                                  <ConditionValueInput
+                                    value={cond.value}
+                                    onChange={v => updateCondition(idx, 'value', v)}
+                                    placeholder="Value"
+                                  />
+                                )}
                               </div>
                             </div>
 
@@ -1956,17 +2241,45 @@ const CreateScanner: React.FC = () => {
                               >
                                 {COMPARATORS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                               </select>
-                              <input
-                                type="text"
-                                value={cond.value}
-                                onChange={e => {
-                                  const updated = [...(editorExit.exit_conditions || [])];
-                                  updated[idx] = { ...updated[idx], value: e.target.value };
-                                  setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
-                                }}
-                                placeholder="0"
-                                className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white w-16"
-                              />
+                              {cond.comparator === 'between' ? (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="number"
+                                    value={(cond.value ?? '').split(',')[0]?.trim() || ''}
+                                    onChange={e => {
+                                      const hi = (cond.value ?? '').split(',')[1]?.trim() || '100';
+                                      const updated = [...(editorExit.exit_conditions || [])];
+                                      updated[idx] = { ...updated[idx], value: `${e.target.value},${hi}` };
+                                      setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                    }}
+                                    placeholder="lo"
+                                    className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white w-14 text-center"
+                                  />
+                                  <span className="text-slate-500 text-xs">–</span>
+                                  <input
+                                    type="number"
+                                    value={(cond.value ?? '').split(',')[1]?.trim() || ''}
+                                    onChange={e => {
+                                      const lo = (cond.value ?? '').split(',')[0]?.trim() || '0';
+                                      const updated = [...(editorExit.exit_conditions || [])];
+                                      updated[idx] = { ...updated[idx], value: `${lo},${e.target.value}` };
+                                      setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                    }}
+                                    placeholder="hi"
+                                    className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white w-14 text-center"
+                                  />
+                                </div>
+                              ) : (
+                                <ConditionValueInput
+                                  value={cond.value}
+                                  onChange={v => {
+                                    const updated = [...(editorExit.exit_conditions || [])];
+                                    updated[idx] = { ...updated[idx], value: v };
+                                    setEditorExit(prev => ({ ...prev, exit_conditions: updated }));
+                                  }}
+                                  placeholder="0"
+                                />
+                              )}
                             </div>
                             <button
                               onClick={() => {
@@ -2124,6 +2437,134 @@ const CreateScanner: React.FC = () => {
 
               {/* Right: Scan Results / Backtest Results */}
               <div className="w-80 flex-shrink-0 space-y-4">
+
+                {/* ── New Signal Alerts ── */}
+                {newSignalAlerts.length > 0 && (
+                  <div className="bg-slate-900/70 rounded-xl border border-yellow-500/30 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-semibold text-yellow-300 flex items-center gap-1.5">
+                        <BellRing className="w-3.5 h-3.5" /> New Signals ({newSignalAlerts.length})
+                      </h3>
+                      <button onClick={() => { setNewSignalAlerts([]); setLastAlertCount(0); }} className="text-[10px] text-slate-500 hover:text-white">
+                        Clear
+                      </button>
+                    </div>
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar">
+                      {newSignalAlerts.map(alert => (
+                        <div key={alert.id} className="flex items-center justify-between bg-slate-800/60 rounded-lg px-2.5 py-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-1.5 h-1.5 rounded-full ${alert.direction === 'BUY' ? 'bg-green-400' : 'bg-red-400'}`} />
+                            <span className="text-xs font-semibold text-white">{alert.symbol}</span>
+                            <span className={`text-[10px] font-bold ${alert.direction === 'BUY' ? 'text-green-400' : 'text-red-400'}`}>{alert.direction}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-500">
+                            {alert.ltp ? `₹${alert.ltp}` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Open Positions Panel ── */}
+                {(openPositions.length > 0 || loadingPositions) && (
+                  <div className="bg-slate-900/70 rounded-xl border border-emerald-500/30 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-emerald-300 flex items-center gap-1.5">
+                        <Activity className="w-4 h-4" />
+                        Open Positions ({openPositions.length})
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => selectedId && loadOpenPositions(selectedId)}
+                          disabled={loadingPositions}
+                          className="text-[10px] text-slate-400 hover:text-white"
+                        >
+                          {loadingPositions ? <Loader2 className="w-3 h-3 animate-spin" /> : '↻'}
+                        </button>
+                        <button onClick={() => setShowPositionsPanel(v => !v)} className="text-[10px] text-slate-500 hover:text-white">
+                          {showPositionsPanel ? '▲' : '▼'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Total P&L */}
+                    {openPositions.length > 0 && (
+                      <div className="flex items-center justify-between mb-3 bg-slate-800/50 rounded-lg px-3 py-2">
+                        <span className="text-xs text-slate-400">Total P&L</span>
+                        <span className={`text-sm font-bold ${
+                          openPositions.reduce((s, p) => s + p.pnl, 0) >= 0 ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          ₹{openPositions.reduce((s, p) => s + p.pnl, 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    )}
+
+                    {showPositionsPanel && (
+                      <div className="space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar">
+                        {openPositions.map(pos => (
+                          <div
+                            key={pos.id}
+                            className={`rounded-lg p-3 border ${
+                              pos.exit_signal
+                                ? 'border-orange-500/50 bg-orange-500/10'
+                                : 'border-slate-700/50 bg-slate-800/40'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-white">{pos.symbol}</span>
+                                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                  pos.direction === 'BUY' ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'
+                                }`}>{pos.direction}</span>
+                              </div>
+                              <span className={`text-sm font-bold ${pos.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {pos.pnl >= 0 ? '+' : ''}₹{pos.pnl.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-1 text-[10px] text-slate-400 mb-2">
+                              <div>Entry: <span className="text-white">₹{pos.entry_price.toFixed(2)}</span></div>
+                              <div>LTP: <span className="text-white">₹{pos.ltp.toFixed(2)}</span></div>
+                              <div>Qty: <span className="text-white">{pos.quantity}</span></div>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-[10px] font-semibold ${
+                                  pos.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400'
+                                }`}>
+                                  {pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct.toFixed(2)}%
+                                </span>
+                                {pos.exit_signal && (
+                                  <span className="flex items-center gap-1 text-[10px] text-orange-300 bg-orange-500/20 px-1.5 py-0.5 rounded border border-orange-500/30">
+                                    <AlertTriangle className="w-2.5 h-2.5" />
+                                    {pos.exit_reason === 'COND_EXIT' ? 'Exit Cond' : 'Reversal'}
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => executeExit(pos.id)}
+                                disabled={exitingId === pos.id}
+                                className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition disabled:opacity-50 ${
+                                  pos.exit_signal
+                                    ? 'bg-orange-600 hover:bg-orange-700 text-white'
+                                    : 'bg-red-600/80 hover:bg-red-600 text-white'
+                                }`}
+                              >
+                                {exitingId === pos.id
+                                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                                  : <LogOut className="w-3 h-3" />
+                                }
+                                {pos.exit_signal ? 'Exit Now' : 'Sell'}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {/* Scan Results */}
                 {scanResult ? (
                   <div className="bg-slate-900/70 rounded-xl border border-slate-800 p-4">

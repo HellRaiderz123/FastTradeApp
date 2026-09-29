@@ -64,26 +64,55 @@ def _per_symbol_split(
 
 
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-    """Find threshold that maximises F1 on val set.
-    Pred rate must be 15-55% (not degenerate).
-    Prefers higher precision by breaking ties with precision.
-    Falls back to 0.45 if no valid threshold found.
+    """
+    Find the best operating threshold on the val set.
+
+    Priority order:
+      1. precision >= 0.50 AND recall >= 0.10 AND pred_rate 10-55%  -> maximise F1
+      2. precision >= 0.45 AND recall >= 0.10 AND pred_rate 10-55%  -> maximise F1
+      3. Any threshold with pred_rate 10-55%                        -> maximise F1
+      4. Hard fallback: 0.50
+
+    Recall floor of 0.10 prevents the model from firing on <1% of bars.
     """
     from sklearn.metrics import precision_score as _p, recall_score as _r, f1_score as _f1
     n = len(y_true)
-    best_t, best_f1, best_p = 0.45, 0.0, 0.0
-    for t in np.arange(0.30, 0.75, 0.01):
+    if n < 50:
+        return 0.50
+
+    candidates = []
+    for t in np.arange(0.25, 0.85, 0.01):
         preds = (y_proba >= t).astype(int)
         pred_rate = preds.sum() / n
-        if pred_rate < 0.15 or pred_rate > 0.55:
+        if pred_rate < 0.10 or pred_rate > 0.55:
             continue
         p = _p(y_true, preds, zero_division=0)
         r = _r(y_true, preds, zero_division=0)
-        f1 = _f1(y_true, preds, zero_division=0)
-        # Among equal F1, prefer higher precision (fewer false BUYs)
-        if f1 > best_f1 or (f1 == best_f1 and p > best_p):
-            best_f1, best_p, best_t = f1, p, t
-    return round(float(best_t), 2)
+        f = _f1(y_true, preds, zero_division=0)
+        candidates.append((round(t, 2), p, r, f))
+
+    if not candidates:
+        logger.warning("Threshold search: no threshold in pred_rate 10-55%. Using 0.50.")
+        return 0.50
+
+    # Priority 1: precision>=0.50, recall>=0.10
+    p1 = [(t, p, r, f) for t, p, r, f in candidates if p >= 0.50 and r >= 0.10]
+    if p1:
+        best = max(p1, key=lambda x: x[3])
+        logger.info(f"Threshold (P1): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
+        return best[0]
+
+    # Priority 2: precision>=0.45, recall>=0.10
+    p2 = [(t, p, r, f) for t, p, r, f in candidates if p >= 0.45 and r >= 0.10]
+    if p2:
+        best = max(p2, key=lambda x: x[3])
+        logger.warning(f"Threshold (P2): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
+        return best[0]
+
+    # Priority 3: best F1 regardless
+    best = max(candidates, key=lambda x: x[3])
+    logger.warning(f"Threshold (P3): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f} — weak model")
+    return best[0]
 
 
 def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) -> Dict[str, float]:
@@ -98,28 +127,36 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
 
     # Calculate class weights for imbalanced data
     n_samples = len(y_train)
-    n_pos = y_train.sum()
+    n_pos = int(y_train.sum())
     n_neg = n_samples - n_pos
-    logger.info(f"📊 Class balance - UP: {n_pos}, DOWN: {n_neg}")
+    logger.info(f"📊 Class balance - UP: {n_pos}, DOWN: {n_neg}, ratio: {n_neg/max(n_pos,1):.1f}x")
 
-    # Use HistGradientBoostingClassifier - faster, handles NaN, better generalization
+    # Only apply sample_weight if imbalance is mild (< 3:1).
+    # Severe upweighting of minority class destroys precision — model fires BUY too often.
+    imbalance_ratio = n_neg / max(n_pos, 1)
+    if 1.5 < imbalance_ratio < 3.0:
+        sample_weight = np.where(y_train.values == 1, imbalance_ratio, 1.0).astype(float)
+        fit_kwargs = {"clf__sample_weight": sample_weight}
+        logger.info(f"📊 Applying mild sample_weight (ratio={imbalance_ratio:.2f})")
+    else:
+        fit_kwargs = {}
+        logger.info(f"📊 Skipping sample_weight (ratio={imbalance_ratio:.2f} — too extreme or balanced)")
+
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", HistGradientBoostingClassifier(
-            max_iter=300,
-            max_depth=4,
-            learning_rate=0.05,
-            min_samples_leaf=30,
-            max_leaf_nodes=31,
-            l2_regularization=2.0,
-            early_stopping=True,
-            validation_fraction=0.15,
-            n_iter_no_change=20,
+            max_iter=400,
+            max_depth=5,
+            learning_rate=0.04,
+            min_samples_leaf=50,      # larger leaf = less overfit on noise
+            max_leaf_nodes=24,        # fewer leaves = simpler trees
+            l2_regularization=3.0,   # stronger regularization
+            early_stopping=False,
             random_state=42,
         )),
     ])
 
-    pipeline.fit(x_train, y_train)
+    pipeline.fit(x_train, y_train, **fit_kwargs)
 
     # Calibrate threshold on val set (never seen during training)
     y_val_proba = pipeline.predict_proba(x_val)[:, 1] if len(x_val) else np.array([])

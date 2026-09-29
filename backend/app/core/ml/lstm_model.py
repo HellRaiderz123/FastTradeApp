@@ -203,13 +203,13 @@ def train_lstm_model(
     idx = np.random.permutation(len(X_train))
     X_train, y_train = X_train[idx], y_train[idx]
 
-    # No class weighting — let precision floor in threshold search handle imbalance
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val),
         epochs=epochs,
         batch_size=max(batch_size, 256),
         callbacks=callbacks,
+        class_weight=class_weight,
         verbose=1
     )
     

@@ -254,6 +254,7 @@ const ScannerExecution: React.FC = () => {
   );
 
   const [historicalSignals, setHistoricalSignals] = useState<HistoricalSignal[]>([]);
+  const [openPositionExits, setOpenPositionExits] = useState<any[]>([]);
 
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(
     scanResult?.signals?.[0]?.symbol || null
@@ -271,11 +272,18 @@ const ScannerExecution: React.FC = () => {
       }
     }).then(res => {
       const history = res.data?.history || [];
-      // Filter out signals that are already in current scan
       const currentSymbols = new Set(scanResult.signals.map(s => s.symbol));
       const filtered = history.filter((h: HistoricalSignal) => !currentSymbols.has(h.symbol));
       setHistoricalSignals(filtered);
     }).catch(() => {});
+
+    // Fetch open positions with exit signals
+    api.get(`/condition-scanner/open-positions/${scanResult.strategy_id}`)
+      .then(res => {
+        const exits = (res.data?.positions || []).filter((p: any) => p.exit_signal);
+        setOpenPositionExits(exits);
+      })
+      .catch(() => {});
   }, [scanResult?.strategy_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [executingAll, setExecutingAll] = useState(false);
@@ -540,6 +548,58 @@ const ScannerExecution: React.FC = () => {
                       <CheckCircle className="w-3 h-3" />
                       C{hist.trigger_count}
                     </span>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Open positions with exit signals */}
+          {openPositionExits.length > 0 && (
+            <>
+              <div className="px-4 py-2 bg-orange-900/20 border-y border-orange-500/30">
+                <span className="text-[10px] text-orange-300 uppercase tracking-wider font-semibold flex items-center gap-1.5">
+                  <AlertCircle className="w-3 h-3" />
+                  Exit Signals ({openPositionExits.length})
+                </span>
+              </div>
+              {openPositionExits.map((pos: any) => (
+                <div
+                  key={pos.id}
+                  className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-center px-4 py-3 border-b border-orange-500/20 bg-orange-500/5"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm font-semibold text-orange-200 truncate">{pos.symbol}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30">
+                      {pos.exit_reason === 'COND_EXIT' ? 'Exit Cond' : 'Reversal'}
+                    </span>
+                  </div>
+                  <span className="text-xs text-slate-400 text-right">
+                    ₹{pos.entry_price?.toFixed(2)}
+                  </span>
+                  <span className="text-xs text-white text-right font-medium">
+                    ₹{pos.ltp?.toFixed(2)}
+                  </span>
+                  <span className={`text-xs text-right font-semibold ${
+                    pos.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    {pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct?.toFixed(2)}%
+                  </span>
+                  <div className="flex items-center justify-end w-24">
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.post(`/condition-scanner/execute-exit/${pos.id}`);
+                          setOpenPositionExits(prev => prev.filter(p => p.id !== pos.id));
+                          showToast('success', `Exit executed: ${pos.symbol}`);
+                        } catch (err: any) {
+                          showToast('error', err?.response?.data?.detail || 'Exit failed');
+                        }
+                      }}
+                      className="px-2 py-1 bg-orange-600 hover:bg-orange-700 text-white text-[10px] font-semibold rounded-lg"
+                    >
+                      Exit
+                    </button>
                   </div>
                 </div>
               ))}

@@ -45,9 +45,7 @@ def _get_lgb():
     from lightgbm import LGBMClassifier
     return LGBMClassifier
 
-# ---------------------------------------------------------------------------
-# Ensemble wrapper
-# ---------------------------------------------------------------------------
+
 
 
 class EnsembleModel:
@@ -141,24 +139,55 @@ def _per_symbol_split(
 
 
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-    """Find threshold maximising F1 on val set.
-    Pred rate must be 15-55% (not degenerate).
-    Prefers higher precision by breaking ties with precision.
-    Falls back to 0.45 if no valid threshold found.
     """
-    best_t, best_f1, best_p = 0.45, 0.0, 0.0
+    Find the best operating threshold on the val set.
+
+    Priority order:
+      1. precision >= 0.50 AND recall >= 0.10 AND pred_rate 10-50%  -> maximise F1
+      2. precision >= 0.45 AND recall >= 0.10 AND pred_rate 10-50%  -> maximise F1
+      3. Any threshold with pred_rate 10-50%                        -> maximise F1
+      4. Hard fallback: 0.50
+
+    Recall floor of 0.10 prevents the model from firing on <1% of bars.
+    """
+    from sklearn.metrics import precision_score as _p, recall_score as _r, f1_score as _f1
     n = len(y_true)
-    for t in np.arange(0.30, 0.75, 0.01):
+    if n < 50:
+        return 0.50
+
+    candidates = []  # (threshold, precision, recall, f1)
+    for t in np.arange(0.25, 0.85, 0.01):
         preds = (y_proba >= t).astype(int)
-        rate = preds.sum() / n
-        if rate < 0.15 or rate > 0.55:
+        pred_rate = preds.sum() / n
+        if pred_rate < 0.10 or pred_rate > 0.55:
             continue
-        p = precision_score(y_true, preds, zero_division=0)
-        r = recall_score(y_true, preds, zero_division=0)
-        f1 = f1_score(y_true, preds, zero_division=0)
-        if f1 > best_f1 or (f1 == best_f1 and p > best_p):
-            best_f1, best_p, best_t = f1, p, t
-    return round(float(best_t), 2)
+        p = _p(y_true, preds, zero_division=0)
+        r = _r(y_true, preds, zero_division=0)
+        f = _f1(y_true, preds, zero_division=0)
+        candidates.append((round(t, 2), p, r, f))
+
+    if not candidates:
+        logger.warning("Threshold search: no threshold found in pred_rate 10-55%. Using 0.50.")
+        return 0.50
+
+    # Priority 1: precision>=0.50, recall>=0.10, best F1
+    p1 = [(t, p, r, f) for t, p, r, f in candidates if p >= 0.50 and r >= 0.10]
+    if p1:
+        best = max(p1, key=lambda x: x[3])
+        logger.info(f"Threshold (P1): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
+        return best[0]
+
+    # Priority 2: precision>=0.45, recall>=0.10, best F1
+    p2 = [(t, p, r, f) for t, p, r, f in candidates if p >= 0.45 and r >= 0.10]
+    if p2:
+        best = max(p2, key=lambda x: x[3])
+        logger.warning(f"Threshold (P2 fallback): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
+        return best[0]
+
+    # Priority 3: any valid pred_rate, best F1
+    best = max(candidates, key=lambda x: x[3])
+    logger.warning(f"Threshold (P3 fallback): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f} — model signal quality is weak")
+    return best[0]
 
 
 def _build_gbm_pipeline() -> Pipeline:
@@ -185,12 +214,14 @@ def _build_rf_pipeline() -> Pipeline:
 
 def _build_xgb_pipeline(y_train: pd.Series) -> Pipeline:
     XGBClassifier = _get_xgb()
+    scale_pos_weight = float((y_train == 0).sum()) / max(float((y_train == 1).sum()), 1.0)
     return Pipeline([
         ("scaler", StandardScaler()),
         ("clf", XGBClassifier(
             n_estimators=250, max_depth=4, learning_rate=0.05,
             subsample=0.8, colsample_bytree=0.8,
             min_child_weight=20, reg_alpha=0.5, reg_lambda=2.0,
+            scale_pos_weight=scale_pos_weight,
             eval_metric="logloss", random_state=42, n_jobs=-1, verbosity=0,
         )),
     ])

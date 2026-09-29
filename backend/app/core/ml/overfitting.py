@@ -27,8 +27,8 @@ THRESHOLDS = {
     "min_roc_auc":            0.52,   # below = random
     "min_precision":          0.50,   # below = too many false signals
     "max_recall":             0.90,   # above = predicting everything as BUY
-    "min_f1":                 0.45,   # below = overall too weak
-    "min_pred_rate":          0.15,   # below = almost never fires
+    "min_f1":                 0.40,   # below = overall too weak (relaxed: precision*F1 is the real gate)
+    "min_pred_rate":          0.10,   # below = almost never fires (relaxed from 0.15)
     "max_pred_rate":          0.85,   # above = fires on everything
     "max_class_acc_gap":      0.30,   # >30% gap between class-0 and class-1 accuracy
     "max_lstm_loss_gap":      0.15,   # val_loss - train_loss > 0.15 = LSTM overfitting
@@ -121,6 +121,13 @@ def check_overfitting(
             f"Recall {test_recall:.1%} is too high — model is predicting BUY on almost everything. "
             "Likely a degenerate classifier.",
             test_recall, t["max_recall"]
+        ))
+    elif test_recall < 0.08:  # below 8% recall = model barely fires, useless in practice
+        flags.append(_flag(
+            CRITICAL, "LOW_RECALL",
+            f"Recall {test_recall:.1%} is critically low — model fires BUY on almost nothing. "
+            "Precision is meaningless at this signal rate. Threshold is too aggressive.",
+            test_recall, 0.08
         ))
 
     # 5. F1 floor

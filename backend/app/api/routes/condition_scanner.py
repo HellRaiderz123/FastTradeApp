@@ -507,32 +507,80 @@ def _resolve_value(
     except ValueError:
         pass
 
-    # Check if it's an indicator reference (e.g., "DEMA(26)", "EMA(50)", "TEMA(20)")
-    if any(v.upper().startswith(ind) for ind in ("DEMA", "TEMA", "EMA", "SMA", "WMA", "RSI", "ADX", "MACD", "STOCH", "BB")):
-        # Parse indicator name and period
+    # Indicator reference with period: e.g. "EMA(50)", "SMA(20)", "DEMA(26)", "ATR(14)", "CCI(20)", "ROC(10)"
+    _PERIOD_INDICATORS = (
+        "DEMA", "TEMA", "EMA", "SMA", "WMA", "RSI", "ADX", "ATR", "CCI", "ROC",
+        "WILLIAMS_R", "WILLIAMSR", "WILLR", "VWAP", "MOVING_AVERAGE", "MA",
+    )
+    if any(v.upper().startswith(ind) for ind in _PERIOD_INDICATORS):
         if "(" in v:
-            parts = v.split("(")
+            parts = v.split("(", 1)
             indicator_name = parts[0].strip().upper()
             period_str = parts[1].rstrip(")")
             try:
                 period = int(period_str)
-                # Recursively compute the indicator value
                 return _compute_indicator(indicator_name, {"period": period}, closes, highs, lows, volumes)
             except (ValueError, IndexError):
                 pass
+        else:
+            # bare name like "VWAP" — use default period
+            ind_name = v.upper()
+            if ind_name in ("VWAP",):
+                return _compute_indicator(ind_name, {"period": 20}, closes, highs, lows, volumes)
+
+    # Bollinger Band bands: BB_Upper(20), BB_Lower(20), BB_Mid(20)
+    vu = v.upper()
+    if vu.startswith("BB_") or vu.startswith("BB "):
+        band_map = {"BB_UPPER": "upper", "BB_LOWER": "lower", "BB_MID": "middle", "BB_MIDDLE": "middle"}
+        period = 20
+        if "(" in v:
+            try:
+                period = int(v.split("(", 1)[1].rstrip(")"))
+            except (ValueError, IndexError):
+                pass
+        for key, band in band_map.items():
+            if vu.startswith(key):
+                return _compute_indicator("BB", {"period": period, "std_dev": 2.0, "band": band}, closes, highs, lows, volumes)
+
+    # Supertrend(period, multiplier) — e.g. "Supertrend(10,3)" or "Supertrend(10, 3.0)"
+    if vu.startswith("SUPERTREND"):
+        period = 10
+        multiplier = 3.0
+        if "(" in v:
+            try:
+                inner = v.split("(", 1)[1].rstrip(")")
+                parts = inner.split(",")
+                period = int(parts[0].strip())
+                if len(parts) > 1:
+                    multiplier = float(parts[1].strip())
+            except (ValueError, IndexError):
+                pass
+        return _compute_indicator("SUPERTREND", {"period": period, "multiplier": multiplier}, closes, highs, lows, volumes)
+
+    # OBV (no period)
+    if vu == "OBV":
+        return _compute_indicator("OBV", {}, closes, highs, lows, volumes)
 
     # Close(offset)
-    if v.upper().startswith("CLOSE"):
+    if vu.startswith("CLOSE"):
         offset = 0
         if "(" in v:
-            offset = int(v.split("(")[1].rstrip(")"))
+            try:
+                offset = int(v.split("(")[1].rstrip(")"))
+            except (ValueError, IndexError):
+                pass
         idx = -1 - offset
         return closes[idx] if abs(idx) <= len(closes) else None
 
-    # Open/High/Low
-    if v.upper().startswith("HIGH"):
+    # Open(offset)
+    if vu.startswith("OPEN"):
+        # We don't have opens in this context — fall back to close
+        return closes[-1] if closes else None
+
+    # High / Low
+    if vu.startswith("HIGH"):
         return highs[-1] if highs else None
-    if v.upper().startswith("LOW"):
+    if vu.startswith("LOW"):
         return lows[-1] if lows else None
 
     return None
@@ -624,10 +672,10 @@ def _evaluate_condition(
     elif comparator == "below":
         return curr_val < target
     elif comparator == "between":
-        # value_str expected as "lo,hi" e.g. "30,70"
+        # value_str expected as "lo,hi" e.g. "30,70" or "30, 70"
         try:
             parts = value_str.split(",")
-            lo, hi = float(parts[0]), float(parts[1])
+            lo, hi = float(parts[0].strip()), float(parts[1].strip())
             return lo <= curr_val <= hi
         except Exception:
             return False
@@ -1089,6 +1137,59 @@ PREBUILT_STRATEGIES: Dict[str, dict] = {
             }
         ],
         "exit_config": {"sl_pct": 3.5, "tp_pct": 9, "tsl_pct": 1.5, "exit_mode": "percentage"},
+    },
+    "supertrend_sma_momentum": {
+        "name": "Supertrend + SMA50 Momentum Swing",
+        "description": "Fires only on the breakout day when Close crosses above Supertrend(10,3). SMA(50) macro filter ensures the stock is above its intermediate baseline. RSI(14) between 50-70 confirms buying pressure without swing exhaustion. Exit is fully indicator-driven: trade closes the moment Close crosses below Supertrend(10,3), letting winners run along the trend line.",
+        "strategy_type": "Equity Swing",
+        "direction": "BUY",
+        "timeframe": "Day",
+        "entry_conditions": [
+            {
+                "indicator": "Close",
+                "params": {"offset": 0},
+                "comparator": "crosses_above",
+                "value": "Supertrend(10,3)"
+            },
+            {
+                "indicator": "Close",
+                "params": {"offset": 0},
+                "comparator": "higher_than",
+                "value": "SMA(50)"
+            },
+            {
+                "indicator": "RSI",
+                "params": {"period": 14},
+                "comparator": "higher_than",
+                "value": "50"
+            },
+            {
+                "indicator": "RSI",
+                "params": {"period": 14},
+                "comparator": "lower_than",
+                "value": "70"
+            },
+        ],
+        "exit_config": {
+            "sl_pct": 0,
+            "tp_pct": 0,
+            "tsl_pct": 0,
+            "exit_mode": "percentage",
+            "apply_slippage": True,
+            "slippage_pct": 0.1,
+            "use_atr_sizing": False,
+            "walk_forward_enabled": True,
+            "walk_forward_windows": 4,
+            "walk_forward_train_pct": 67,
+            "exit_conditions": [
+                {
+                    "indicator": "Close",
+                    "params": {"offset": 0},
+                    "comparator": "crosses_below",
+                    "value": "Supertrend(10,3)"
+                }
+            ],
+        },
     },
     "dema_short_trend": {
         "name": "DEMA 12/26 Short",
@@ -3199,6 +3300,339 @@ async def set_auto_amount(strategy_id: int, amount: float = Query(default=10000,
 
 
 # ── Candle backfill endpoints ──────────────────────────────────────────────
+
+# ── Open positions + exit scan endpoints ──────────────────────────────────
+
+@router.get("/open-positions/{strategy_id}")
+async def get_open_positions(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Return all open StockHolding rows for this strategy with live LTP and P&L.
+    Also checks each position against the strategy's exit_conditions.
+    """
+    row = _get_strategy_or_404(db, strategy_id)
+    from app.db.models_stock_holding import StockHolding
+
+    holdings = (
+        db.query(StockHolding)
+        .filter(
+            StockHolding.strategy_name == row.name,
+            StockHolding.status == "OPEN",
+        )
+        .order_by(StockHolding.created_at.desc())
+        .all()
+    )
+
+    if not holdings:
+        return {"positions": [], "count": 0, "total_pnl": 0.0}
+
+    # Fetch live LTPs in bulk
+    symbols = [h.symbol for h in holdings]
+    ltps: dict = {}
+    try:
+        quotes = kite_service.get_bulk_quotes(symbols) or {}
+        for sym in symbols:
+            q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
+            if q:
+                ltps[sym] = float(q.get("last_price") or 0)
+    except Exception:
+        pass
+
+    exit_conditions = row.exit_config_dict.get("exit_conditions") or []
+    candle_info = TIMEFRAME_CANDLE_MAP.get(row.timeframe or "Day", TIMEFRAME_CANDLE_MAP["Day"])
+    CandleModel, date_attr, _ = candle_info
+    date_col = getattr(CandleModel, date_attr)
+
+    positions = []
+    total_pnl = 0.0
+    for h in holdings:
+        ltp = ltps.get(h.symbol) or h.current_price or h.entry_price
+        if h.direction == "BUY":
+            pnl = round((ltp - h.entry_price) * h.quantity, 2)
+            pnl_pct = round(((ltp - h.entry_price) / h.entry_price) * 100, 2) if h.entry_price else 0.0
+        else:
+            pnl = round((h.entry_price - ltp) * h.quantity, 2)
+            pnl_pct = round(((h.entry_price - ltp) / h.entry_price) * 100, 2) if h.entry_price else 0.0
+        total_pnl += pnl
+
+        # Check exit conditions against latest candles
+        exit_signal = False
+        exit_reason = None
+        if exit_conditions:
+            try:
+                candles = (
+                    db.query(CandleModel)
+                    .filter(CandleModel.symbol == h.symbol)
+                    .order_by(desc(date_col))
+                    .limit(200)
+                    .all()
+                )
+                if len(candles) >= 30:
+                    candles = candles[::-1]
+                    closes, highs, lows, volumes = _build_price_series(candles, ltp=ltp)
+                    if all(_evaluate_condition(ec, closes, highs, lows, volumes) for ec in exit_conditions):
+                        exit_signal = True
+                        exit_reason = "COND_EXIT"
+            except Exception:
+                pass
+
+        # Also check entry condition reversal (all entry conditions no longer met = exit signal)
+        entry_reversal = False
+        entry_conditions = row.entry_conditions_list
+        if entry_conditions and not exit_signal:
+            try:
+                candles = (
+                    db.query(CandleModel)
+                    .filter(CandleModel.symbol == h.symbol)
+                    .order_by(desc(date_col))
+                    .limit(200)
+                    .all()
+                )
+                if len(candles) >= 30:
+                    candles = candles[::-1]
+                    closes, highs, lows, volumes = _build_price_series(candles, ltp=ltp)
+                    # Entry reversal: none of the entry conditions are met anymore
+                    conditions_still_met = sum(
+                        1 for c in entry_conditions
+                        if _evaluate_condition(c, closes, highs, lows, volumes)
+                    )
+                    if conditions_still_met == 0:
+                        entry_reversal = True
+                        exit_reason = "ENTRY_REVERSAL"
+            except Exception:
+                pass
+
+        positions.append({
+            **h.to_dict(),
+            "ltp": round(ltp, 2),
+            "pnl": pnl,
+            "pnl_pct": pnl_pct,
+            "exit_signal": exit_signal or entry_reversal,
+            "exit_reason": exit_reason,
+        })
+
+    return {
+        "positions": positions,
+        "count": len(positions),
+        "total_pnl": round(total_pnl, 2),
+        "strategy_name": row.name,
+    }
+
+
+@router.post("/scan-exits/{strategy_id}")
+async def scan_exits(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Scan all open positions for this strategy against exit conditions.
+    Returns positions that should be exited and optionally executes them.
+    """
+    row = _get_strategy_or_404(db, strategy_id)
+    from app.db.models_stock_holding import StockHolding
+
+    holdings = (
+        db.query(StockHolding)
+        .filter(
+            StockHolding.strategy_name == row.name,
+            StockHolding.status == "OPEN",
+        )
+        .all()
+    )
+
+    if not holdings:
+        return {"exit_signals": [], "count": 0, "message": "No open positions"}
+
+    symbols = [h.symbol for h in holdings]
+    ltps: dict = {}
+    try:
+        quotes = kite_service.get_bulk_quotes(symbols) or {}
+        for sym in symbols:
+            q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
+            if q:
+                ltps[sym] = float(q.get("last_price") or 0)
+    except Exception:
+        pass
+
+    exit_conditions = row.exit_config_dict.get("exit_conditions") or []
+    entry_conditions = row.entry_conditions_list
+    candle_info = TIMEFRAME_CANDLE_MAP.get(row.timeframe or "Day", TIMEFRAME_CANDLE_MAP["Day"])
+    CandleModel, date_attr, _ = candle_info
+    date_col = getattr(CandleModel, date_attr)
+
+    exit_signals = []
+    for h in holdings:
+        ltp = ltps.get(h.symbol) or h.current_price or h.entry_price
+        should_exit = False
+        exit_reason = None
+
+        try:
+            candles = (
+                db.query(CandleModel)
+                .filter(CandleModel.symbol == h.symbol)
+                .order_by(desc(date_col))
+                .limit(200)
+                .all()
+            )
+            if len(candles) < 30:
+                continue
+            candles = candles[::-1]
+            closes, highs, lows, volumes = _build_price_series(candles, ltp=ltp)
+
+            # Check explicit exit conditions
+            if exit_conditions and all(_evaluate_condition(ec, closes, highs, lows, volumes) for ec in exit_conditions):
+                should_exit = True
+                exit_reason = "COND_EXIT"
+
+            # Check entry reversal (no entry conditions met)
+            if not should_exit and entry_conditions:
+                conditions_met = sum(
+                    1 for c in entry_conditions
+                    if _evaluate_condition(c, closes, highs, lows, volumes)
+                )
+                if conditions_met == 0:
+                    should_exit = True
+                    exit_reason = "ENTRY_REVERSAL"
+        except Exception:
+            continue
+
+        if should_exit:
+            pnl_pct = round(((ltp - h.entry_price) / h.entry_price) * 100, 2) if h.entry_price and h.direction == "BUY" else round(((h.entry_price - ltp) / h.entry_price) * 100, 2) if h.entry_price else 0.0
+            exit_signals.append({
+                "holding_id": h.id,
+                "symbol": h.symbol,
+                "direction": h.direction,
+                "entry_price": h.entry_price,
+                "ltp": round(ltp, 2),
+                "quantity": h.quantity,
+                "pnl_pct": pnl_pct,
+                "exit_reason": exit_reason,
+                "order_id": h.order_id,
+            })
+
+    return {
+        "exit_signals": exit_signals,
+        "count": len(exit_signals),
+        "total_checked": len(holdings),
+        "strategy_name": row.name,
+    }
+
+
+@router.post("/execute-exit/{holding_id}")
+async def execute_exit(
+    holding_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Execute a sell/exit for an open holding.
+    Routes to Paper or Zerodha based on EXECUTION_MODE.
+    """
+    from app.db.models_stock_holding import StockHolding
+    h = db.query(StockHolding).filter(StockHolding.id == holding_id).first()
+    if not h:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    if h.status == "CLOSED":
+        return {"message": "Already closed", "holding": h.to_dict()}
+
+    mode = get_execution_mode()
+    quote = kite_service.get_quote(h.symbol)
+    ltp = float((quote or {}).get("last_price") or 0) or h.current_price or h.entry_price
+
+    exit_direction = "SELL" if h.direction == "BUY" else "BUY"
+    order_id = None
+    status = "FAILED"
+    error = None
+
+    if is_paper_mode(mode) or mode == "ZERODHA_DRY_RUN":
+        order_id = f"EXIT-PAPER-{datetime.now().strftime('%Y%m%d%H%M%S')}-{h.symbol}"
+        status = "FILLED_PAPER"
+        logger.info(f"📝 Paper exit: {exit_direction} {h.symbol} @ ₹{ltp}")
+    elif is_live_mode(mode):
+        try:
+            from app.core.broker.zerodha.client import get_kite_client
+            kite = get_kite_client()
+            tx = kite.TRANSACTION_TYPE_SELL if exit_direction == "SELL" else kite.TRANSACTION_TYPE_BUY
+            order_id = str(kite.place_order(
+                variety=kite.VARIETY_REGULAR,
+                exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=h.symbol,
+                transaction_type=tx,
+                quantity=h.quantity,
+                product=kite.PRODUCT_CNC,
+                order_type=kite.ORDER_TYPE_MARKET,
+            ))
+            status = "PLACED_LIVE"
+            logger.info(f"🔴 LIVE exit: {exit_direction} {h.symbol} @ ₹{ltp}, id={order_id}")
+        except Exception as e:
+            error = str(e)
+            logger.error(f"Live exit failed: {e}")
+    else:
+        order_id = f"EXIT-DRY-{datetime.now().strftime('%Y%m%d%H%M%S')}-{h.symbol}"
+        status = "DRY_RUN"
+
+    if status != "FAILED":
+        if h.direction == "BUY":
+            pnl = round((ltp - h.entry_price) * h.quantity, 2)
+        else:
+            pnl = round((h.entry_price - ltp) * h.quantity, 2)
+        h.status = "CLOSED"
+        h.exit_price = ltp
+        h.exit_reason = "STRATEGY_EXIT"
+        h.closed_at = now_ist()
+        h.pnl = pnl
+        h.current_price = ltp
+        db.commit()
+
+        try:
+            from app.services.notifications import NotificationService
+            svc = NotificationService(db)
+            svc._send_telegram(
+                f"🔔 <b>Scanner Exit: {h.strategy_name}</b>\n"
+                f"{exit_direction} {h.symbol} @ ₹{ltp}\n"
+                f"P&L: ₹{pnl:+,.2f} | Mode: {mode}"
+            )
+        except Exception:
+            pass
+
+        return {
+            "message": f"Exit executed: {exit_direction} {h.symbol} @ ₹{ltp}",
+            "order_id": order_id,
+            "status": status,
+            "pnl": pnl,
+            "holding": h.to_dict(),
+        }
+
+    raise HTTPException(status_code=500, detail=error or "Exit execution failed")
+
+
+@router.get("/new-signals")
+async def get_new_signals(
+    since_minutes: int = Query(default=5, ge=1, le=60),
+    strategy_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Return signals generated in the last N minutes.
+    Used by the frontend to poll for new BUY/SELL alerts.
+    """
+    from datetime import timezone
+    cutoff = now_ist() - timedelta(minutes=since_minutes)
+    query = (
+        db.query(ScannerSignalHistory)
+        .filter(ScannerSignalHistory.first_seen_at >= cutoff)
+        .order_by(ScannerSignalHistory.first_seen_at.desc())
+    )
+    if strategy_id:
+        query = query.filter(ScannerSignalHistory.strategy_id == strategy_id)
+    rows = query.limit(50).all()
+    return {
+        "signals": [_serialize_signal_history(r) for r in rows],
+        "count": len(rows),
+        "since_minutes": since_minutes,
+    }
+
 
 @router.post("/backfill-candles/{strategy_id}")
 async def backfill_candles_for_strategy(
