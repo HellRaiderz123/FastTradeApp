@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import and_, text
-from app.core.broker.zerodha.client import get_kite_client
-from app.core.broker.zerodha.instruments import get_index_token, get_equity_token, INDEX_TOKENS
-from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily
+from app.core.market.provider import fetch_candles
+from app.core.broker.zerodha.instruments import INDEX_TOKENS
+from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily, CandleWeekly
 from app.db.session import engine
 from app.core.utils.time import now_ist
 
@@ -36,23 +36,16 @@ ZERODHA_MAX_DAYS = {
     "15 Min": 200,   # 15minute
     "1 Hour": 365,   # 60minute
     "Day":    2000,  # day
+    "Week":   2000,  # aggregated from daily
 }
 
 def fetch_15m_candles(db: Session, symbol: str, days: int = 15):
     symbol = symbol.upper().strip()
-
-    kite = get_kite_client()
-    token = get_index_token(symbol) if symbol in INDEX_TOKENS else get_equity_token(symbol, exchange="NSE")
-
     to_dt = now_ist()
     from_dt = to_dt - timedelta(days=days)
-
-    candles = kite.historical_data(
-        instrument_token=token, from_date=from_dt, to_date=to_dt, interval="15minute",
-    )
-
+    candles = fetch_candles(symbol, "15 Min", from_dt, to_dt)
     rows = [
-        {"symbol": symbol, "timestamp": c["date"].replace(tzinfo=None),
+        {"symbol": symbol, "timestamp": c["date"],
          "open": c["open"], "high": c["high"], "low": c["low"],
          "close": c["close"], "volume": c["volume"]}
         for c in candles
@@ -85,16 +78,9 @@ def _is_price_sane(close: float, baseline: float | None, threshold: float = 0.50
 def fetch_daily_candles(db: Session, symbol: str, days: int = 2000):
     """Fetch and store daily candles for a symbol."""
     symbol = symbol.upper().strip()
-
-    kite = get_kite_client()
-    token = get_index_token(symbol) if symbol in INDEX_TOKENS else get_equity_token(symbol, exchange="NSE")
-
     to_dt = now_ist()
     from_dt = to_dt - timedelta(days=days)
-
-    candles = kite.historical_data(
-        instrument_token=token, from_date=from_dt, to_date=to_dt, interval="day",
-    )
+    candles = fetch_candles(symbol, "Day", from_dt, to_dt)
     candles = sorted(candles, key=lambda c: c["date"])
 
     is_index = symbol in INDEX_TOKENS
@@ -109,8 +95,6 @@ def fetch_daily_candles(db: Session, symbol: str, days: int = 2000):
         if latest_row:
             latest_date = latest_row[0].date() if hasattr(latest_row[0], "date") else latest_row[0]
             first_candle_date = candles[0]["date"].date() if hasattr(candles[0]["date"], "date") else candles[0]["date"]
-            # Only compare against the existing latest close for incremental updates near the present.
-            # For long historical backfills, start the sanity chain from the fetched batch itself.
             if latest_date and abs((latest_date - first_candle_date).days) <= 10:
                 baseline_close = float(latest_row[1] or 0)
 
@@ -139,22 +123,13 @@ def fetch_daily_candles(db: Session, symbol: str, days: int = 2000):
 # ── Additional timeframe fetchers ──────────────────────────────────────────
 
 def fetch_1m_candles(db: Session, symbol: str, days: int = 60):
-    """Fetch and store 1-minute candles for a symbol.
-    Zerodha limit: up to 60 days per request.
-    """
+    """Fetch and store 1-minute candles for a symbol."""
     symbol = symbol.upper().strip()
-    kite = get_kite_client()
-    token = get_index_token(symbol) if symbol in INDEX_TOKENS else get_equity_token(symbol, exchange="NSE")
-
     to_dt = now_ist()
     from_dt = to_dt - timedelta(days=min(days, ZERODHA_MAX_DAYS["1 Min"]))
-
-    candles = kite.historical_data(
-        instrument_token=token, from_date=from_dt, to_date=to_dt, interval="minute",
-    )
-
+    candles = fetch_candles(symbol, "1 Min", from_dt, to_dt)
     rows = [
-        {"symbol": symbol, "timestamp": c["date"].replace(tzinfo=None),
+        {"symbol": symbol, "timestamp": c["date"],
          "open": c["open"], "high": c["high"], "low": c["low"],
          "close": c["close"], "volume": c["volume"]}
         for c in candles
@@ -164,22 +139,13 @@ def fetch_1m_candles(db: Session, symbol: str, days: int = 60):
 
 
 def fetch_5m_candles(db: Session, symbol: str, days: int = 100):
-    """Fetch and store 5-minute candles for a symbol.
-    Zerodha limit: up to 100 days per request.
-    """
+    """Fetch and store 5-minute candles for a symbol."""
     symbol = symbol.upper().strip()
-    kite = get_kite_client()
-    token = get_index_token(symbol) if symbol in INDEX_TOKENS else get_equity_token(symbol, exchange="NSE")
-
     to_dt = now_ist()
     from_dt = to_dt - timedelta(days=min(days, ZERODHA_MAX_DAYS["5 Min"]))
-
-    candles = kite.historical_data(
-        instrument_token=token, from_date=from_dt, to_date=to_dt, interval="5minute",
-    )
-
+    candles = fetch_candles(symbol, "5 Min", from_dt, to_dt)
     rows = [
-        {"symbol": symbol, "timestamp": c["date"].replace(tzinfo=None),
+        {"symbol": symbol, "timestamp": c["date"],
          "open": c["open"], "high": c["high"], "low": c["low"],
          "close": c["close"], "volume": c["volume"]}
         for c in candles
@@ -189,22 +155,13 @@ def fetch_5m_candles(db: Session, symbol: str, days: int = 100):
 
 
 def fetch_1h_candles(db: Session, symbol: str, days: int = 365):
-    """Fetch and store 1-hour candles for a symbol.
-    Zerodha limit: up to 365 days per request.
-    """
+    """Fetch and store 1-hour candles for a symbol."""
     symbol = symbol.upper().strip()
-    kite = get_kite_client()
-    token = get_index_token(symbol) if symbol in INDEX_TOKENS else get_equity_token(symbol, exchange="NSE")
-
     to_dt = now_ist()
     from_dt = to_dt - timedelta(days=min(days, ZERODHA_MAX_DAYS["1 Hour"]))
-
-    candles = kite.historical_data(
-        instrument_token=token, from_date=from_dt, to_date=to_dt, interval="60minute",
-    )
-
+    candles = fetch_candles(symbol, "1 Hour", from_dt, to_dt)
     rows = [
-        {"symbol": symbol, "timestamp": c["date"].replace(tzinfo=None),
+        {"symbol": symbol, "timestamp": c["date"],
          "open": c["open"], "high": c["high"], "low": c["low"],
          "close": c["close"], "volume": c["volume"]}
         for c in candles
@@ -268,10 +225,66 @@ def aggregate_15m_to_1h(db: Session, symbol: str):
 
 # ── Timeframe fetcher map (for generic backfill) ──────────────────────────
 
+
+def aggregate_daily_to_weekly(db: Session, symbol: str):
+    """Generate weekly candles by aggregating daily candles in DB.
+    Week starts on Monday. Partial weeks (e.g. current week) are included.
+    """
+    from datetime import timedelta as _td
+    symbol = symbol.upper().strip()
+
+    all_daily = (
+        db.query(CandleDaily)
+        .filter(CandleDaily.symbol == symbol)
+        .order_by(CandleDaily.date)
+        .all()
+    )
+    if not all_daily:
+        logger.warning("No daily candles for %s — nothing to aggregate to weekly", symbol)
+        return
+
+    # Group by ISO week (Monday as week start)
+    weekly: dict = {}
+    for c in all_daily:
+        d = c.date if not hasattr(c.date, "date") else c.date.date()
+        week_start = d - _td(days=d.weekday())  # Monday
+        if week_start not in weekly:
+            weekly[week_start] = []
+        weekly[week_start].append(c)
+
+    inserted = 0
+    for week_start, bars in sorted(weekly.items()):
+        exists = db.query(CandleWeekly.id).filter(
+            and_(CandleWeekly.symbol == symbol, CandleWeekly.date == week_start)
+        ).first()
+        if exists:
+            continue
+        db.add(CandleWeekly(
+            symbol=symbol,
+            date=week_start,
+            open=bars[0].open,
+            high=max(b.high for b in bars),
+            low=min(b.low for b in bars),
+            close=bars[-1].close,
+            volume=sum(b.volume or 0 for b in bars),
+        ))
+        inserted += 1
+
+    db.commit()
+    logger.info("Weekly candles aggregated from daily for %s: %d (skipped existing)", symbol, inserted)
+
+
+def fetch_weekly_candles(db: Session, symbol: str, days: int = 2000):
+    """Fetch daily candles then aggregate to weekly."""
+    fetch_daily_candles(db, symbol, days=days)
+    aggregate_daily_to_weekly(db, symbol)
+
+
 TIMEFRAME_FETCHER = {
     "1 Min":  fetch_1m_candles,
     "5 Min":  fetch_5m_candles,
     "15 Min": fetch_15m_candles,
     "1 Hour": fetch_1h_candles,
     "Day":    fetch_daily_candles,
+    "Week":   fetch_weekly_candles,
 }

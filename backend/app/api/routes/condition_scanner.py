@@ -46,16 +46,24 @@ from app.core.condition_strategy_lab import (
 from app.core.learning.scanner_signal_history import mark_signal_execution, record_scanner_signal
 from app.core.utils.time import now_ist
 from app.config.market_config import get_symbols
-from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily
+from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily, CandleWeekly
 from app.db.models_scanner_signal import ScannerSignalHistory
 from app.db.models_condition_strategy import ConditionStrategy, ConditionStrategyBacktest
 from app.db.session import SessionLocal
 from app.services.zerodha import KiteConnectService
+from app.core.market.provider import get_bulk_quotes as _provider_bulk_quotes, is_indstocks
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/condition-scanner", tags=["condition-scanner"])
 
 kite_service = KiteConnectService()
+
+
+def _get_bulk_quotes(symbols: list) -> dict:
+    """Route bulk quotes to INDstocks or Zerodha based on CANDLES_SOURCE."""
+    if is_indstocks():
+        return _provider_bulk_quotes(symbols)
+    return kite_service.get_bulk_quotes(symbols) or {}
 
 # ── DB dependency ───────────────────────────────────────────────────────────
 
@@ -699,6 +707,7 @@ def _scan_symbol(
     Returns match info or None.
     """
     exit_settings = dict(exit_config or {})
+    direction = exit_settings.pop("_direction", "BUY")  # injected by caller
     candle_info = TIMEFRAME_CANDLE_MAP.get(timeframe, TIMEFRAME_CANDLE_MAP["Day"])
     CandleModel, date_attr, _table_label = candle_info
     date_col = getattr(CandleModel, date_attr)
@@ -710,6 +719,7 @@ def _scan_symbol(
         "15 Min": 600,
         "1 Hour": 400,
         "Day": 250,
+        "Week": 150,
     }.get(timeframe, 250)
     limit_bars = max(default_limit, required_bars + 50)
 
@@ -747,6 +757,7 @@ def _scan_symbol(
                 "15 Min": 600,
                 "1 Hour": 400,
                 "Day": 250,
+                "Week": 150,
             }.get(htf_timeframe, 250)
             htf_limit = max(htf_default_limit, required_bars + 20)
             htf_candles = (
@@ -757,7 +768,7 @@ def _scan_symbol(
                 .all()
             )
             htf_candles = htf_candles[::-1]
-            htf_confirmed = _conditions_match_on_candles(conditions, htf_candles)
+            htf_confirmed = _htf_trend_aligned(htf_candles, direction=direction)
         if not htf_confirmed:
             return None
 
@@ -1137,59 +1148,6 @@ PREBUILT_STRATEGIES: Dict[str, dict] = {
             }
         ],
         "exit_config": {"sl_pct": 3.5, "tp_pct": 9, "tsl_pct": 1.5, "exit_mode": "percentage"},
-    },
-    "supertrend_sma_momentum": {
-        "name": "Supertrend + SMA50 Momentum Swing",
-        "description": "Fires only on the breakout day when Close crosses above Supertrend(10,3). SMA(50) macro filter ensures the stock is above its intermediate baseline. RSI(14) between 50-70 confirms buying pressure without swing exhaustion. Exit is fully indicator-driven: trade closes the moment Close crosses below Supertrend(10,3), letting winners run along the trend line.",
-        "strategy_type": "Equity Swing",
-        "direction": "BUY",
-        "timeframe": "Day",
-        "entry_conditions": [
-            {
-                "indicator": "Close",
-                "params": {"offset": 0},
-                "comparator": "crosses_above",
-                "value": "Supertrend(10,3)"
-            },
-            {
-                "indicator": "Close",
-                "params": {"offset": 0},
-                "comparator": "higher_than",
-                "value": "SMA(50)"
-            },
-            {
-                "indicator": "RSI",
-                "params": {"period": 14},
-                "comparator": "higher_than",
-                "value": "50"
-            },
-            {
-                "indicator": "RSI",
-                "params": {"period": 14},
-                "comparator": "lower_than",
-                "value": "70"
-            },
-        ],
-        "exit_config": {
-            "sl_pct": 0,
-            "tp_pct": 0,
-            "tsl_pct": 0,
-            "exit_mode": "percentage",
-            "apply_slippage": True,
-            "slippage_pct": 0.1,
-            "use_atr_sizing": False,
-            "walk_forward_enabled": True,
-            "walk_forward_windows": 4,
-            "walk_forward_train_pct": 67,
-            "exit_conditions": [
-                {
-                    "indicator": "Close",
-                    "params": {"offset": 0},
-                    "comparator": "crosses_below",
-                    "value": "Supertrend(10,3)"
-                }
-            ],
-        },
     },
     "dema_short_trend": {
         "name": "DEMA 12/26 Short",
@@ -1620,7 +1578,7 @@ async def scan_strategy(
     symbols = row.instruments_list or get_symbols(universe)
 
     # Try to get live quotes for LTP
-    quotes_data = kite_service.get_bulk_quotes(symbols) or {}
+    quotes_data = _get_bulk_quotes(symbols)
 
     signals = []
     scanned = 0
@@ -1648,7 +1606,7 @@ async def scan_strategy(
             ltp=ltp,
             volume=volume,
             timeframe=row.timeframe or "Day",
-            exit_config=row.exit_config_dict,
+            exit_config={**row.exit_config_dict, "_direction": row.direction},
             capital_base=float(row.auto_amount or 10000.0),
         )
         if result:
@@ -2065,6 +2023,7 @@ TIMEFRAME_CANDLE_MAP = {
     "15 Min": (Candle15m,  "timestamp", "candles_15m"),
     "1 Hour": (Candle1h,   "timestamp", "candles_1h"),
     "Day":    (CandleDaily, "date",     "candles_daily"),
+    "Week":   (CandleWeekly, "date",   "candles_weekly"),
 }
 
 AUTO_HTF_TIMEFRAME_MAP = {
@@ -2072,7 +2031,8 @@ AUTO_HTF_TIMEFRAME_MAP = {
     "5 Min": "15 Min",
     "15 Min": "1 Hour",
     "1 Hour": "Day",
-    "Day": None,
+    "Day": "Week",
+    "Week": None,
 }
 
 
@@ -2129,6 +2089,40 @@ def _build_price_series(
         volumes.append(volume if volume and volume > 0 else volumes[-1])
 
     return closes, highs, lows, volumes
+
+
+def _htf_trend_aligned(
+    candles: List[Any],
+    direction: str = "BUY",
+    *,
+    ltp: Optional[float] = None,
+    volume: Optional[int] = None,
+) -> bool:
+    """
+    HTF confirmation: checks trend alignment on the higher timeframe rather than
+    requiring the exact same signal to fire (which almost never happens simultaneously).
+
+    BUY  — price above EMA(20) OR EMA(20) above EMA(50) (bullish bias)
+    SELL — price below EMA(20) OR EMA(20) below EMA(50) (bearish bias)
+    """
+    if len(candles) < 30:
+        return False
+    closes, highs, lows, volumes = _build_price_series(candles, ltp=ltp, volume=volume)
+    if not closes:
+        return False
+
+    ema20 = TechnicalIndicators.calculate_ema(closes, 20)
+    ema50 = TechnicalIndicators.calculate_ema(closes, 50) if len(closes) >= 50 else None
+    price = closes[-1]
+
+    if direction == "BUY":
+        above_ema20 = ema20 is not None and price > ema20
+        ema_aligned = ema20 is not None and ema50 is not None and ema20 > ema50
+        return above_ema20 or ema_aligned
+    else:
+        below_ema20 = ema20 is not None and price < ema20
+        ema_aligned = ema20 is not None and ema50 is not None and ema20 < ema50
+        return below_ema20 or ema_aligned
 
 
 def _conditions_match_on_candles(
@@ -2276,7 +2270,7 @@ async def get_candle_date_range(
         "timeframe": timeframe,
         "zerodha_max_days": {
             "1 Min": 60, "5 Min": 100, "15 Min": 200,
-            "1 Hour": 365, "Day": 2000,
+            "1 Hour": 365, "Day": 2000, "Week": 2000,
         }.get(timeframe, 365),
     }
 
@@ -2498,9 +2492,9 @@ def _backtest_symbol(
                 if resolved_htf_timeframe and htf_candles:
                     reference_value = getattr(c, date_attr)
                     htf_slice = _slice_candles_up_to(htf_candles, resolved_htf_date_attr, reference_value)
-                    htf_confirmed = _conditions_match_on_candles(conditions, htf_slice)
+                    htf_confirmed = _htf_trend_aligned(htf_slice, direction=direction)
                 else:
-                    htf_confirmed = False
+                     htf_confirmed = True  # No higher TF (e.g. Day) - pass through
                 all_met = all_met and htf_confirmed
 
             # Enter on the next bar open after the signal bar closes.
@@ -3332,7 +3326,7 @@ async def get_open_positions(
     symbols = [h.symbol for h in holdings]
     ltps: dict = {}
     try:
-        quotes = kite_service.get_bulk_quotes(symbols) or {}
+        quotes = _get_bulk_quotes(symbols)
         for sym in symbols:
             q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
             if q:
@@ -3448,7 +3442,7 @@ async def scan_exits(
     symbols = [h.symbol for h in holdings]
     ltps: dict = {}
     try:
-        quotes = kite_service.get_bulk_quotes(symbols) or {}
+        quotes = _get_bulk_quotes(symbols)
         for sym in symbols:
             q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
             if q:

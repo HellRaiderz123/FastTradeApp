@@ -8,15 +8,12 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import logging
 
-from app.services.zerodha import KiteConnectService
 from app.core.indicators.technical import TechnicalIndicators
-from app.core.broker.zerodha.instruments import load_instruments
 from app.config.market_config import get_symbols, get_all_sectors, SECTOR_CLASSIFICATION
+from app.core.market.provider import get_bulk_quotes as _get_bulk_quotes
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/market-dashboard", tags=["market-dashboard"])
-
-kite_service = KiteConnectService()
 
 
 @router.get("/top-movers")
@@ -51,7 +48,7 @@ async def get_top_movers(
         for i in range(0, len(symbols), batch_size):
             batch = symbols[i:i + batch_size]
             try:
-                batch_quotes = kite_service.get_bulk_quotes(batch)
+                batch_quotes = _get_bulk_quotes(batch)
                 if batch_quotes:
                     quotes_data.update(batch_quotes)
             except Exception as e:
@@ -140,7 +137,7 @@ async def get_market_breadth(
         
         # Fetch quotes
         quotes_data = {}
-        batch_quotes = kite_service.get_bulk_quotes(symbols)
+        batch_quotes = _get_bulk_quotes(symbols)
         if batch_quotes:
             quotes_data = batch_quotes
         
@@ -254,7 +251,7 @@ async def get_heatmap_data(
         
         # Fetch quotes
         quotes_data = {}
-        batch_quotes = kite_service.get_bulk_quotes(symbols)
+        batch_quotes = _get_bulk_quotes(symbols)
         if batch_quotes:
             quotes_data = batch_quotes
         
@@ -343,12 +340,12 @@ async def get_sector_performance() -> Dict[str, Any]:
         
         # Fetch quotes
         quotes_data = {}
-        batch_quotes = kite_service.get_bulk_quotes(all_symbols)
+        batch_quotes = _get_bulk_quotes(all_symbols)
         if batch_quotes:
             quotes_data = batch_quotes
             logger.info(f"Received {len(quotes_data)} quotes for sector analysis")
         else:
-            logger.warning("No quotes received from Zerodha for sector performance")
+            logger.warning("No quotes received for sector performance")
         
         sector_results = []
         
@@ -465,11 +462,11 @@ async def get_stock_technicals(symbol: str) -> Dict[str, Any]:
             logger.warning(f"⚠️ Insufficient candle data for {symbol} (got {len(candles) if candles else 0})")
             
             # Get current quote at least
-            quote = kite_service.get_full_quote(symbol)
-            if not quote:
+            from app.core.market.provider import fetch_ltp
+            prices = fetch_ltp([symbol])
+            ltp = prices.get(symbol, 0)
+            if not ltp:
                 raise HTTPException(status_code=404, detail=f"Quote not found for {symbol}")
-            
-            ltp = quote.get("last_price", 0)
             return {
                 "symbol": symbol,
                 "ltp": round(ltp, 2),

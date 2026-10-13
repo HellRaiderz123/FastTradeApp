@@ -262,8 +262,8 @@ const COMPARATORS = [
 ];
 
 const STRATEGY_TYPES = ['Equity Swing', 'Equity Intraday', 'Options Buying', 'Options Selling'];
-const TIMEFRAMES = ['1 Min', '5 Min', '15 Min', '1 Hour', 'Day'];
-const HTF_TIMEFRAME_OPTIONS = ['Auto', '5 Min', '15 Min', '1 Hour', 'Day'];
+const TIMEFRAMES = ['1 Min', '5 Min', '15 Min', '1 Hour', 'Day', 'Week'];
+const HTF_TIMEFRAME_OPTIONS = ['Auto', '5 Min', '15 Min', '1 Hour', 'Day', 'Week'];
 const UNIVERSES = [
   { value: 'NIFTY50', label: 'NIFTY 50' },
   { value: 'NIFTY100', label: 'NIFTY 100' },
@@ -417,7 +417,7 @@ const INDICATOR_VALUE_OPTIONS = [
 ];
 
 const isIndicatorValue = (v: string) =>
-  /^[A-Za-z_]+\s*\(/.test(v.trim()) || ['VWAP', 'OBV', 'Close(0)', 'Open(0)', 'High(0)', 'Low(0)'].includes(v.trim());
+  !!v && (/^[A-Za-z_]+\s*\(/.test(v.trim()) || ['VWAP', 'OBV', 'Close(0)', 'Open(0)', 'High(0)', 'Low(0)'].includes(v.trim()));
 
 interface ConditionValueInputProps {
   value: string;
@@ -426,13 +426,10 @@ interface ConditionValueInputProps {
 }
 
 const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChange, placeholder }) => {
-  const [mode, setMode] = React.useState<'number' | 'indicator'>(
-    () => isIndicatorValue(value) ? 'indicator' : 'number'
-  );
+  const isInd = isIndicatorValue(value);
   const [showDropdown, setShowDropdown] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
-  // Close dropdown on outside click
   React.useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -443,31 +440,10 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const switchToIndicator = () => {
-    setMode('indicator');
-    if (!isIndicatorValue(value)) onChange('SMA(20)');
-    setShowDropdown(true);
-  };
-
-  const switchToNumber = () => {
-    setMode('number');
-    if (isIndicatorValue(value)) onChange('0');
-    setShowDropdown(false);
-  };
-
   return (
     <div className="relative flex items-center gap-1" ref={dropdownRef}>
-      {mode === 'indicator' ? (
-        <button
-          type="button"
-          onClick={() => setShowDropdown(v => !v)}
-          className="flex items-center gap-1.5 bg-indigo-600/20 border border-indigo-500/50 hover:border-indigo-400 rounded-lg px-3 py-2 text-sm text-indigo-200 font-medium transition min-w-[90px] max-w-[160px] truncate"
-          title={value}
-        >
-          <span className="text-indigo-400 text-xs">ƒ</span>
-          <span className="truncate">{value || 'Pick…'}</span>
-        </button>
-      ) : (
+      {/* Number input — always visible when not in indicator mode */}
+      {!isInd && (
         <input
           type="text"
           value={value}
@@ -477,32 +453,58 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
         />
       )}
 
-      {/* Toggle button */}
+      {/* Indicator pill — shown when indicator is selected */}
+      {isInd && (
+        <button
+          type="button"
+          onClick={() => setShowDropdown(v => !v)}
+          className="flex items-center gap-1.5 bg-indigo-600/20 border border-indigo-500/50 hover:border-indigo-400 rounded-lg px-3 py-2 text-sm text-indigo-200 font-medium transition min-w-[90px] max-w-[160px] truncate"
+          title={value}
+        >
+          <span className="text-indigo-400 text-xs">ƒ</span>
+          <span className="truncate">{value}</span>
+        </button>
+      )}
+
+      {/* Indicator picker button — always visible */}
       <button
         type="button"
-        onClick={mode === 'number' ? switchToIndicator : switchToNumber}
-        title={mode === 'number' ? 'Switch to indicator value' : 'Switch to number value'}
-        className={`px-1.5 py-2 rounded-lg border text-xs font-bold transition ${
-          mode === 'indicator'
-            ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300 hover:bg-slate-800'
+        onClick={() => setShowDropdown(v => !v)}
+        title="Compare against an indicator (e.g. Close(0), SMA(50), EMA(20)…)"
+        className={`flex items-center gap-1 px-2 py-2 rounded-lg border text-xs font-semibold transition ${
+          isInd
+            ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300'
             : 'bg-slate-800 border-slate-600 text-slate-400 hover:text-indigo-300 hover:border-indigo-500/50'
         }`}
       >
-        ƒ
+        <span>ƒ</span>
+        <span className="hidden sm:inline">{isInd ? '▾' : 'Ind'}</span>
       </button>
 
-      {/* Indicator dropdown */}
-      {showDropdown && mode === 'indicator' && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-44 max-h-64 overflow-y-auto custom-scrollbar">
+      {/* Dropdown */}
+      {showDropdown && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-48 max-h-72 overflow-y-auto custom-scrollbar">
           <div className="p-1.5">
+            <div className="px-2 py-1 text-[10px] text-slate-500 uppercase tracking-wider mb-1">Compare vs indicator</div>
+            {/* Custom input */}
             <input
               type="text"
               placeholder="Custom e.g. EMA(9)"
-              value={value}
-              onChange={e => onChange(e.target.value)}
+              value={isInd ? value : ''}
+              onChange={e => { onChange(e.target.value); }}
               className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded-lg text-xs text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none mb-1"
               autoFocus
             />
+            {/* Clear to number */}
+            {isInd && (
+              <button
+                type="button"
+                onClick={() => { onChange('0'); setShowDropdown(false); }}
+                className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-800 hover:text-white mb-1"
+              >
+                ✕ Clear (use number)
+              </button>
+            )}
             {INDICATOR_VALUE_OPTIONS.map(opt => (
               <button
                 key={opt.value}
@@ -830,9 +832,10 @@ const CreateScanner: React.FC = () => {
       .finally(() => setLoadingBrokerageConfig(false));
   }, [applyZerodhaCharges, brokerageConfig, loadingBrokerageConfig]);
 
-  const adjustedBacktestResult = useMemo(() => {
-    if (!backtestResult || !applyZerodhaCharges) return null;
-    if (!backtestResult.summary || !backtestResult.all_trades) return null;
+  // Computes a compounded equity simulation from raw trades.
+  // withCharges=false gives gross (same methodology as net, just no charge deduction).
+  const computeCompoundedResult = useCallback((withCharges: boolean) => {
+    if (!backtestResult?.summary || !backtestResult.all_trades) return null;
 
     const currentStrategy = strategies.find(s => s.id === selectedId);
     const strategyType = currentStrategy?.strategy_type || editorType;
@@ -896,7 +899,9 @@ const CreateScanner: React.FC = () => {
 
       const entrySide = backtestResult.direction === 'BUY' ? 'BUY' : 'SELL';
       const exitSide = backtestResult.direction === 'BUY' ? 'SELL' : 'BUY';
-      const charges = computeSideCharge(entryValue, entrySide) + computeSideCharge(exitValue, exitSide);
+      const charges = withCharges
+        ? computeSideCharge(entryValue, entrySide) + computeSideCharge(exitValue, exitSide)
+        : 0;
       totalCharges += charges;
 
       const grossPnlAmount = tradeCapital * (trade.pnl_pct / 100);
@@ -992,9 +997,14 @@ const CreateScanner: React.FC = () => {
         total_charges: Number(totalCharges.toFixed(2)),
       },
     } as BacktestResult & { charges_summary: { total_charges: number } };
-  }, [applyZerodhaCharges, backtestResult, brokerageConfig, editorType, strategies, selectedId]);
+  }, [backtestResult, brokerageConfig, editorType, strategies, selectedId]);
 
-  const displayedBacktestResult = adjustedBacktestResult || backtestResult;
+  // Always use compounded methodology for both gross and net so the toggle
+  // only differs by whether charges are subtracted — not by calculation method.
+  const displayedBacktestResult = useMemo(() => {
+    if (!backtestResult) return null;
+    return computeCompoundedResult(applyZerodhaCharges);
+  }, [backtestResult, applyZerodhaCharges, computeCompoundedResult]);
 
   // ── New strategy ──────────────────────────────────────────────────────
 
@@ -1326,7 +1336,7 @@ const CreateScanner: React.FC = () => {
 
   // ── Render ────────────────────────────────────────────────────────────
 
-  if (loading) {
+  if (loading || indicators.length === 0) {
     return (
       <div className="flex items-center justify-center h-96">
         <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
@@ -1825,21 +1835,21 @@ const CreateScanner: React.FC = () => {
                                 </select>
 
                                 {/* Param inputs */}
-                                {meta?.params.map(p => (
+                                {(meta?.params ?? []).map(p => (
                                   <div key={p.name} className="flex items-center gap-1">
                                     {p.type === 'select' ? (
                                       <select
-                                        value={cond.params[p.name] ?? p.default}
+                                        value={cond.params?.[p.name] ?? p.default}
                                         onChange={e => updateCondition(idx, `param.${p.name}`, e.target.value)}
                                         className="bg-slate-900 border border-slate-600 rounded px-2 py-2 text-xs text-white"
                                         title={p.name}
                                       >
-                                        {p.options?.map(o => <option key={o} value={o}>{o}</option>)}
+                                        {(p.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
                                       </select>
                                     ) : (
                                       <input
                                         type="number"
-                                        value={cond.params[p.name] ?? p.default}
+                                        value={cond.params?.[p.name] ?? p.default}
                                         onChange={e => updateCondition(idx, `param.${p.name}`, parseFloat(e.target.value) || 0)}
                                         className="bg-slate-900 border border-slate-600 rounded px-2 py-2 text-xs text-white w-16 text-center"
                                         title={p.name}
@@ -1887,7 +1897,7 @@ const CreateScanner: React.FC = () => {
                                   </div>
                                 ) : (
                                   <ConditionValueInput
-                                    value={cond.value}
+                                    value={cond.value ?? '0'}
                                     onChange={v => updateCondition(idx, 'value', v)}
                                     placeholder="Value"
                                   />
@@ -1926,7 +1936,7 @@ const CreateScanner: React.FC = () => {
                           title={ind.description}
                           onClick={() => {
                             const defaultParams: Record<string, any> = {};
-                            ind.params.forEach(p => { defaultParams[p.name] = p.default; });
+                            (ind.params ?? []).forEach(p => { defaultParams[p.name] = p.default; });
                             if (editorConditions.length < 8) {
                               setEditorConditions([...editorConditions, {
                                 indicator: ind.id,
@@ -2029,7 +2039,7 @@ const CreateScanner: React.FC = () => {
                         </select>
                       </div>
                       <p className="text-[11px] text-slate-500">
-                        Requires the same setup on the next higher timeframe before a signal is accepted.
+                        Requires bullish/bearish trend alignment on the next higher timeframe (Auto: 1H→Day, Day→Week, 15m→1H, 5m→15m). Has no effect on Week timeframe since there is no higher candle data.
                       </p>
                     </div>
 
@@ -2201,11 +2211,11 @@ const CreateScanner: React.FC = () => {
                               >
                                 {indicators.map(ind => <option key={ind.id} value={ind.id}>{ind.icon} {ind.name}</option>)}
                               </select>
-                              {meta?.params.map(p => (
+                              {(meta?.params ?? []).map(p => (
                                 <div key={p.name}>
                                   {p.type === 'select' ? (
                                     <select
-                                      value={cond.params[p.name] ?? p.default}
+                                      value={cond.params?.[p.name] ?? p.default}
                                       onChange={e => {
                                         const updated = [...(editorExit.exit_conditions || [])];
                                         updated[idx] = { ...updated[idx], params: { ...updated[idx].params, [p.name]: e.target.value } };
@@ -2213,12 +2223,12 @@ const CreateScanner: React.FC = () => {
                                       }}
                                       className="bg-slate-800 border border-slate-600 rounded px-2 py-1.5 text-xs text-white"
                                     >
-                                      {p.options?.map(o => <option key={o} value={o}>{o}</option>)}
+                                      {(p.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
                                     </select>
                                   ) : (
                                     <input
                                       type="number"
-                                      value={cond.params[p.name] ?? p.default}
+                                      value={cond.params?.[p.name] ?? p.default}
                                       onChange={e => {
                                         const updated = [...(editorExit.exit_conditions || [])];
                                         updated[idx] = { ...updated[idx], params: { ...updated[idx].params, [p.name]: parseFloat(e.target.value) || 0 } };
@@ -2271,7 +2281,7 @@ const CreateScanner: React.FC = () => {
                                 </div>
                               ) : (
                                 <ConditionValueInput
-                                  value={cond.value}
+                                  value={cond.value ?? '0'}
                                   onChange={v => {
                                     const updated = [...(editorExit.exit_conditions || [])];
                                     updated[idx] = { ...updated[idx], value: v };
@@ -2824,7 +2834,7 @@ const CreateScanner: React.FC = () => {
                           <span>{(displayedBacktestResult as any).walk_forward?.avg_out_of_sample_return_pct ?? 0}%</span>
                         </div>
                         <div className="space-y-1">
-                          {(((displayedBacktestResult as any).walk_forward?.windows) || []).slice(0, 3).map((window: any, idx: number) => (
+                          {(((displayedBacktestResult as any).walk_forward?.windows) || []).map((window: any, idx: number) => (
                             <div key={idx} className="flex items-center justify-between rounded bg-slate-900/40 px-2 py-1 text-[10px]">
                               <span className="text-slate-400">{window.test_start} → {window.test_end}</span>
                               <span className={window.passed ? 'text-green-400' : 'text-red-400'}>
@@ -2854,12 +2864,12 @@ const CreateScanner: React.FC = () => {
                     </div>
 
                     {/* Tab: Equity Curve Summary */}
-                    {btTab === 'summary' && displayedBacktestResult!.equity_curve.length > 1 && (
+                    {btTab === 'summary' && (displayedBacktestResult!.equity_curve?.length ?? 0) > 1 && (
                       <div className="space-y-2">
                         <p className="text-[10px] text-slate-500 uppercase">Equity Curve</p>
                         <div className="h-28 bg-slate-800/50 rounded-lg p-2 relative">
                           {(() => {
-                            const curve = displayedBacktestResult!.equity_curve;
+                            const curve = displayedBacktestResult!.equity_curve ?? [];
                             const minEq = Math.min(...curve.map(c => c.equity));
                             const maxEq = Math.max(...curve.map(c => c.equity));
                             const range = maxEq - minEq || 1;
@@ -2898,7 +2908,7 @@ const CreateScanner: React.FC = () => {
                     {/* Tab: Per Symbol */}
                     {btTab === 'symbols' && (
                       <div className="max-h-[400px] overflow-y-auto custom-scrollbar space-y-1.5">
-                        {displayedBacktestResult!.per_symbol.length > 0 ? displayedBacktestResult!.per_symbol.map(ps => (
+                        {(displayedBacktestResult!.per_symbol?.length ?? 0) > 0 ? (displayedBacktestResult!.per_symbol ?? []).map(ps => (
                           <div key={ps.symbol} className="bg-slate-800/50 rounded-lg p-2.5 border border-slate-700/50">
                             <div className="flex items-center justify-between mb-1">
                               <span className="text-xs font-semibold text-white">{ps.symbol}</span>
@@ -2920,7 +2930,7 @@ const CreateScanner: React.FC = () => {
 
                     {/* Tab: Monthly P&L Heatmap */}
                     {btTab === 'monthly' && (() => {
-                      const trades = displayedBacktestResult!.all_trades;
+                      const trades = displayedBacktestResult!.all_trades ?? [];
                       if (!trades.length) return <p className="text-xs text-slate-500 text-center py-4">No trades</p>;
 
                       // Aggregate pnl_pct sum by YYYY-MM
@@ -2993,7 +3003,7 @@ const CreateScanner: React.FC = () => {
                     {/* Tab: Trade Log */}
                     {btTab === 'trades' && (
                       <div className="max-h-[400px] overflow-y-auto custom-scrollbar space-y-1">
-                        {displayedBacktestResult!.all_trades.length > 0 ? displayedBacktestResult!.all_trades.map((t: any, i) => (
+                        {(displayedBacktestResult!.all_trades?.length ?? 0) > 0 ? (displayedBacktestResult!.all_trades ?? []).map((t: any, i) => (
                           <div key={i} className="bg-slate-800/50 rounded p-2 border border-slate-700/30 text-[10px]">
                             <div className="flex items-center justify-between mb-0.5">
                               <span className="font-semibold text-white">{t.symbol}</span>

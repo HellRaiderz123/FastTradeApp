@@ -94,24 +94,28 @@ def _is_last_weekday_of_month(expiry: date) -> bool:
     return (expiry + timedelta(days=7)).month != expiry.month
 
 
+# Zerodha single-char month codes for weekly expiry symbols
+_WEEKLY_MONTH_CODE = {
+    1: "1", 2: "2", 3: "3", 4: "4", 5: "5",
+    6: "6", 7: "7", 8: "8", 9: "9",
+    10: "O", 11: "N", 12: "D",
+}
+
+
 def format_zerodha_expiry(expiry: date) -> str:
     """
     Format expiry date for Zerodha symbol construction.
-    
+
     Monthly: 2026-01-29 → 26JAN
-    Weekly:  2026-02-10 → 26210  (YY + M + DD)
-    Weekly:  2026-03-02 → 26302  (YY + M + DD, day zero-padded)
-    Weekly:  2026-12-03 → 261203 (YY + MM + DD)
+    Weekly:  2026-02-10 → 26210   (YY + single-char-month + DD)
+    Weekly:  2026-10-06 → 26O06   (Oct → 'O', Nov → 'N', Dec → 'D')
     """
     if _is_last_weekday_of_month(expiry):
-        # Monthly format: YYMMMM (e.g., 26JAN)
         return expiry.strftime("%y%b").upper()
-    
-    # Weekly format: YY + M (no padding) + DD (zero-padded)
-    year = expiry.year % 100  # Last 2 digits of year
-    month = expiry.month      # Month as 1-12 (no zero padding)
-    day = expiry.day          # Day as 1-31 (zero-padded to 2 digits)
-    return f"{year}{month}{day:02d}"
+
+    year = expiry.year % 100
+    month_code = _WEEKLY_MONTH_CODE[expiry.month]
+    return f"{year}{month_code}{expiry.day:02d}"
 
 
 # NSE weekly expiry mapping

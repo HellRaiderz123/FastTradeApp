@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle2, Database, Loader2, Play } from 'lucide-rea
 import { candleBackfillAPI } from '../lib/api';
 import { useToast } from '../components/Toast';
 
-type BackfillTimeframe = '1 Min' | '5 Min' | '15 Min' | '1 Hour' | 'Day';
+type BackfillTimeframe = '1 Min' | '5 Min' | '15 Min' | '1 Hour' | 'Day' | 'Week';
 
 interface BackfillResult {
   message: string;
@@ -23,6 +23,7 @@ const TIMEFRAME_OPTIONS: Array<{ value: BackfillTimeframe; label: string; defaul
   { value: '15 Min', label: '15 Minutes', defaultDays: 90 },
   { value: '1 Hour', label: '1 Hour', defaultDays: 365 },
   { value: 'Day', label: '1 Day', defaultDays: 900 },
+  { value: 'Week', label: 'Weekly', defaultDays: 2000 },
 ];
 
 export default function CandleBackfill() {
@@ -89,8 +90,8 @@ export default function CandleBackfill() {
           <h1 className="text-2xl font-bold text-white">Candle Backfill</h1>
         </div>
         <p className="text-slate-400 text-sm">
-          Backfill candles directly from Zerodha for 1m, 5m, 15m, 1h, and daily timeframes.
-          Leave symbols empty to use NIFTY50 universe.
+          Backfill candles directly from Zerodha for 1m, 5m, 15m, 1h, daily, and weekly timeframes.
+          Weekly candles are aggregated from daily data. Leave symbols empty to use NIFTY50 universe.
         </p>
       </div>
 

@@ -1,14 +1,5 @@
 // Market Dashboard API Client
-import axios from 'axios';
-
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
-
-const api = axios.create({
-  baseURL: API_BASE,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+import api from './api';
 
 async function apiRequest<T>(url: string, options?: any): Promise<T> {
   const response = await api.get(url, options);
