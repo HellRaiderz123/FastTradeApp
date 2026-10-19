@@ -6,6 +6,7 @@ from app.db.models_control import SystemControl
 from app.db.models_candles import Candle15m
 from app.db.models_signal_outcome import SignalOutcome
 from app.db.models_zerodha import ZerodhaSession
+from app.db.models_indmoney import INDMoneySession
 from app.core.scalp.scalp_paper_trader import ScalpTrade
 
 

@@ -1592,10 +1592,10 @@ async def scan_strategy(
             ltp = quote.get("last_price")
             volume = quote.get("volume")
 
-        # Skip symbols that already have an open holding (avoid duplicate BUY alerts)
+        # Skip symbols that already have an open holding for THIS strategy
         try:
             from app.api.routes.holdings import has_open_holding as _has_holding
-            if _has_holding(db, symbol):
+            if _has_holding(db, symbol, strategy_name=row.name):
                 continue
         except Exception:
             pass
@@ -1651,7 +1651,7 @@ async def scan_strategy(
             # Skip if an open StockHolding already exists for this symbol
             try:
                 from app.api.routes.holdings import has_open_holding as _has_holding_scan
-                if _has_holding_scan(db, signal["symbol"]):
+                if _has_holding_scan(db, signal["symbol"], strategy_name=row.name):
                     auto_skipped += 1
                     continue
             except Exception:
@@ -1790,7 +1790,7 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
     # Prevent duplicate: skip if an open StockHolding already exists for this symbol
     try:
         from app.api.routes.holdings import has_open_holding as _has_holding
-        if _has_holding(db, symbol):
+        if _has_holding(db, symbol, strategy_name=strategy_name):
             already_open = db.query(ExecutionIntent).filter(
                 ExecutionIntent.underlying == symbol,
                 ExecutionIntent.strategy == strategy_name,
@@ -1937,7 +1937,7 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
         # Create StockHolding for paper-trade performance tracking
         try:
             from app.api.routes.holdings import create_stock_holding, has_open_holding
-            if not has_open_holding(db, symbol):
+            if not has_open_holding(db, symbol, strategy_name=strategy_name):
                 create_stock_holding(
                     db,
                     symbol=symbol,

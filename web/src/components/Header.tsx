@@ -1,14 +1,49 @@
 import React, { useEffect, useState } from 'react';
-import { Menu, Power, Bell, LogOut, ChevronDown, Sun, Moon, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { Menu, Power, LogOut, Sun, Moon, ExternalLink, ChevronDown, User } from 'lucide-react';
 import { useTradeStore } from '../lib/store';
 import { systemAPI, settingsAPI, authAPI, authTokenStore } from '../lib/api';
 import { NotificationBell } from './NotificationBell';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
   systemEnabled: boolean;
   onSystemToggle: (enabled: boolean) => void;
+}
+
+function getModeLabel(mode: string) {
+  if (mode === 'ZERODHA_LIVE') return 'Live';
+  if (mode === 'ZERODHA_DRY_RUN') return 'Dry Run';
+  return 'Paper';
+}
+
+function getModeVariant(mode: string): 'loss' | 'sell' | 'profit' {
+  if (mode === 'ZERODHA_LIVE') return 'loss';
+  if (mode === 'ZERODHA_DRY_RUN') return 'sell';
+  return 'profit';
+}
+
+class BellBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children as React.ReactElement;
+  }
 }
 
 const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSystemToggle }) => {
@@ -17,7 +52,6 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
   const [executionMode, setExecutionMode] = useState('PAPER_TRADING');
   const [activeBroker, setActiveBroker] = useState('ZERODHA');
   const [supportedBrokers, setSupportedBrokers] = useState<string[]>(['ZERODHA', 'INDMONEY']);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   useEffect(() => {
     loadHeaderSettings();
@@ -25,34 +59,19 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
     return () => clearInterval(interval);
   }, []);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      if (userMenuOpen && !target.closest('.user-menu-container')) {
-        setUserMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [userMenuOpen]);
-
   const loadHeaderSettings = async () => {
     try {
-      const [modeResponse, brokerResponse] = await Promise.all([
+      const [modeRes, brokerRes] = await Promise.all([
         settingsAPI.getZerodhaSettings(),
         settingsAPI.getBrokerSettings(),
       ]);
-
-      const modeData = modeResponse.data || modeResponse;
+      const modeData = modeRes.data || modeRes;
       setExecutionMode(modeData.execution_mode || 'PAPER_TRADING');
-
-      const brokerData = brokerResponse.data || brokerResponse;
+      const brokerData = brokerRes.data || brokerRes;
       setActiveBroker(brokerData.active_broker || 'ZERODHA');
       setSupportedBrokers(brokerData.supported_brokers || ['ZERODHA', 'INDMONEY']);
-    } catch (error) {
-      console.error('Error loading header settings:', error);
+    } catch {
+      // silent
     }
   };
 
@@ -60,156 +79,117 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
     try {
       await settingsAPI.setActiveBroker(broker);
       setActiveBroker(broker);
-    } catch (error) {
-      console.error('Failed to set active broker:', error);
+    } catch {
+      // silent
     }
   };
 
-  const getModeDisplay = () => {
-    if (executionMode === 'ZERODHA_LIVE') return 'Live Trading';
-    if (executionMode === 'ZERODHA_DRY_RUN') return 'Dry Run';
-    return 'Paper Trading';
-  };
-  class BellBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }>{
-    constructor(props: { children: React.ReactNode }) {
-      super(props);
-      this.state = { hasError: false };
-    }
-    static getDerivedStateFromError() { return { hasError: true }; }
-    componentDidCatch(error: any, info: any) { console.error('NotificationBell error:', error, info); }
-    render() {
-      if (this.state.hasError) {
-        return (
-          <button className="relative text-slate-400" title="Notifications unavailable">
-            <Bell className="w-6 h-6" />
-          </button>
-        );
-      }
-      return this.props.children as React.ReactElement;
-    }
-  }
   const handleSystemToggle = async () => {
     try {
-      if (systemEnabled) {
-        await systemAPI.disable();
-      } else {
-        await systemAPI.enable();
-      }
+      if (systemEnabled) await systemAPI.disable();
+      else await systemAPI.enable();
       onSystemToggle(!systemEnabled);
-    } catch (error) {
-      console.error('Failed to toggle system:', error);
+    } catch {
+      // silent
     }
   };
 
   const handleLogout = async () => {
-    try {
-      await authAPI.logout();
-    } catch (error) {
-      console.error('Logout API call failed:', error);
-    }
-    
-    // Clear token and redirect to login
+    try { await authAPI.logout(); } catch { /* silent */ }
     authTokenStore.clear();
     navigate('/login');
   };
 
   return (
-    <header className="bg-slate-950 border-b border-slate-800 px-6 py-4 flex items-center justify-between">
-      <div className="flex items-center gap-4">
-        <button 
-          onClick={onToggleSidebar} 
-          className="text-slate-400 hover:text-white"
-          title="Toggle Sidebar"
-        >
-          <Menu className="w-6 h-6" />
-        </button>
-        <h2 className="text-xl font-semibold text-white">FastTrade Pro</h2>
+    <header className="sticky top-0 z-40 flex h-14 items-center border-b border-border bg-card backdrop-blur-sm px-4 gap-4">
+      {/* Left: toggle + title */}
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="icon" onClick={onToggleSidebar} title="Toggle Sidebar">
+          <Menu className="h-4 w-4" />
+        </Button>
+        <span className="hidden font-semibold text-sm sm:inline-block text-foreground">FastTrade Pro</span>
       </div>
 
-      <div className="flex items-center gap-6">
-        <div className="flex items-center gap-2">
-          <span className="text-xs uppercase tracking-wide text-slate-400">Broker</span>
+      {/* Right: controls */}
+      <div className="ml-auto flex items-center gap-2">
+        {/* Broker selector */}
+        <div className="flex items-center gap-1.5">
+          <span className="hidden text-xs text-muted-foreground sm:inline">Broker</span>
           <select
             value={activeBroker}
             onChange={(e) => handleBrokerChange(e.target.value)}
-            className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-sky-500"
+            className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             title="Active Broker"
           >
-            {supportedBrokers.map((broker) => (
-              <option key={broker} value={broker}>{broker}</option>
+            {supportedBrokers.map((b) => (
+              <option key={b} value={b}>{b}</option>
             ))}
           </select>
         </div>
 
-        {/* Theme Toggle */}
-        <button
-          onClick={toggleDarkMode}
-          className="text-slate-400 hover:text-white transition"
-          title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-        >
-          {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-        </button>
+        {/* Trading mode badge */}
+        <Badge variant={getModeVariant(executionMode)} className="hidden sm:flex">
+          {getModeLabel(executionMode)}
+        </Badge>
+
+        {/* Theme toggle */}
+        <Button variant="ghost" size="icon" onClick={toggleDarkMode} title={darkMode ? 'Light mode' : 'Dark mode'}>
+          {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </Button>
 
         {/* API Docs */}
-        <a
-          href="/api/docs"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-slate-400 hover:text-white transition"
-          title="API Documentation"
-        >
-          <ExternalLink className="w-5 h-5" />
-        </a>
+        <Button variant="ghost" size="icon" asChild title="API Documentation">
+          <a href="/api/docs" target="_blank" rel="noopener noreferrer">
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        </Button>
 
-        {/* System Status */}
-        <button
+        {/* System toggle */}
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={handleSystemToggle}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition ${
+          className={cn(
+            'gap-1.5',
             systemEnabled
-              ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
-              : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-          }`}
+              ? 'text-green-400 hover:text-green-300 hover:bg-green-500/10'
+              : 'text-red-400 hover:text-red-300 hover:bg-red-500/10'
+          )}
         >
-          <Power className="w-4 h-4" />
-          <span className="text-sm">{systemEnabled ? 'Trading ON' : 'Trading OFF'}</span>
-        </button>
+          <Power className="h-4 w-4" />
+          <span className="hidden text-xs sm:inline">{systemEnabled ? 'ON' : 'OFF'}</span>
+        </Button>
 
         {/* Notifications */}
         <BellBoundary>
           <NotificationBell />
         </BellBoundary>
 
-        {/* User Menu */}
-        <div className="relative user-menu-container">
-          <button
-            onClick={() => setUserMenuOpen(!userMenuOpen)}
-            className="flex items-center gap-3 pl-6 border-l border-slate-800 hover:opacity-80 transition"
-          >
-            <div className="text-right">
-              <p className="text-sm font-medium text-white">Tarun</p>
-              <p className="text-xs text-slate-400">{getModeDisplay()}</p>
-            </div>
-            <img
-              src="https://api.dicebear.com/7.x/avataaars/svg?seed=tarun"
-              alt="User"
-              className="w-8 h-8 rounded-full"
-            />
-            <ChevronDown className="w-4 h-4 text-slate-400" />
-          </button>
-
-          {/* Dropdown Menu */}
-          {userMenuOpen && (
-            <div className="absolute right-0 mt-2 w-48 bg-slate-900 border border-slate-800 rounded-lg shadow-xl z-50">
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-2 px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Logout</span>
-              </button>
-            </div>
-          )}
-        </div>
+        {/* User menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="gap-2 pl-2">
+              <img
+                src="https://api.dicebear.com/7.x/avataaars/svg?seed=tarun"
+                alt="User"
+                className="h-7 w-7 rounded-full"
+              />
+              <span className="hidden text-sm font-medium sm:inline">Tarun</span>
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuLabel className="flex items-center gap-2">
+              <User className="h-3.5 w-3.5" />
+              My Account
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
+              <LogOut className="mr-2 h-4 w-4" />
+              Logout
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );

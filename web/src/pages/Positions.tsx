@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle, Activity, Package, Info, Loader2, RefreshCw } from 'lucide-react';
-import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore, greeksAPI, holdingsAPI, directExecuteAPI } from '../lib/api';
+import { TrendingUp, TrendingDown, X, AlertTriangle, Shield, Eye, CheckCircle, Activity, Package, Info, Loader2, RefreshCw, ArrowUpDown, Download, Radio } from 'lucide-react';
+import { exitAPI, journalAPI, smartSuggestionsAPI, authTokenStore, greeksAPI, holdingsAPI, directExecuteAPI, financeAPI } from '../lib/api';
 import { useTradeStore } from '../lib/store';
 import { useToast } from '../components/Toast';
 import SpreadGrouping from '../components/SpreadGrouping';
@@ -13,8 +13,8 @@ const Positions: React.FC = () => {
   const { showToast } = useToast();
   const { trades, setTrades } = useTradeStore();
   const [searchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<'options' | 'holdings'>(
-    searchParams.get('tab') === 'holdings' ? 'holdings' : 'options'
+  const [activeTab, setActiveTab] = useState<'live' | 'options' | 'holdings'>(
+    searchParams.get('tab') === 'holdings' ? 'holdings' : 'live'
   );
   const [loading, setLoading] = useState(false);
   const [localTrades, setLocalTrades] = useState<any[]>([]);
@@ -36,6 +36,70 @@ const Positions: React.FC = () => {
   const [spreadData, setSpreadData] = useState<any>(null);
   // Smart suggestions state (keyed by intent_id)
   const [smartSuggestions, setSmartSuggestions] = useState<Record<string, any>>({});
+
+  // ── Live broker positions (Zerodha) ──────────────────────────────────────
+  const [brokerPositions, setBrokerPositions] = useState<any[]>([]);
+  const [brokerLoading, setBrokerLoading] = useState(false);
+  const [brokerError, setBrokerError] = useState<string | null>(null);
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const brokerPollRef = useRef<number | null>(null);
+
+  const fetchBrokerPositions = useCallback(async () => {
+    setBrokerLoading(true);
+    setBrokerError(null);
+    try {
+      const res = await financeAPI.getZerodhaPositions();
+      const data = res?.data;
+      const net: any[] = Array.isArray(data?.net) ? data.net : [];
+      setBrokerPositions(net);
+    } catch (e: any) {
+      setBrokerError(e?.response?.data?.detail ?? 'Failed to fetch broker positions');
+    } finally {
+      setBrokerLoading(false);
+    }
+  }, []);
+
+  const handleSort = (col: string) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+
+  const sortedBrokerPositions = useMemo(() => {
+    if (!sortCol) return brokerPositions;
+    return [...brokerPositions].sort((a, b) => {
+      const av = a[sortCol] ?? 0;
+      const bv = b[sortCol] ?? 0;
+      if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+      return sortDir === 'asc' ? av - bv : bv - av;
+    });
+  }, [brokerPositions, sortCol, sortDir]);
+
+  const brokerStats = useMemo(() => {
+    const open = sortedBrokerPositions.filter(p => Number(p.quantity) !== 0);
+    return {
+      total: open.length,
+      long: open.filter(p => Number(p.quantity) > 0).length,
+      short: open.filter(p => Number(p.quantity) < 0).length,
+      totalPnl: sortedBrokerPositions.reduce((s, p) => s + (Number(p.pnl) || 0), 0),
+    };
+  }, [sortedBrokerPositions]);
+
+  const exportBrokerCSV = () => {
+    if (!sortedBrokerPositions.length) return;
+    const headers = ['Symbol', 'Exchange', 'Product', 'Qty', 'Avg Price', 'LTP', 'P&L', 'P&L%'];
+    const rows = sortedBrokerPositions.map(p => [
+      p.tradingsymbol, p.exchange, p.product,
+      p.quantity, p.average_price, p.last_price,
+      p.pnl, p.pnlpercent ?? '',
+    ]);
+    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    a.download = `positions_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+  };
+  // ─────────────────────────────────────────────────────────────────────────
 
   // Fetch smart suggestions via REST (fallback when WS doesn't have them yet)
   const fetchSmartSuggestions = async () => {
@@ -194,9 +258,12 @@ const Positions: React.FC = () => {
     unmountedRef.current = false;
     fetchPositions();
     fetchHoldings();
+    fetchBrokerPositions();
     // Fetch smart suggestions on mount and every 60s
     fetchSmartSuggestions();
     const smartPoll = window.setInterval(fetchSmartSuggestions, 60000);
+    // Poll broker positions every 30s
+    brokerPollRef.current = window.setInterval(fetchBrokerPositions, 30000);
 
     // Poll as a fallback (e.g., if WS is blocked)
     pollRef.current = window.setInterval(fetchPositions, 30000);
@@ -209,6 +276,7 @@ const Positions: React.FC = () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
+      if (brokerPollRef.current) window.clearInterval(brokerPollRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
@@ -216,7 +284,7 @@ const Positions: React.FC = () => {
       }
       window.clearInterval(smartPoll);
     };
-  }, [connectWebSocket]);
+  }, [connectWebSocket, fetchBrokerPositions]);
 
   const fetchPositions = async () => {
     try {

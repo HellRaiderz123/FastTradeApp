@@ -25,12 +25,11 @@ from app.core.learning.scanner_signal_history import mark_signal_execution, reco
 from app.config.market_config import get_symbols
 from app.db.models_candles import CandleDaily
 from app.db.session import SessionLocal
-from app.services.zerodha import KiteConnectService
+from app.core.market.provider import get_bulk_quotes as _provider_bulk_quotes
 
 logger = logging.getLogger(__name__)
 
 _scan_lock = threading.Lock()
-_kite_service = KiteConnectService()
 
 # Job ID prefix — each strategy gets its own job
 _JOB_PREFIX = "cond_scanner_"
@@ -140,7 +139,7 @@ def _scan_and_execute_exits(row, db: Session):
     symbols = [h.symbol for h in holdings]
     ltps: dict = {}
     try:
-        quotes = _kite_service.get_bulk_quotes(symbols) or {}
+        quotes = _provider_bulk_quotes(symbols) or {}
         for sym in symbols:
             q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
             if q:
@@ -292,7 +291,7 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
     symbols = instruments if instruments else get_symbols(universe)
 
     # Get live quotes
-    quotes_data = _kite_service.get_bulk_quotes(symbols) or {}
+    quotes_data = _provider_bulk_quotes(symbols) or {}
 
     signals = []
     for symbol in symbols:
@@ -303,6 +302,7 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
             ltp = quote.get("last_price")
             volume = quote.get("volume")
 
+        # Bug fix: inject _direction so _scan_symbol uses correct direction
         result = _scan_symbol(
             symbol,
             conditions,
@@ -310,7 +310,7 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
             ltp=ltp,
             volume=volume,
             timeframe=timeframe or "Day",
-            exit_config=exit_config,
+            exit_config={**exit_config, "_direction": direction},
             capital_base=float(strategy.get("auto_amount", 10000.0) or 10000.0),
         )
         if result:
@@ -375,6 +375,15 @@ def _scan_and_execute_strategy(strategy: dict, all_strategies: list, db: Session
                 existing_status,
             )
             continue
+
+        # Bug fix: scope holding check to this strategy only
+        try:
+            from app.api.routes.holdings import has_open_holding as _has_holding_sched
+            if _has_holding_sched(db, sig["symbol"], strategy_name=name):
+                logger.info("    ⏭️ Skipping %s — already open in %s", sig["symbol"], name)
+                continue
+        except Exception:
+            pass
 
         try:
             _auto_execute_signal(
@@ -486,8 +495,31 @@ def _auto_execute_signal(
         order_id=order.get("order_id"),
     )
 
-    # Create ExecutionIntent so auto_exit.py monitors this trade
+    # Create StockHolding + ExecutionIntent when trade is filled
     if order.get("status") in {"FILLED_PAPER", "PLACED_LIVE", "DRY_RUN"} and order.get("fill_price"):
+        # Bug fix: create StockHolding so position appears in UI
+        try:
+            from app.api.routes.holdings import create_stock_holding, has_open_holding
+            if not has_open_holding(db, symbol):
+                create_stock_holding(
+                    db,
+                    symbol=symbol,
+                    direction=direction,
+                    quantity=quantity,
+                    entry_price=float(order["fill_price"]),
+                    strategy_name=strategy_name,
+                    source="SCANNER",
+                    execution_mode=mode,
+                    order_id=order.get("order_id"),
+                    tp_pct=float(exit_config.get("tp_pct") or 0) or None,
+                    sl_pct=float(exit_config.get("sl_pct") or 0) or None,
+                    tsl_pct=float(exit_config.get("tsl_pct") or 0) or None,
+                )
+                db.commit()
+                logger.info(f"    📌 StockHolding created: {direction} {symbol} @ ₹{order['fill_price']}")
+        except Exception as holding_err:
+            logger.warning(f"    Could not create StockHolding: {holding_err}")
+
         try:
             from app.api.routes.condition_scanner import _create_scanner_intent
             _create_scanner_intent(

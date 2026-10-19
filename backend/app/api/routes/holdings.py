@@ -313,9 +313,12 @@ def create_stock_holding(
     return holding
 
 
-def has_open_holding(db: Session, symbol: str) -> bool:
-    """Return True if there is already an open holding for this symbol."""
-    return db.query(StockHolding).filter(
+def has_open_holding(db: Session, symbol: str, strategy_name: Optional[str] = None) -> bool:
+    """Return True if there is already an open holding for this symbol (optionally scoped to a strategy)."""
+    q = db.query(StockHolding).filter(
         StockHolding.symbol == symbol.upper().strip(),
         StockHolding.status == "OPEN",
-    ).first() is not None
+    )
+    if strategy_name:
+        q = q.filter(StockHolding.strategy_name == strategy_name)
+    return q.first() is not None

@@ -1,266 +1,190 @@
 import React, { useEffect, useState } from 'react';
-import { Twitter, TrendingUp, TrendingDown, Minus, AlertTriangle, ExternalLink, Sparkles } from 'lucide-react';
-import { twitterAPI } from '../lib/api';
+import { TrendingUp, TrendingDown, Minus, Newspaper, Sparkles, ExternalLink, RefreshCw } from 'lucide-react';
+import { getNewsFeed, getTrendingTopics, type NewsItem, type TrendingTopic, type SentimentSummary } from '../api/newsAPI';
+import { cn } from '@/lib/utils';
 
-interface Tweet {
-  tweet_id: string;
-  username: string;
-  text: string;
-  sentiment: 'bullish' | 'bearish' | 'neutral';
-  sentiment_score: number;
-  engagement_score: number;
-  impact_level: 'high' | 'medium' | 'low';
-  retweets: number;
-  likes: number;
-  created_at: string;
-  // Added by LLM sentiment analyser
-  source?: 'llm' | 'textblob';
-}
-
-interface TrendingSymbol {
-  symbol: string;
-  tweet_count: number;
-  high_impact_count: number;
-  sentiment: 'bullish' | 'bearish' | 'neutral';
-  sentiment_score: number;
-  avg_engagement: number;
-}
-
-interface TwitterSentimentWidgetProps {
+interface MarketPulseProps {
+  /** unused — kept for drop-in compatibility with TwitterSentimentWidget */
+  timeframe?: string;
   symbol?: string;
-  timeframe?: '15m' | '1h' | '4h' | '1d';
 }
 
-const TwitterSentimentWidget: React.FC<TwitterSentimentWidgetProps> = ({ 
-  symbol, 
-  timeframe = '1h' 
-}) => {
-  const [tweets, setTweets] = useState<Tweet[]>([]);
-  const [trending, setTrending] = useState<TrendingSymbol[]>([]);
-  const [overallSentiment, setOverallSentiment] = useState<{
-    sentiment: string;
-    score: number;
-    confidence: number;
-  } | null>(null);
+function timeAgo(ts: string) {
+  const diff = Date.now() - new Date(ts).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  if (m < 1440) return `${Math.floor(m / 60)}h ago`;
+  return `${Math.floor(m / 1440)}d ago`;
+}
+
+const sentimentColor = (s: string) =>
+  s === 'bullish' ? 'text-emerald-500' : s === 'bearish' ? 'text-red-500' : 'text-muted-foreground';
+
+const sentimentBg = (s: string) =>
+  s === 'bullish' ? 'bg-emerald-500/10 text-emerald-500' : s === 'bearish' ? 'bg-red-500/10 text-red-500' : 'bg-muted/60 text-muted-foreground';
+
+const impactBg = (m?: string) =>
+  m === 'high' ? 'bg-red-500/10 text-red-400' : m === 'medium' ? 'bg-amber-500/10 text-amber-400' : 'bg-muted/40 text-muted-foreground';
+
+const SentimentIcon: React.FC<{ s: string; className?: string }> = ({ s, className }) => {
+  if (s === 'bullish') return <TrendingUp className={cn('h-3 w-3', className ?? 'text-emerald-500')} />;
+  if (s === 'bearish') return <TrendingDown className={cn('h-3 w-3', className ?? 'text-red-500')} />;
+  return <Minus className={cn('h-3 w-3', className ?? 'text-muted-foreground')} />;
+};
+
+const MarketPulse: React.FC<MarketPulseProps> = () => {
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [topics, setTopics] = useState<TrendingTopic[]>([]);
+  const [summary, setSummary] = useState<SentimentSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(false);
 
-  useEffect(() => {
-    fetchTwitterData();
-    const interval = setInterval(fetchTwitterData, 60000); // Update every minute
-    return () => clearInterval(interval);
-  }, [symbol, timeframe]);
-
-  const fetchTwitterData = async () => {
+  const load = async (showRefresh = false) => {
+    if (showRefresh) setRefreshing(true);
     try {
-      setLoading(true);
-      setError(null);
-
-      if (symbol) {
-        // Fetch sentiment for specific symbol
-        const response = await twitterAPI.getSymbolSentiment(symbol, timeframe);
-        setOverallSentiment({
-          sentiment: response.data.sentiment,
-          score: response.data.sentiment_score,
-          confidence: response.data.confidence
-        });
-        setTweets(response.data.top_tweets || []);
-      } else {
-        // Fetch trending symbols and recent tweets
-        const [trendingRes, tweetsRes] = await Promise.all([
-          twitterAPI.getTrending(timeframe, 5),
-          twitterAPI.getRecentTweets({ limit: 10, impact_level: 'high' })
-        ]);
-        setTrending(trendingRes.data.trending || []);
-        setTweets(tweetsRes.data.tweets || []);
+      const [feedRes, topicsRes] = await Promise.allSettled([
+        getNewsFeed(8, 0),
+        getTrendingTopics(),
+      ]);
+      if (feedRes.status === 'fulfilled') {
+        setNews(feedRes.value.news ?? []);
+        setSummary(feedRes.value.sentiment_summary ?? null);
+        setError(false);
       }
-    } catch (err: any) {
-      if (err.response?.status === 503) {
-        setError('Twitter API not configured');
-      } else {
-        console.error('Failed to fetch Twitter data:', err);
-        setError('Failed to load');
+      if (topicsRes.status === 'fulfilled') {
+        setTopics(topicsRes.value.topics?.slice(0, 5) ?? []);
       }
+    } catch {
+      setError(true);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const getSentimentColor = (sentiment: string) => {
-    switch (sentiment) {
-      case 'bullish': return 'text-green-400';
-      case 'bearish': return 'text-red-400';
-      default: return 'text-slate-400';
-    }
-  };
+  useEffect(() => {
+    load();
+    const t = setInterval(() => load(), 120_000);
+    return () => clearInterval(t);
+  }, []);
 
-  const getSentimentIcon = (sentiment: string) => {
-    switch (sentiment) {
-      case 'bullish': return <TrendingUp className="w-4 h-4 text-green-400" />;
-      case 'bearish': return <TrendingDown className="w-4 h-4 text-red-400" />;
-      default: return <Minus className="w-4 h-4 text-slate-400" />;
-    }
-  };
-
-  const getImpactBadge = (impact: string) => {
-    const colors = {
-      high: 'bg-red-900/30 text-red-400 border-red-700',
-      medium: 'bg-yellow-900/30 text-yellow-400 border-yellow-700',
-      low: 'bg-slate-700/30 text-slate-400 border-slate-600'
-    };
-    return `px-2 py-0.5 rounded-full text-xs border ${colors[impact as keyof typeof colors] || colors.low}`;
-  };
-
-  const formatTime = (timestamp: string) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    
-    if (diffMins < 1) return 'just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
-    return `${Math.floor(diffMins / 1440)}d ago`;
-  };
-
-  if (loading && tweets.length === 0) {
-    return (
-      <div className="bg-slate-900 rounded-lg border border-slate-800 p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Twitter className="w-5 h-5 text-blue-400" />
-          <h3 className="text-lg font-semibold text-white">Twitter Sentiment</h3>
-        </div>
-        <div className="text-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="text-slate-400 mt-2">Loading Twitter data...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="bg-slate-900 rounded-lg border border-slate-800 p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Twitter className="w-5 h-5 text-blue-400" />
-          <h3 className="text-lg font-semibold text-white">Twitter Sentiment</h3>
-        </div>
-        <div className="text-center py-8">
-          <AlertTriangle className="w-8 h-8 text-yellow-500 mx-auto mb-2" />
-          <p className="text-slate-400">{error}</p>
-          <p className="text-xs text-slate-500 mt-1">Set TWITTER_BEARER_TOKEN in .env</p>
-        </div>
-      </div>
-    );
-  }
+  const total = summary ? summary.bullish + summary.bearish + summary.neutral : 0;
+  const bullPct = total > 0 ? Math.round((summary!.bullish / total) * 100) : 0;
+  const bearPct = total > 0 ? Math.round((summary!.bearish / total) * 100) : 0;
 
   return (
-    <div className="bg-slate-900 rounded-lg border border-slate-800 p-6 h-full overflow-hidden flex flex-col">
-      <div className="flex items-center justify-between mb-4">
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 pt-3.5 pb-2 shrink-0">
         <div className="flex items-center gap-2">
-          <Twitter className="w-5 h-5 text-blue-400" />
-          <h3 className="text-lg font-semibold text-white">Twitter Sentiment</h3>
-          {tweets.some(t => t.source === 'llm') && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-violet-600/20 border border-violet-500/30 text-violet-300">
-              <Sparkles className="w-2.5 h-2.5" /> AI
-            </span>
-          )}
+          <Newspaper className="h-3.5 w-3.5 text-muted-foreground" />
+          <p className="text-sm font-semibold text-foreground">Market Pulse</p>
         </div>
-        <span className="text-xs text-slate-500">{timeframe}</span>
+        <button
+          onClick={() => load(true)}
+          className="text-muted-foreground hover:text-foreground transition-colors"
+          disabled={refreshing}
+        >
+          <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
+        </button>
       </div>
 
-      {/* Overall Sentiment (if symbol specified) */}
-      {overallSentiment && symbol && (
-        <div className="mb-4 p-4 bg-slate-800 rounded-lg">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-slate-400 mb-1">{symbol}</p>
-              <div className="flex items-center gap-2">
-                {getSentimentIcon(overallSentiment.sentiment)}
-                <span className={`text-lg font-bold capitalize ${getSentimentColor(overallSentiment.sentiment)}`}>
-                  {overallSentiment.sentiment}
-                </span>
-              </div>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-slate-500">Confidence</p>
-              <p className="text-lg font-bold text-white">{(overallSentiment.confidence * 100).toFixed(0)}%</p>
-            </div>
-          </div>
+      {loading ? (
+        <div className="flex flex-1 items-center justify-center">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         </div>
-      )}
+      ) : error ? (
+        <div className="flex flex-1 items-center justify-center px-4 text-center">
+          <p className="text-xs text-muted-foreground">News feed unavailable</p>
+        </div>
+      ) : (
+        <div className="flex flex-col flex-1 overflow-hidden px-3 pb-3 gap-3">
 
-      {/* Trending Symbols (if no symbol specified) */}
-      {trending.length > 0 && !symbol && (
-        <div className="mb-4">
-          <h4 className="text-sm font-semibold text-slate-300 mb-2">Trending</h4>
-          <div className="space-y-2">
-            {trending.slice(0, 3).map((item) => (
-              <div key={item.symbol} className="flex items-center justify-between p-2 bg-slate-800 rounded">
-                <div className="flex items-center gap-2">
-                  {getSentimentIcon(item.sentiment)}
-                  <span className="font-medium text-white">{item.symbol}</span>
-                  {item.high_impact_count > 0 && (
-                    <span className="text-xs text-red-400">🔥 {item.high_impact_count}</span>
-                  )}
+          {/* Sentiment bar */}
+          {summary && total > 0 && (
+            <div className="shrink-0">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-muted-foreground">Sentiment</span>
+                <div className="flex items-center gap-2 text-[10px]">
+                  <span className="text-emerald-500">{bullPct}% Bull</span>
+                  <span className="text-red-500">{bearPct}% Bear</span>
                 </div>
-                <div className="text-xs text-slate-400">{item.tweet_count} tweets</div>
               </div>
+              <div className="flex h-1.5 rounded-full overflow-hidden gap-px">
+                <div className="bg-emerald-500 rounded-l-full transition-all" style={{ width: `${bullPct}%` }} />
+                <div className="bg-muted flex-1" />
+                <div className="bg-red-500 rounded-r-full transition-all" style={{ width: `${bearPct}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* Trending topics */}
+          {topics.length > 0 && (
+            <div className="shrink-0 flex flex-wrap gap-1">
+              {topics.map((t) => (
+                <span
+                  key={t.keyword}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                    t.sentiment > 0.1 ? 'bg-emerald-500/10 text-emerald-500' :
+                    t.sentiment < -0.1 ? 'bg-red-500/10 text-red-500' :
+                    'bg-muted/60 text-muted-foreground'
+                  )}
+                >
+                  {t.keyword}
+                  <span className="opacity-60">{t.mentions}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* News items */}
+          <div className="flex-1 overflow-y-auto space-y-2 no-scrollbar">
+            {news.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-6">No news available</p>
+            )}
+            {news.map((item, i) => (
+              <a
+                key={i}
+                href={item.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-lg border border-border/60 bg-muted/20 px-3 py-2 hover:bg-accent/50 transition-colors group"
+              >
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <SentimentIcon s={item.llm_impact ?? item.sentiment} />
+                    {item.llm_impact && (
+                      <span className={cn('text-[9px] font-semibold rounded px-1 py-px', impactBg(item.llm_magnitude))}>
+                        {item.llm_magnitude ?? 'AI'}
+                      </span>
+                    )}
+                    {item.llm_impact && (
+                      <Sparkles className="h-2.5 w-2.5 text-violet-400" />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className="text-[9px] text-muted-foreground">{timeAgo(item.published)}</span>
+                    <ExternalLink className="h-2.5 w-2.5 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
+                  </div>
+                </div>
+                <p className="text-[11px] font-medium text-foreground leading-snug line-clamp-2">{item.title}</p>
+                {item.llm_symbols && item.llm_symbols.length > 0 && (
+                  <div className="flex gap-1 mt-1 flex-wrap">
+                    {item.llm_symbols.slice(0, 3).map((sym) => (
+                      <span key={sym} className="text-[9px] font-mono bg-primary/10 text-primary rounded px-1">{sym}</span>
+                    ))}
+                  </div>
+                )}
+              </a>
             ))}
           </div>
         </div>
       )}
-
-      {/* Recent Tweets */}
-      <div className="flex-1 overflow-y-auto space-y-3">
-        <h4 className="text-sm font-semibold text-slate-300 sticky top-0 bg-slate-900 pb-2">
-          {tweets.length > 0 ? 'Recent Tweets' : 'No Recent Activity'}
-        </h4>
-        {tweets.map((tweet) => (
-          <div key={tweet.tweet_id} className="p-3 bg-slate-800 rounded-lg space-y-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2 flex-1">
-                <Twitter className="w-4 h-4 text-blue-400 flex-shrink-0" />
-                <span className="font-medium text-blue-400 text-sm">@{tweet.username}</span>
-                <span className={getImpactBadge(tweet.impact_level)}>{tweet.impact_level}</span>
-              </div>
-              <span className="text-xs text-slate-500 whitespace-nowrap">
-                {formatTime(tweet.created_at)}
-              </span>
-            </div>
-            
-            <p className="text-sm text-slate-300 line-clamp-3">{tweet.text}</p>
-            
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {getSentimentIcon(tweet.sentiment)}
-                <span className={`text-xs capitalize ${getSentimentColor(tweet.sentiment)}`}>
-                  {tweet.sentiment}
-                </span>
-                {tweet.source === 'llm' && (
-                  <span className="flex items-center gap-0.5 text-[10px] text-violet-400" title="Scored by NVIDIA LLM">
-                    <Sparkles className="w-2.5 h-2.5" /> AI
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-3 text-xs text-slate-500">
-                <span>❤️ {tweet.likes}</span>
-                <span>🔁 {tweet.retweets}</span>
-                <a 
-                  href={`https://twitter.com/${tweet.username}/status/${tweet.tweet_id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-blue-400 hover:text-blue-300"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 };
 
-export default TwitterSentimentWidget;
+export default MarketPulse;

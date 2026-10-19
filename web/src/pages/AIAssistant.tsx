@@ -2,6 +2,7 @@ import AIAnalysis from './AIAnalysis';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Bot, User, Loader2, CheckCircle, XCircle, Zap, BarChart3, ClipboardList, Target, ArrowRight, Mic, MicOff, Volume2, VolumeX, ShieldAlert, Newspaper, TrendingUp, ChevronDown, ChevronUp, RefreshCw, Radio, Activity, Cpu, Gauge, Sparkles } from 'lucide-react';
 import axios from 'axios';
+import api from '../lib/api';
 import { AnimatePresence, motion } from 'framer-motion';
 
 interface TableRow { [key: string]: string }
@@ -997,7 +998,7 @@ export default function AIAssistant() {
       const history = updatedMessages
         .slice(1)
         .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
-      const { data } = await axios.post('/api/ai-chat/query', {
+      const { data } = await api.post('/ai-chat/query', {
         message: text,
         history,
         voice_mode: voiceEnabled || jarvisMode,

@@ -1,15 +1,57 @@
 """
-INDMoney positions API endpoint
-Fetches live positions from INDMoney / INDstocks broker
+INDMoney broker API endpoints — positions, login, session status.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from sqlalchemy.orm import Session
 from typing import Dict, Any, List
 import logging
 
 from app.core.broker.indmoney.client import get_indmoney_client
+from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/indmoney", tags=["INDMoney"])
+
+
+def _get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@router.post("/login")
+def indmoney_login(
+    mtp: str = Body(..., description="Mobile Transaction Password"),
+    totp: str = Body(..., description="6-digit authenticator code"),
+    db: Session = Depends(_get_db),
+) -> Dict[str, Any]:
+    """
+    Authenticate with INDMoney.
+    .env must have INDMONEY_MOBILE and INDMONEY_PIN.
+    Supply mtp + totp from your authenticator app.
+    """
+    from app.core.broker.indmoney.oauth import login
+    try:
+        token = login(db, mtp=mtp, totp=totp)
+        return {"status": "ok", "message": "INDMoney login successful"}
+    except RuntimeError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+
+@router.get("/session-status")
+def indmoney_session_status(db: Session = Depends(_get_db)) -> Dict[str, Any]:
+    """Check whether an active INDMoney session exists in DB."""
+    from app.core.broker.indmoney.oauth import get_active_session
+    session = get_active_session(db)
+    if session:
+        return {
+            "active": True,
+            "client_id": session.client_id,
+            "expires_at": session.expires_at.isoformat() if session.expires_at else None,
+        }
+    return {"active": False}
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:

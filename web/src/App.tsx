@@ -1,60 +1,82 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'sonner';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import ProtectedRoute from './components/ProtectedRoute';
-import Dashboard from './pages/Dashboard';
-import Terminal from './pages/TerminalBloomberg';
-import Screener from './pages/Screener';
-import OptionsChain from './pages/OptionsChain';
-import Strategies from './pages/Strategies';
-import StrategyBuilder from './pages/StrategyBuilder';
-import Backtest from './pages/Backtest';
-import Positions from './pages/Positions';
-import Journal from './pages/Journal';
-import Settings from './pages/Settings';
-import Heatmap from './pages/Heatmap';
-import Login from './pages/Login';
-import { systemAPI, journalAPI } from './lib/api';
+import { systemAPI } from './lib/api';
 import { useTradeStore } from './lib/store';
-import FinanceTracker from './pages/FinanceTracker';
-import Calendar from './pages/Calendar';
-import MLCenter from './pages/MLCenter';
-import AutoTrader from './pages/AutoTrader';
-import MultiTimeframe from './pages/MultiTimeframe';
-import BacktestComparison from './pages/BacktestComparison';
-import TradeCostTracker from './pages/TradeCostTracker';
-import CustomWatchlists from './pages/CustomWatchlists';
-import CreateScanner from './pages/CreateScanner';
-import ScannerExecution from './pages/ScannerExecution';
-import BrokerReconciliation from './pages/BrokerReconciliation';
-import StrategyPnL from './pages/StrategyPnL';
-import StrategyMarketplace from './pages/StrategyMarketplace';
-import AIAssistant from './pages/AIAssistant';
-import AIAnalysis from './pages/AIAnalysis';
-import SignalReconciliation from './pages/SignalReconciliation';
-import CandleBackfill from './pages/CandleBackfill';
-import ScheduledJobs from './pages/ScheduledJobs';
-import ScalpTrading from './pages/ScalpTrading';
-import { ToastProvider } from './components/Toast';
 import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import CommandPalette from './components/CommandPalette';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { ToastProvider } from './components/Toast';
 
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error?: Error }> {
+// Lazy-loaded pages — code splitting for faster initial load
+const Terminal = lazy(() => import('./pages/TerminalBloomberg'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Screener = lazy(() => import('./pages/Screener'));
+const Heatmap = lazy(() => import('./pages/Heatmap'));
+const OptionsChain = lazy(() => import('./pages/OptionsChain'));
+const Strategies = lazy(() => import('./pages/Strategies'));
+const StrategyBuilder = lazy(() => import('./pages/StrategyBuilder'));
+const Backtest = lazy(() => import('./pages/Backtest'));
+const BacktestComparison = lazy(() => import('./pages/BacktestComparison'));
+const Positions = lazy(() => import('./pages/Positions'));
+const Journal = lazy(() => import('./pages/Journal'));
+const Settings = lazy(() => import('./pages/Settings'));
+const FinanceTracker = lazy(() => import('./pages/FinanceTracker'));
+const Calendar = lazy(() => import('./pages/Calendar'));
+const MLCenter = lazy(() => import('./pages/MLCenter'));
+const AutoTrader = lazy(() => import('./pages/AutoTrader'));
+const MultiTimeframe = lazy(() => import('./pages/MultiTimeframe'));
+const TradeCostTracker = lazy(() => import('./pages/TradeCostTracker'));
+const CustomWatchlists = lazy(() => import('./pages/CustomWatchlists'));
+const CreateScanner = lazy(() => import('./pages/CreateScanner'));
+const ScannerExecution = lazy(() => import('./pages/ScannerExecution'));
+const BrokerReconciliation = lazy(() => import('./pages/BrokerReconciliation'));
+const StrategyPnL = lazy(() => import('./pages/StrategyPnL'));
+const StrategyMarketplace = lazy(() => import('./pages/StrategyMarketplace'));
+const AIAssistant = lazy(() => import('./pages/AIAssistant'));
+const AIAnalysis = lazy(() => import('./pages/AIAnalysis'));
+const SignalReconciliation = lazy(() => import('./pages/SignalReconciliation'));
+const CandleBackfill = lazy(() => import('./pages/CandleBackfill'));
+const ScheduledJobs = lazy(() => import('./pages/ScheduledJobs'));
+const ScalpTrading = lazy(() => import('./pages/ScalpTrading'));
+const Login = lazy(() => import('./pages/Login'));
+
+// Page loader fallback
+function PageLoader() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+    </div>
+  );
+}
+
+// Error boundary
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error?: Error }
+> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { hasError: false };
   }
   static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
-  componentDidCatch(error: Error, info: any) { console.error('UI Error:', error, info); }
+  componentDidCatch(error: Error, info: unknown) { console.error('UI Error:', error, info); }
   render() {
     if (this.state.hasError) {
       return (
-        <div className="p-6 text-white">
-          <h2 className="text-xl font-semibold mb-2">Something went wrong</h2>
-          <p className="text-slate-300 mb-4">{this.state.error?.message}</p>
-          <button onClick={() => this.setState({ hasError: false, error: undefined })} className="btn-secondary">Try again</button>
+        <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
+          <p className="text-lg font-semibold">Something went wrong</p>
+          <p className="text-sm text-muted-foreground">{this.state.error?.message}</p>
+          <button
+            onClick={() => this.setState({ hasError: false, error: undefined })}
+            className="btn-secondary"
+          >
+            Try again
+          </button>
         </div>
       );
     }
@@ -62,10 +84,20 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
-// Inner component — must be inside Router so useNavigate works
+// TanStack Query client
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
 function AppInner() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = React.useState(true);
+  const [paletteOpen, setPaletteOpen] = React.useState(false);
   const { systemEnabled, setSystemEnabled, darkMode } = useTradeStore();
 
   useKeyboardShortcuts({ onOpenPalette: () => setPaletteOpen(true) });
@@ -86,71 +118,94 @@ function AppInner() {
 
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="*" element={
-        <ProtectedRoute>
-          <div className="flex h-screen terminal-shell">
-            <Sidebar open={sidebarOpen} />
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <Header
-                onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-                systemEnabled={systemEnabled}
-                onSystemToggle={setSystemEnabled}
-              />
-              <SignalAlertMonitor />
-              <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-              <main className="flex-1 overflow-auto p-6">
-                <Routes>
-                  <Route path="/" element={<Terminal />} />
-                  <Route path="/dashboard" element={<Dashboard />} />
-                  <Route path="/screener" element={<Screener />} />
-                  <Route path="/heatmap" element={<Heatmap />} />
-                  <Route path="/options" element={<OptionsChain />} />
-                  <Route path="/ml" element={<MLCenter />} />
-                  <Route path="/ml-intelligence" element={<MLCenter />} />
-                  <Route path="/strategies" element={<Strategies />} />
-                  <Route path="/strategies/builder" element={<StrategyBuilder />} />
-                  <Route path="/marketplace" element={<StrategyMarketplace />} />
-                  <Route path="/create-scanner" element={<CreateScanner />} />
-                  <Route path="/scanner-execution" element={<ScannerExecution />} />
-                  <Route path="/backfill-candles" element={<CandleBackfill />} />
-                  <Route path="/backtest" element={<Backtest />} />
-                  <Route path="/backtest-comparison" element={<BacktestComparison />} />
-                  <Route path="/positions" element={<Positions />} />
-                  <Route path="/reconciliation" element={<BrokerReconciliation />} />
-                  <Route path="/strategy-pnl" element={<StrategyPnL />} />
-                  <Route path="/journal" element={<Journal />} />
-                  <Route path="/trade-costs" element={<TradeCostTracker />} />
-                  <Route path="/auto-trader" element={<AutoTrader />} />
-                  <Route path="/scalp-trading" element={<ScalpTrading />} />
-                  <Route path="/watchlists" element={<CustomWatchlists />} />
-                  <Route path="/multi-timeframe" element={<MultiTimeframe />} />
-                  <Route path="/calendar" element={<Calendar />} />
-                  <Route path="/finance" element={<FinanceTracker />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/ai-assistant" element={<AIAssistant />} />
-                  <Route path="/ai-analysis" element={<AIAnalysis />} />
-                  <Route path="/signal-reconciliation" element={<SignalReconciliation />} />
-                  <Route path="/scheduled-jobs" element={<ScheduledJobs />} />
-                </Routes>
-              </main>
+      <Route
+        path="/login"
+        element={
+          <Suspense fallback={<PageLoader />}>
+            <Login />
+          </Suspense>
+        }
+      />
+      <Route
+        path="*"
+        element={
+          <ProtectedRoute>
+            <div className="flex h-screen terminal-shell">
+              <Sidebar open={sidebarOpen} />
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <Header
+                  onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+                  systemEnabled={systemEnabled}
+                  onSystemToggle={setSystemEnabled}
+                />
+                <SignalAlertMonitor />
+                <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+                <main className="flex-1 overflow-auto p-6">
+                  <Suspense fallback={<PageLoader />}>
+                    <Routes>
+                      <Route path="/" element={<Terminal />} />
+                      <Route path="/dashboard" element={<Dashboard />} />
+                      <Route path="/screener" element={<Screener />} />
+                      <Route path="/heatmap" element={<Heatmap />} />
+                      <Route path="/options" element={<OptionsChain />} />
+                      <Route path="/ml" element={<MLCenter />} />
+                      <Route path="/ml-intelligence" element={<MLCenter />} />
+                      <Route path="/strategies" element={<Strategies />} />
+                      <Route path="/strategies/builder" element={<StrategyBuilder />} />
+                      <Route path="/marketplace" element={<StrategyMarketplace />} />
+                      <Route path="/create-scanner" element={<CreateScanner />} />
+                      <Route path="/scanner-execution" element={<ScannerExecution />} />
+                      <Route path="/backfill-candles" element={<CandleBackfill />} />
+                      <Route path="/backtest" element={<Backtest />} />
+                      <Route path="/backtest-comparison" element={<BacktestComparison />} />
+                      <Route path="/positions" element={<Positions />} />
+                      <Route path="/reconciliation" element={<BrokerReconciliation />} />
+                      <Route path="/strategy-pnl" element={<StrategyPnL />} />
+                      <Route path="/journal" element={<Journal />} />
+                      <Route path="/trade-costs" element={<TradeCostTracker />} />
+                      <Route path="/auto-trader" element={<AutoTrader />} />
+                      <Route path="/scalp-trading" element={<ScalpTrading />} />
+                      <Route path="/watchlists" element={<CustomWatchlists />} />
+                      <Route path="/multi-timeframe" element={<MultiTimeframe />} />
+                      <Route path="/calendar" element={<Calendar />} />
+                      <Route path="/finance" element={<FinanceTracker />} />
+                      <Route path="/settings" element={<Settings />} />
+                      <Route path="/ai-assistant" element={<AIAssistant />} />
+                      <Route path="/ai-analysis" element={<AIAnalysis />} />
+                      <Route path="/signal-reconciliation" element={<SignalReconciliation />} />
+                      <Route path="/scheduled-jobs" element={<ScheduledJobs />} />
+                    </Routes>
+                  </Suspense>
+                </main>
+              </div>
             </div>
-          </div>
-        </ProtectedRoute>
-      } />
+          </ProtectedRoute>
+        }
+      />
     </Routes>
   );
 }
 
 function App() {
   return (
-    <ErrorBoundary>
-      <ToastProvider>
-        <Router>
-          <AppInner />
-        </Router>
-      </ToastProvider>
-    </ErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <ErrorBoundary>
+        <ToastProvider>
+          <Router>
+            <AppInner />
+          </Router>
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              classNames: {
+                toast: 'bg-card border border-border text-foreground',
+                description: 'text-muted-foreground',
+              },
+            }}
+          />
+        </ToastProvider>
+      </ErrorBoundary>
+    </QueryClientProvider>
   );
 }
 

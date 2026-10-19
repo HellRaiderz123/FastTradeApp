@@ -126,6 +126,7 @@ async def lifespan(app: FastAPI):
         from app.db.models_signal_outcome import SignalOutcome  # noqa: F401
         from app.db.models_scanner_signal import ScannerSignalHistory  # noqa: F401
         from app.db.models_zerodha import ZerodhaSession  # noqa: F401
+        from app.db.models_indmoney import INDMoneySession  # noqa: F401
         from app.db.models_ai_decisions import AIDecision, ensure_ai_decisions_schema  # noqa: F401 — trading agents memory
         from app.db.models_stock_holding import StockHolding  # noqa: F401 — stock holdings table
         Base.metadata.create_all(bind=engine)

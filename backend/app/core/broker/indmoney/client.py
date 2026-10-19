@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import requests
 
@@ -7,14 +7,14 @@ import requests
 class INDMoneyClient:
     """Minimal INDMoney HTTP client for order placement.
 
-    The exact upstream schema can vary by account setup. This client keeps
-    endpoint and payload style configurable through env vars.
+    Token priority: DB active session → INDMONEY_ACCESS_TOKEN in .env.
+    Pass db_token explicitly (from oauth.get_access_token) to use DB-sourced token.
     """
 
-    def __init__(self):
+    def __init__(self, db_token: Optional[str] = None):
         self.base_url = os.getenv("INDMONEY_BASE_URL", "https://api.indstocks.com").rstrip("/")
         self.api_key = os.getenv("INDMONEY_API_KEY", "")
-        self.access_token = os.getenv("INDMONEY_ACCESS_TOKEN", "")
+        self.access_token = db_token or os.getenv("INDMONEY_ACCESS_TOKEN", "")
         self.client_id = os.getenv("INDMONEY_CLIENT_ID", "")
         self.order_path = os.getenv("INDMONEY_ORDER_PATH", "/order")
         self.gtt_path = os.getenv("INDMONEY_GTT_PATH", "").strip()
@@ -212,4 +212,15 @@ class INDMoneyClient:
 
 
 def get_indmoney_client() -> INDMoneyClient:
-    return INDMoneyClient()
+    """Return a client with the best available token (DB → .env)."""
+    try:
+        from app.db.session import SessionLocal
+        from app.core.broker.indmoney.oauth import get_access_token
+        db = SessionLocal()
+        try:
+            token = get_access_token(db)
+        finally:
+            db.close()
+    except Exception:
+        token = None
+    return INDMoneyClient(db_token=token)

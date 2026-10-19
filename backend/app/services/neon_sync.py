@@ -194,16 +194,17 @@ def run_delta_sync():
                     conflict_sql = "ON CONFLICT DO NOTHING"
 
                 upserted = 0
-                with neon_engine.begin() as dst:
+                with neon_engine.connect() as dst:
                     for row in rows:
                         try:
-                            dst.execute(
-                                text(
-                                    f'INSERT INTO "{table}" ({col_list}) '
-                                    f"VALUES ({placeholders}) {conflict_sql}"
-                                ),
-                                dict(row),
-                            )
+                            with dst.begin():
+                                dst.execute(
+                                    text(
+                                        f'INSERT INTO "{table}" ({col_list}) '
+                                        f"VALUES ({placeholders}) {conflict_sql}"
+                                    ),
+                                    dict(row),
+                                )
                             upserted += 1
                         except Exception as row_err:
                             logger.debug(f"  ⚠️  {table} row skip: {row_err}")

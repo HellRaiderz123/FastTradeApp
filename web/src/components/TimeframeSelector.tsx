@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 export type Timeframe = '1m' | '5m' | '15m' | '1h' | 'daily';
 
@@ -12,43 +12,32 @@ interface TimeframeSelectorProps {
 
 const DEFAULT_TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '1h', 'daily'];
 
-const TIMEFRAME_LABELS: Record<Timeframe, string> = {
-  '1m': '1M',
-  '5m': '5M',
-  '15m': '15M',
-  '1h': '1H',
-  'daily': '1D',
+const LABELS: Record<Timeframe, string> = {
+  '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1H', 'daily': '1D',
 };
 
 const TimeframeSelector: React.FC<TimeframeSelectorProps> = ({
   selectedTimeframe,
   onTimeframeChange,
   availableTimeframes = DEFAULT_TIMEFRAMES,
-  className = '',
-}) => {
-  return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      <Clock className="w-4 h-4 text-gray-400" />
-      <div className="inline-flex rounded-lg border border-gray-700 bg-gray-800 p-1">
-        {availableTimeframes.map((tf) => (
-          <button
-            key={tf}
-            onClick={() => onTimeframeChange(tf)}
-            className={`
-              px-3 py-1 text-xs font-medium rounded-md transition-colors
-              ${
-                selectedTimeframe === tf
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
-              }
-            `}
-          >
-            {TIMEFRAME_LABELS[tf]}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-};
+  className,
+}) => (
+  <div className={cn('flex items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5', className)}>
+    {availableTimeframes.map((tf) => (
+      <button
+        key={tf}
+        onClick={() => onTimeframeChange(tf)}
+        className={cn(
+          'px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors',
+          selectedTimeframe === tf
+            ? 'bg-primary text-primary-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+        )}
+      >
+        {LABELS[tf]}
+      </button>
+    ))}
+  </div>
+);
 
 export default TimeframeSelector;

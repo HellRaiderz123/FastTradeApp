@@ -156,22 +156,111 @@ def _fetch_ltp_indstocks(symbols: List[str]) -> Dict[str, float]:
 
 def get_bulk_quotes(symbols: List[str]) -> Dict[str, Dict]:
     """
-    Return quotes keyed by "NSE:SYMBOL" with at least {"last_price": float}.
-    Mirrors the shape KiteConnectService.get_bulk_quotes() returns so callers
-    need no changes when switching providers.
+    Return full quotes keyed by "NSE:SYMBOL" with last_price, ohlc, and volume.
+    Uses Zerodha quote() for full data; falls back to LTP-only shape for IndMoney.
     """
     if not symbols:
         return {}
-    try:
-        ltps = fetch_ltp(symbols)
-        return {
-            f"NSE:{sym}": {"last_price": price}
-            for sym, price in ltps.items()
-            if price and price > 0
-        }
-    except Exception as exc:
-        logger.warning("get_bulk_quotes failed: %s", exc)
+    if is_indstocks():
+        return _get_bulk_quotes_indstocks(symbols)
+    return _get_bulk_quotes_zerodha(symbols)
+
+
+def _get_bulk_quotes_zerodha(symbols: List[str]) -> Dict[str, Dict]:
+    from app.core.broker.zerodha.client import get_kite_client
+    from app.core.broker.zerodha.instruments import get_equity_token, INDEX_TOKENS, get_index_token
+
+    kite = get_kite_client()
+    instrument_keys = []
+    sym_to_key: Dict[str, str] = {}
+    for sym in symbols:
+        sym_upper = sym.upper()
+        if sym_upper in INDEX_TOKENS:
+            key = str(get_index_token(sym_upper))
+        else:
+            key = f"NSE:{sym_upper}"
+        instrument_keys.append(key)
+        sym_to_key[sym_upper] = key
+
+    result: Dict[str, Dict] = {}
+    batch_size = 500  # Zerodha quote() supports up to 500
+    for i in range(0, len(instrument_keys), batch_size):
+        batch = instrument_keys[i: i + batch_size]
+        try:
+            data = kite.quote(batch)
+            for sym_upper, key in sym_to_key.items():
+                q = data.get(key)
+                if not q:
+                    continue
+                result[f"NSE:{sym_upper}"] = {
+                    "last_price": float(q.get("last_price") or 0),
+                    "ohlc": q.get("ohlc", {}),
+                    "volume": int(q.get("volume") or 0),
+                    "average_price": float(q.get("average_price") or 0),
+                }
+        except Exception as exc:
+            logger.warning("Zerodha quote() batch failed: %s", exc)
+    return result
+
+
+def _get_bulk_quotes_indstocks(symbols: List[str]) -> Dict[str, Dict]:
+    """
+    INDstocks full quote via /market/quotes/full.
+    Falls back to LTP-only shape if full quote is unavailable.
+    """
+    from app.core.broker.indstocks.market_data import (
+        get_scrip_code, _headers, BASE_URL,
+    )
+    import requests
+
+    sym_to_scrip: Dict[str, str] = {}
+    for sym in symbols:
+        try:
+            sym_to_scrip[sym.upper()] = get_scrip_code(sym)
+        except KeyError:
+            logger.warning("INDstocks: no scrip-code for '%s'", sym)
+
+    if not sym_to_scrip:
         return {}
+
+    result: Dict[str, Dict] = {}
+    scrip_list = list(sym_to_scrip.values())
+    for i in range(0, len(scrip_list), 50):
+        batch_scrips = scrip_list[i: i + 50]
+        batch_syms = [s for s, sc in sym_to_scrip.items() if sc in batch_scrips]
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/market/quotes/full",
+                params={"scrip-codes": ",".join(batch_scrips)},
+                headers=_headers(),
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = (resp.json().get("data") or {})
+            for sym_upper in batch_syms:
+                scrip = sym_to_scrip[sym_upper]
+                q = data.get(scrip) or {}
+                ltp = float(q.get("live_price") or 0)
+                prev_close = float(q.get("prev_close") or q.get("close") or 0)
+                result[f"NSE:{sym_upper}"] = {
+                    "last_price": ltp,
+                    "ohlc": {"close": prev_close, "open": float(q.get("open") or 0)},
+                    "volume": int(q.get("volume") or 0),
+                    "average_price": ltp,
+                }
+        except Exception as exc:
+            logger.warning("INDstocks full quote batch failed: %s", exc)
+            # fallback to LTP-only
+            from app.core.broker.indstocks.market_data import fetch_ltp_by_symbol
+            ltps = fetch_ltp_by_symbol(batch_syms)
+            for sym_upper, price in ltps.items():
+                result[f"NSE:{sym_upper}"] = {
+                    "last_price": price,
+                    "ohlc": {"close": 0},
+                    "volume": 0,
+                    "average_price": price,
+                }
+    return result
 
 
 # ── Spot price ─────────────────────────────────────────────────────────────

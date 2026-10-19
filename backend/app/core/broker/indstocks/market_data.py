@@ -134,6 +134,20 @@ _INDEX_ALIASES: Dict[str, str] = {
     "NIFTYVIX":  "INDIA VIX",
 }
 
+# Hardcoded fallback scrip-codes for major indices.
+# Used when the index instruments endpoint returns 403 or fails.
+# Security IDs sourced from INDstocks instrument list.
+_INDEX_FALLBACK_SCRIP: Dict[str, str] = {
+    "NIFTY 50":          "NSE_26000",
+    "NIFTY":             "NSE_26000",
+    "NIFTY BANK":        "NSE_26009",
+    "BANKNIFTY":         "NSE_26009",
+    "NIFTY FIN SERVICE": "NSE_26037",
+    "FINNIFTY":          "NSE_26037",
+    "INDIA VIX":         "NSE_26017",
+    "NIFTYVIX":          "NSE_26017",
+}
+
 
 def get_scrip_code(symbol: str) -> str:
     """
@@ -142,6 +156,7 @@ def get_scrip_code(symbol: str) -> str:
     Tries:
       1. Direct lookup in instruments cache
       2. Index alias lookup (NIFTY -> NIFTY 50, etc.)
+      3. Hardcoded fallback for major indices (when instruments endpoint is 403)
     """
     sym = symbol.upper().strip()
     cache = _instruments_cache()
@@ -156,6 +171,11 @@ def get_scrip_code(symbol: str) -> str:
         scrip = cache.get(alias.upper())
         if scrip:
             return scrip
+
+    # Hardcoded fallback for indices (handles 403 on index instruments endpoint)
+    scrip = _INDEX_FALLBACK_SCRIP.get(sym)
+    if scrip:
+        return scrip
 
     raise KeyError(
         f"INDstocks scrip-code not found for '{symbol}'. "

@@ -18,9 +18,11 @@ import {
   Bell,
   List,
   SlidersHorizontal,
+  MessageSquare,
 } from 'lucide-react';
 import CandleChart from '../components/CandleChart';
 import NewsFeed from '../components/NewsFeed';
+import AIChatPanel from '../components/AIChatPanel';
 import ErrorBoundary from '../components/ErrorBoundary';
 import StockDetailModal from '../components/StockDetailModal';
 import AlertManager from '../components/AlertManager';
@@ -68,6 +70,7 @@ const Terminal: React.FC = () => {
   const [showAlertManager, setShowAlertManager] = useState(false);
   const [showAlertList, setShowAlertList] = useState(false);
   const [alertRefreshTrigger, setAlertRefreshTrigger] = useState(0);
+  const [showChat, setShowChat] = useState(false);
   
   // ML Predictions
   const [mlPredictions, setMlPredictions] = useState<Record<string, {
@@ -402,6 +405,18 @@ const Terminal: React.FC = () => {
               <SlidersHorizontal size={14} />
               {showAdvancedPanels ? 'Advanced ON' : 'Advanced OFF'}
             </button>
+
+            <button
+              onClick={() => setShowChat((v) => !v)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-full border text-xs transition ${
+                showChat
+                  ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-200'
+                  : 'bg-slate-900/70 border-slate-700/50 text-slate-300 hover:border-slate-500/70'
+              }`}
+            >
+              <MessageSquare size={14} />
+              AI Chat
+            </button>
           </div>
         </div>
 
@@ -490,7 +505,7 @@ const Terminal: React.FC = () => {
         {/* Left Column - Chart and Swing Opportunities */}
         <div className="flex flex-col gap-4">
           {/* Technical Chart Panel with Indicators */}
-          <div className="h-[650px]">
+          <div>
             {/* ML Signal Badge for selected symbol */}
             {mlModelStatus === 'ready' && mlPredictions[selectedSymbol] && mlPredictions[selectedSymbol].signal !== 'NO_TRADE' && (
               <div className="mb-2 flex items-center gap-2">
@@ -505,7 +520,7 @@ const Terminal: React.FC = () => {
               </div>
             )}
             <ErrorBoundary>
-              <CandleChart symbol={selectedSymbol} defaultTimeframe={candleTimeframe} height={630} showTimeframeSelector={true} />
+              <CandleChart symbol={selectedSymbol} defaultTimeframe={candleTimeframe} height={560} showTimeframeSelector={true} />
             </ErrorBoundary>
           </div>
 
@@ -1166,6 +1181,15 @@ const Terminal: React.FC = () => {
                 )}
               </div>
             </div>
+          )}
+
+          {/* AI Chat Panel */}
+          {showChat && (
+            <AIChatPanel
+              symbol={selectedSymbol}
+              onClose={() => setShowChat(false)}
+              className="h-[480px]"
+            />
           )}
 
           {/* News Feed with Sentiment */}

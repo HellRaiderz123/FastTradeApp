@@ -1,90 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import {
-  TrendingUp, BarChart3, Briefcase, BookOpen, Settings, Zap, LineChart,
-  Command, Search, Target, Grid, Calendar, Brain, Bot, Wallet, Clock,
-  GitCompare, DollarSign, Star, Filter, RefreshCw, PieChart, ShoppingBag, Database,
-  ChevronDown, Activity, Package, Gauge,
-} from 'lucide-react';
+import { TrendingUp, ChevronRight } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { NAV_SECTIONS, isActiveRoute } from '@/config/navigation';
 import { settingsAPI } from '../lib/api';
 
 interface SidebarProps {
   open: boolean;
 }
-
-interface MenuItem {
-  path: string;
-  icon: React.ElementType;
-  label: string;
-}
-
-interface Section {
-  id: string;
-  label: string;
-  items: MenuItem[];
-}
-
-const SECTIONS: Section[] = [
-  {
-    id: 'market',
-    label: 'Market',
-    items: [
-      { path: '/', icon: Command, label: 'Terminal' },
-      { path: '/dashboard', icon: TrendingUp, label: 'Dashboard' },
-      { path: '/screener', icon: Search, label: 'Screener' },
-      { path: '/heatmap', icon: Grid, label: 'Heatmap' },
-      { path: '/watchlists', icon: Star, label: 'Watchlists' },
-      { path: '/multi-timeframe', icon: Clock, label: 'Multi-Timeframe' },
-      { path: '/options', icon: Target, label: 'Options Chain' },
-      { path: '/calendar', icon: Calendar, label: 'Calendar' },
-    ],
-  },
-  {
-    id: 'trading',
-    label: 'Trading',
-    items: [
-      { path: '/strategies', icon: Zap, label: 'Strategies' },
-      { path: '/marketplace', icon: ShoppingBag, label: 'Marketplace' },
-      { path: '/create-scanner', icon: Filter, label: 'Create Scanner' },
-      { path: '/backfill-candles', icon: Database, label: 'Backfill Candles' },
-      { path: '/auto-trader', icon: Bot, label: 'Auto Trader' },
-      { path: '/scalp-trading', icon: Gauge, label: 'Scalp Trading' },
-      { path: '/positions', icon: Briefcase, label: 'Positions' },
-      { path: '/positions?tab=holdings', icon: Package, label: 'Stock Holdings' },
-      { path: '/reconciliation', icon: RefreshCw, label: 'Reconciliation' },
-    ],
-  },
-  {
-    id: 'analytics',
-    label: 'Analytics',
-    items: [
-      { path: '/strategy-pnl', icon: PieChart, label: 'Strategy P&L' },
-      { path: '/journal', icon: BookOpen, label: 'Journal' },
-      { path: '/backtest', icon: LineChart, label: 'Backtest' },
-      { path: '/backtest-comparison', icon: GitCompare, label: 'Compare Backtests' },
-      { path: '/trade-costs', icon: DollarSign, label: 'Trade Costs' },
-    ],
-  },
-  {
-    id: 'intelligence',
-    label: 'Intelligence',
-    items: [
-      { path: '/ml', icon: Brain, label: 'ML Center' },
-      { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
-      { path: '/ai-analysis', icon: BarChart3, label: 'AI Analysis' },
-      { path: '/signal-reconciliation', icon: RefreshCw, label: 'Signal Reconciliation' },
-    ],
-  },
-  {
-    id: 'system',
-    label: 'System',
-    items: [
-      { path: '/finance', icon: Wallet, label: 'Finance' },
-      { path: '/scheduled-jobs', icon: Activity, label: 'Scheduled Jobs' },
-      { path: '/settings', icon: Settings, label: 'Settings' },
-    ],
-  },
-];
 
 const COLLAPSED_KEY = 'sidebar_collapsed_sections';
 
@@ -94,6 +18,12 @@ function loadCollapsed(): Record<string, boolean> {
   } catch {
     return {};
   }
+}
+
+function getModeInfo(mode: string) {
+  if (mode === 'ZERODHA_LIVE') return { label: 'Live', color: 'bg-red-500', text: 'text-red-400' };
+  if (mode === 'ZERODHA_DRY_RUN') return { label: 'Dry Run', color: 'bg-amber-500', text: 'text-amber-400' };
+  return { label: 'Paper', color: 'bg-emerald-500', text: 'text-emerald-400' };
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ open }) => {
@@ -112,8 +42,8 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
       const response = await settingsAPI.getZerodhaSettings();
       const data = response.data || response;
       setExecutionMode(data.execution_mode || 'PAPER_TRADING');
-    } catch (error) {
-      console.error('Error loading execution mode:', error);
+    } catch {
+      // silent
     }
   };
 
@@ -125,105 +55,132 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     });
   };
 
-  const getModeDisplay = () => {
-    if (executionMode === 'ZERODHA_LIVE') return { text: 'Live Trading', color: 'text-red-400', bg: 'bg-red-500' };
-    if (executionMode === 'ZERODHA_DRY_RUN') return { text: 'Dry Run', color: 'text-yellow-400', bg: 'bg-yellow-500' };
-    return { text: 'Paper Trading', color: 'text-green-400', bg: 'bg-green-500' };
-  };
-
-  const modeDisplay = getModeDisplay();
+  const mode = getModeInfo(executionMode);
 
   return (
-    <aside
-      className={`${
-        open ? 'w-64' : 'w-20'
-      } bg-slate-950 border-r border-slate-800 transition-all duration-300 flex flex-col`}
-    >
-      {/* Logo */}
-      <div className="p-6 border-b border-slate-800">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-green-400 to-blue-500 rounded-lg flex items-center justify-center">
-            <TrendingUp className="w-6 h-6 text-white" />
-          </div>
-          {open && (
-            <div>
-              <h1 className="font-bold text-lg gradient-text">FastTrade</h1>
-              <p className="text-xs text-slate-400">Algo Trading</p>
+    <TooltipProvider delayDuration={0}>
+      <aside
+        className={cn(
+          'sidebar-root flex flex-col border-r border-border transition-all duration-300 ease-in-out',
+          open ? 'w-56' : 'w-[52px]'
+        )}
+      >
+        {/* Logo */}
+        <div className={cn('flex h-14 shrink-0 items-center border-b border-border', open ? 'px-4 gap-3' : 'justify-center')}>
+          <Link to="/" className="flex items-center gap-3 min-w-0">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-blue-500 shadow-sm">
+              <TrendingUp className="h-3.5 w-3.5 text-white" />
             </div>
-          )}
+            {open && (
+              <div className="min-w-0 leading-none">
+                <p className="font-bold text-sm tracking-tight text-foreground">FastTrade</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Pro Platform</p>
+              </div>
+            )}
+          </Link>
         </div>
-      </div>
 
-      {/* Sections */}
-      <nav className="flex-1 py-3 overflow-y-auto custom-scrollbar">
-        {SECTIONS.map((section) => {
-          const isCollapsed = !!collapsed[section.id];
-          const hasActive = section.items.some((i) => i.path === location.pathname);
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto py-3 no-scrollbar">
+          {NAV_SECTIONS.map((section, sectionIdx) => {
+            const isCollapsed = !!collapsed[section.id];
 
-          return (
-            <div key={section.id} className="mb-1">
-              {/* Section header — only shown when sidebar is open */}
-              {open && (
-                <button
-                  onClick={() => toggleSection(section.id)}
-                  className={`w-full flex items-center justify-between px-4 py-2 text-xs font-semibold uppercase tracking-wider transition ${
-                    hasActive ? 'text-blue-400' : 'text-slate-500 hover:text-slate-300'
-                  }`}
-                >
-                  <span>{section.label}</span>
-                  <ChevronDown
-                    size={14}
-                    className={`transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
-                  />
-                </button>
-              )}
+            return (
+              <div key={section.id} className={sectionIdx > 0 ? 'mt-1' : ''}>
+                {/* Section label + toggle */}
+                {open && (
+                  <button
+                    onClick={() => toggleSection(section.id)}
+                    className="flex w-full items-center justify-between px-3 py-1.5 group"
+                  >
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 group-hover:text-muted-foreground transition-colors">
+                      {section.label}
+                    </span>
+                    <ChevronRight
+                      className={cn(
+                        'h-3 w-3 text-muted-foreground/40 transition-transform duration-200',
+                        !isCollapsed && 'rotate-90'
+                      )}
+                    />
+                  </button>
+                )}
 
-              {/* Items */}
-              {(!isCollapsed || !open) && (
-                <div className={open ? 'px-2' : 'px-2'}>
-                  {section.items.map((item) => {
-                    const Icon = item.icon;
-                    const isActive = location.pathname === item.path;
-                    return (
-                      <Link
-                        key={item.path}
-                        to={item.path}
-                        title={!open ? item.label : undefined}
-                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition mb-0.5 ${
-                          isActive
-                            ? 'bg-gradient-to-r from-green-500 to-blue-500 text-white'
-                            : 'text-slate-400 hover:text-white hover:bg-slate-900'
-                        }`}
-                      >
-                        <Icon className="w-5 h-5 flex-shrink-0" />
-                        {open && <span className="font-medium text-sm">{item.label}</span>}
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
+                {/* Divider in collapsed mode */}
+                {!open && sectionIdx > 0 && (
+                  <div className="mx-3 my-2 h-px bg-border/60" />
+                )}
 
-              {/* Divider between sections */}
-              {open && <div className="mx-4 mt-1 border-t border-slate-800/60" />}
-            </div>
-          );
-        })}
-      </nav>
+                {/* Items */}
+                {(!isCollapsed || !open) && (
+                  <div className="px-2 space-y-0.5">
+                    {section.items.map((item) => {
+                      const Icon = item.icon;
+                      const active = isActiveRoute(location.pathname, item.path);
 
-      {/* Footer */}
-      <div className="p-4 border-t border-slate-800">
-        <div className="card-glass p-4 text-center">
+                      const linkEl = (
+                        <Link
+                          key={item.path}
+                          to={item.path}
+                          className={cn(
+                            'sidebar-item group relative flex items-center rounded-md transition-all duration-150',
+                            open ? 'gap-2.5 px-2.5 py-1.5' : 'justify-center px-0 py-2',
+                            active
+                              ? 'sidebar-item-active bg-primary/10 text-primary'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                          )}
+                        >
+                          {/* Active indicator bar */}
+                          {active && (
+                            <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-full bg-primary" />
+                          )}
+                          <Icon className={cn('shrink-0 transition-colors', open ? 'h-4 w-4' : 'h-4 w-4', active ? 'text-primary' : '')} />
+                          {open && (
+                            <span className="truncate text-sm font-medium">{item.label}</span>
+                          )}
+                        </Link>
+                      );
+
+                      if (!open) {
+                        return (
+                          <Tooltip key={item.path}>
+                            <TooltipTrigger asChild>{linkEl}</TooltipTrigger>
+                            <TooltipContent side="right" className="text-xs">{item.label}</TooltipContent>
+                          </Tooltip>
+                        );
+                      }
+
+                      return linkEl;
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </nav>
+
+        {/* Footer — trading mode */}
+        <div className="shrink-0 border-t border-border p-2">
           {open ? (
-            <div>
-              <p className="text-xs text-slate-400 mb-2">{modeDisplay.text}</p>
-              <p className={`text-sm font-bold ${modeDisplay.color}`}>Live & Ready</p>
+            <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2 bg-muted/40">
+              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0 animate-pulse', mode.color)} />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-foreground truncate">{mode.label} Mode</p>
+                <p className="text-[10px] text-muted-foreground">System active</p>
+              </div>
             </div>
           ) : (
-            <div className={`w-8 h-8 ${modeDisplay.bg} rounded-full mx-auto`} title={modeDisplay.text} />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex justify-center py-1">
+                  <span className={cn('h-2 w-2 rounded-full animate-pulse', mode.color)} />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="right" className="text-xs">{mode.label} Mode</TooltipContent>
+            </Tooltip>
           )}
         </div>
-      </div>
-    </aside>
+      </aside>
+    </TooltipProvider>
   );
 };
 

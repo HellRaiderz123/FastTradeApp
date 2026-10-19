@@ -56,10 +56,10 @@ async def get_top_movers(
         
         # If no quotes received, raise error
         if not quotes_data:
-            logger.error("Failed to fetch quotes from Zerodha. Please ensure Zerodha is connected.")
+            logger.error("Failed to fetch quotes from broker.")
             raise HTTPException(
                 status_code=503,
-                detail="Unable to fetch market data. Please ensure your Zerodha account is connected and has valid API credentials."
+                detail="Unable to fetch market data. Please ensure your broker is connected and has valid API credentials."
             )
         
         # Process quotes
@@ -195,7 +195,7 @@ async def get_market_breadth(
             logger.error("No market breadth data available")
             raise HTTPException(
                 status_code=503,
-                detail="Unable to calculate market breadth. Please ensure Zerodha is connected and try again."
+                detail="Unable to calculate market breadth. Please ensure your broker is connected and try again."
             )
         
         return {
@@ -291,7 +291,7 @@ async def get_heatmap_data(
             logger.error("No heatmap data available")
             raise HTTPException(
                 status_code=503,
-                detail="Unable to fetch heatmap data. Please ensure Zerodha is connected and try again."
+                detail="Unable to fetch heatmap data. Please ensure your broker is connected and try again."
             )
         
         return {
