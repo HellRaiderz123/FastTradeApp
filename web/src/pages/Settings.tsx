@@ -78,6 +78,17 @@ const Settings: React.FC = () => {
     source: string;
   } | null>(null);
 
+  // INDMoney login state
+  const [indmoneySession, setIndmoneySession] = useState<{
+    active: boolean;
+    client_id?: string;
+    mobile?: string;
+    expires_at?: string;
+  } | null>(null);
+  const [indmoneyLoginForm, setIndmoneyLoginForm] = useState({ client_id: '', mpin: '', totp: '' });
+  const [indmoneyLoginLoading, setIndmoneyLoginLoading] = useState(false);
+  const [showIndmoneyPin, setShowIndmoneyPin] = useState(false);
+
   // Gmail notification settings
   const [notificationStatus, setNotificationStatus] = useState({
     gmail_configured: false,
@@ -114,6 +125,7 @@ const Settings: React.FC = () => {
     loadBrokerSettings();
     loadZerodhaSettings();
     loadINDMoneySettings();
+    loadINDMoneySession();
     loadNotificationSettings();
     loadTelegramSettings();
     loadTradingSettings();
@@ -198,6 +210,40 @@ const Settings: React.FC = () => {
       });
     } catch (error) {
       console.error('Error loading INDMoney settings:', error);
+    }
+  };
+
+  const loadINDMoneySession = async () => {
+    try {
+      const response = await settingsAPI.getINDMoneySessionStatus();
+      const data = response.data || response;
+      setIndmoneySession(data);
+    } catch {
+      setIndmoneySession({ active: false });
+    }
+  };
+
+  const handleINDMoneyLogin = async () => {
+    if (!indmoneyLoginForm.client_id.trim() || !indmoneyLoginForm.mpin.trim() || !indmoneyLoginForm.totp.trim()) {
+      setIndmoneyMessage('All 3 fields are required');
+      return;
+    }
+    try {
+      setIndmoneyLoginLoading(true);
+      await settingsAPI.indmoneyLogin(
+        indmoneyLoginForm.client_id,
+        indmoneyLoginForm.mpin,
+        indmoneyLoginForm.totp,
+      );
+      setIndmoneyMessage('✓ INDMoney login successful');
+      setIndmoneyLoginForm({ client_id: '', mpin: '', totp: '' });
+      await loadINDMoneySession();
+      await loadINDMoneySettings();
+      setTimeout(() => setIndmoneyMessage(''), 3000);
+    } catch (error: any) {
+      setIndmoneyMessage(error.response?.data?.detail || 'Login failed — check credentials');
+    } finally {
+      setIndmoneyLoginLoading(false);
     }
   };
 
@@ -896,30 +942,6 @@ const Settings: React.FC = () => {
       </SettingsCard>
 
       {/* Appearance */}
-      <SettingsCard title="Appearance">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-slate-300 font-medium">Theme</p>
-            <p className="text-xs text-slate-500 mt-0.5">{darkMode ? 'Dark mode active' : 'Light mode active'}</p>
-          </div>
-          <button
-            onClick={toggleDarkMode}
-            className={`relative inline-flex h-7 w-14 items-center rounded-full transition ${
-              darkMode ? 'bg-slate-700' : 'bg-blue-500'
-            }`}
-          >
-            <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
-              darkMode ? 'translate-x-1' : 'translate-x-8'
-            }`} />
-            <span className={`absolute text-[9px] font-bold ${
-              darkMode ? 'right-1.5 text-slate-400' : 'left-1.5 text-white'
-            }`}>
-              {darkMode ? '🌙' : '☀️'}
-            </span>
-          </button>
-        </div>
-      </SettingsCard>
-
       {/* API Keys */}
       <SettingsCard title="Zerodha Configuration">
         {/* Status */}
@@ -1186,148 +1208,158 @@ const Settings: React.FC = () => {
 
       {/* INDMoney Configuration */}
       <SettingsCard title="INDMoney Configuration">
-        {/* Status */}
-        <div className="mb-6 p-4 bg-slate-800 rounded-lg border border-slate-700">
-          <div className="flex justify-between items-start mb-4">
-            <div className="flex-1">
-              <div className="grid grid-cols-1 gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-400">Access Token Status:</span>
-                  <div className="flex items-center gap-1">
-                    {indmoneyStatus?.access_token_set ? (
-                      <>
-                        <CheckCircle className="w-4 h-4 text-green-400" />
-                        <span className="text-green-400">Configured</span>
-                      </>
-                    ) : (
-                      <>
-                        <XCircle className="w-4 h-4 text-red-400" />
-                        <span className="text-red-400">Not Set</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
+        {/* Session Status */}
+        <div className="mb-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-slate-400">Session:</span>
+              {indmoneySession?.active ? (
+                <span className="flex items-center gap-1 text-green-400"><CheckCircle className="w-4 h-4" /> Active</span>
+              ) : (
+                <span className="flex items-center gap-1 text-red-400"><XCircle className="w-4 h-4" /> Not logged in</span>
+              )}
             </div>
-            <button
-              onClick={() => {
-                console.log('Refreshing INDMoney settings...');
-                loadINDMoneySettings();
-              }}
-              className="ml-4 px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded transition"
-            >
+            <button onClick={() => { loadINDMoneySession(); loadINDMoneySettings(); }}
+              className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded transition">
               🔄 Refresh
             </button>
           </div>
+          {indmoneySession?.client_id && (
+            <p className="text-xs text-slate-400 mt-2">Client ID: <span className="text-slate-200">{indmoneySession.client_id}</span></p>
+          )}
+          {indmoneySession?.mobile && (
+            <p className="text-xs text-slate-400 mt-1">Mobile: <span className="text-slate-200">{indmoneySession.mobile}</span></p>
+          )}
+          {indmoneySession?.expires_at && (
+            <p className="text-xs text-slate-400 mt-1">Expires: {new Date(indmoneySession.expires_at).toLocaleString()}</p>
+          )}
         </div>
 
-        {/* Info Box */}
-        <div className="mb-6 p-4 bg-purple-900/20 rounded-lg border border-purple-700/50">
-          <div className="flex items-center gap-2 mb-2">
-            <Lock className="w-5 h-5 text-purple-400" />
-            <p className="text-sm font-semibold text-purple-300">Where to get your INDMoney Access Token</p>
-          </div>
-          <ol className="text-xs text-purple-200 space-y-1 ml-1">
-            <li>1. Visit <a href="https://indstocks.com/app/api-trading" target="_blank" rel="noopener noreferrer" className="text-purple-400 underline">indstocks.com/app/api-trading</a></li>
-            <li>2. Login with your INDMoney credentials</li>
-            <li>3. Enable API Trading and copy your Access Token</li>
-            <li>4. Paste it in the field below and click Save</li>
-          </ol>
-        </div>
-
-        {/* Access Token Input */}
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              INDMoney Access Token
-              <span className="text-purple-400 ml-2 text-xs">← Paste your token here</span>
-            </label>
-            <div className="relative">
-              <input
-                type={showIndmoneyToken ? 'text' : 'password'}
-                placeholder="Paste your INDstocks access token here"
-                value={indmoneyForm.accessToken}
-                onChange={(e) => setIndmoneyForm(prev => ({ ...prev, accessToken: e.target.value }))}
-                disabled={indmoneyLoading}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50 pr-10"
-              />
-              <button
-                onClick={() => setShowIndmoneyToken(!showIndmoneyToken)}
-                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
-              >
-                {showIndmoneyToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+        {/* Login with MPIN + TOTP */}
+        {indmoneySession?.active ? (
+          <div className="p-4 bg-green-900/20 rounded-lg border border-green-700/50 space-y-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-green-400" />
+              <p className="text-sm font-semibold text-green-300">INDMoney Session Active</p>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              This token is saved to your .env file (INDMONEY_ACCESS_TOKEN)
-            </p>
+            <p className="text-xs text-green-200">Token is stored in DB and will be used automatically for trading and data.</p>
           </div>
+        ) : (
+          <div className="p-4 bg-purple-900/20 rounded-lg border border-purple-700/50 space-y-4">
+            <div className="flex items-center gap-2">
+              <Lock className="w-5 h-5 text-purple-400" />
+              <p className="text-sm font-semibold text-purple-300">Login with INDMoney</p>
+            </div>
+            <p className="text-xs text-purple-200">Enter your INDMoney credentials. Nothing is stored in .env.</p>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Client ID</label>
+              <input
+                type="text"
+                placeholder="Your INDstocks Client ID"
+                value={indmoneyLoginForm.client_id}
+                onChange={(e) => setIndmoneyLoginForm(f => ({ ...f, client_id: e.target.value }))}
+                disabled={indmoneyLoginLoading}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">MPIN</label>
+              <div className="relative">
+                <input
+                  type={showIndmoneyPin ? 'text' : 'password'}
+                  placeholder="4-6 digit MPIN"
+                  value={indmoneyLoginForm.mpin}
+                  onChange={(e) => setIndmoneyLoginForm(f => ({ ...f, mpin: e.target.value }))}
+                  disabled={indmoneyLoginLoading}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50 pr-10"
+                />
+                <button onClick={() => setShowIndmoneyPin(!showIndmoneyPin)}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300">
+                  {showIndmoneyPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1">TOTP (6-digit authenticator code)</label>
+              <input
+                type="text"
+                placeholder="123456"
+                maxLength={6}
+                value={indmoneyLoginForm.totp}
+                onChange={(e) => setIndmoneyLoginForm(f => ({ ...f, totp: e.target.value }))}
+                disabled={indmoneyLoginLoading}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+              />
+            </div>
+            <button
+              onClick={handleINDMoneyLogin}
+              disabled={indmoneyLoginLoading}
+              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            >
+              <Lock className="w-4 h-4" />
+              {indmoneyLoginLoading ? 'Logging in...' : '🔐 Login to INDMoney'}
+            </button>
+          </div>
+        )}
 
-          <button
-            onClick={handleSaveINDMoneyToken}
-            disabled={indmoneyLoading}
-            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
-          >
+        {/* Manual token fallback */}
+        <div className="space-y-3 mt-4 pt-4 border-t border-slate-700">
+          <h3 className="text-sm font-semibold text-slate-300">Or paste token manually</h3>
+          <div className="relative">
+            <input
+              type={showIndmoneyToken ? 'text' : 'password'}
+              placeholder="Paste INDstocks access token"
+              value={indmoneyForm.accessToken}
+              onChange={(e) => setIndmoneyForm(prev => ({ ...prev, accessToken: e.target.value }))}
+              disabled={indmoneyLoading}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50 pr-10"
+            />
+            <button onClick={() => setShowIndmoneyToken(!showIndmoneyToken)}
+              className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300">
+              {showIndmoneyToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+          <button onClick={handleSaveINDMoneyToken} disabled={indmoneyLoading}
+            className="w-full bg-slate-700 hover:bg-slate-600 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2">
             <Save className="w-4 h-4" />
-            {indmoneyLoading ? 'Saving...' : 'Save Access Token'}
+            {indmoneyLoading ? 'Saving...' : 'Save Token Manually'}
           </button>
         </div>
 
-        {/* Additional Configuration Note */}
-        <div className="mt-4 p-3 bg-blue-900/20 border border-blue-700/50 rounded text-sm text-blue-200">
-          <strong>💡 Note:</strong> INDMoney is used for order execution only. Market data (charts, options chain, etc.) continues to use Zerodha API.
-        </div>
-
-        {/* Symbol to security_id Lookup */}
-        <div className="space-y-4 mt-6 pt-6 border-t border-slate-700">
+        {/* Symbol lookup */}
+        <div className="space-y-3 mt-4 pt-4 border-t border-slate-700">
           <h3 className="text-sm font-semibold text-slate-300">Test Symbol Mapping</h3>
-          <p className="text-xs text-slate-400">
-            Validate whether a symbol can be auto-resolved to INDMoney security_id.
-          </p>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Trading Symbol</label>
+          <div className="flex gap-2">
             <input
               type="text"
-              placeholder="Example: NIFTY27MAR2422000CE"
+              placeholder="e.g. NIFTY27MAR2422000CE"
               value={indmoneyForm.lookupSymbol}
               onChange={(e) => setIndmoneyForm({ ...indmoneyForm, lookupSymbol: e.target.value })}
               disabled={indmoneyLoading}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+              className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
             />
+            <button onClick={handleResolveINDMoneySecurity} disabled={indmoneyLoading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-600 text-white font-semibold rounded-lg transition text-sm">
+              Resolve
+            </button>
           </div>
-
-          <button
-            onClick={handleResolveINDMoneySecurity}
-            disabled={indmoneyLoading || !indmoneyStatus.access_token_set}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition"
-          >
-            {indmoneyLoading ? 'Resolving...' : 'Resolve security_id'}
-          </button>
-
-          {!indmoneyStatus.access_token_set && (
-            <p className="text-xs text-yellow-400">Save INDMoney access token first to use lookup.</p>
-          )}
-
           {indmoneyLookup && (
             <div className="p-3 bg-slate-800 border border-slate-700 rounded text-sm text-slate-200 space-y-1">
               <p><strong>Symbol:</strong> {indmoneyLookup.symbol}</p>
-              <p><strong>Normalized:</strong> {indmoneyLookup.normalized_symbol}</p>
               <p><strong>security_id:</strong> {indmoneyLookup.security_id}</p>
               <p><strong>Source:</strong> {indmoneyLookup.source}</p>
             </div>
           )}
         </div>
 
-        {/* Message */}
+        <div className="mt-3 p-3 bg-blue-900/20 border border-blue-700/50 rounded text-xs text-blue-200">
+          💡 INDMoney is used for order execution. Market data (charts, options chain) uses Zerodha.
+        </div>
+
         {indmoneyMessage && (
-          <div className={`mt-4 p-3 rounded-lg text-sm font-semibold ${
-            indmoneyMessage.includes('✓') 
-              ? 'bg-green-900 text-green-200' 
-              : 'bg-red-900 text-red-200'
-          }`}>
-            {indmoneyMessage}
-          </div>
+          <div className={`mt-3 p-3 rounded-lg text-sm font-semibold ${
+            indmoneyMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+          }`}>{indmoneyMessage}</div>
         )}
       </SettingsCard>
 

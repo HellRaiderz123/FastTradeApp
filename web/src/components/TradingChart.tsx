@@ -26,8 +26,9 @@ import {
   type MouseEventParams,
   ColorType,
 } from 'lightweight-charts';
-import { TrendingUp, TrendingDown, Activity } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, RefreshCw, AlertTriangle } from 'lucide-react';
 import { marketAPI } from '../lib/api';
+import api from '../lib/api';
 import { cn } from '@/lib/utils';
 
 export type Timeframe = '1m' | '5m' | '15m' | '1h' | 'daily';
@@ -112,6 +113,8 @@ const TradingChart: React.FC<TradingChartProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [legend, setLegend] = useState<OhlcvLegend | null>(null);
   const [lastBar, setLastBar] = useState<{ price: number; change: number } | null>(null);
+  const [staleDate, setStaleDate] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Build / rebuild chart when container mounts
   useEffect(() => {
@@ -246,40 +249,49 @@ const TradingChart: React.FC<TradingChartProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  // Load data when symbol or timeframe changes
+  // TF → scanner backfill label
+  const TF_TO_BACKFILL: Record<Timeframe, string> = {
+    '1m': '1 Min', '5m': '5 Min', '15m': '15 Min', '1h': '1 Hour', 'daily': 'Day',
+  };
+
+  // Load candles from DB
   const loadData = useCallback(async () => {
     if (!candleRef.current || !volRef.current) return;
     setLoading(true);
     setError(null);
     setLegend(null);
+    setStaleDate(null);
 
     try {
-      const candidates: Timeframe[] = [timeframe, '15m', 'daily'];
-      const unique = [...new Set(candidates)];
       let raw: RawCandle[] = [];
-
-      for (const tf of unique) {
-        const res = await marketAPI.getCandlesDB(symbol, tf, 200);
+      const candidates: Timeframe[] = [timeframe, '15m', 'daily'];
+      for (const tf of [...new Set(candidates)]) {
+        const res = await marketAPI.getCandlesDB(symbol, tf, 300);
         const data = Array.isArray(res.data) ? res.data : [];
         if (data.length > 0) { raw = data; break; }
       }
 
       if (raw.length === 0) {
-        setError('No candle data available');
+        setError('No candle data — click Refresh to load from Zerodha');
         setLoading(false);
         return;
       }
 
-      // Sort oldest → newest
-      const sorted = [...raw].sort((a, b) => {
-        const ta = new Date(a.timestamp || a.date || 0).getTime();
-        const tb = new Date(b.timestamp || b.date || 0).getTime();
-        return ta - tb;
-      });
+      const sorted = [...raw].sort((a, b) =>
+        new Date(a.timestamp || a.date || 0).getTime() -
+        new Date(b.timestamp || b.date || 0).getTime()
+      );
+
+      // Detect stale data: last candle older than 1 day
+      const last = sorted[sorted.length - 1];
+      const lastTs = new Date(last.timestamp || last.date || 0);
+      const daysSinceLastCandle = (Date.now() - lastTs.getTime()) / 86400000;
+      if (daysSinceLastCandle > 1) {
+        setStaleDate(lastTs.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }));
+      }
 
       const dark = isDarkMode();
       const c = buildChartColors(dark);
-
       const candles: CandlestickData[] = [];
       const vols: HistogramData[] = [];
 
@@ -294,8 +306,6 @@ const TradingChart: React.FC<TradingChartProps> = ({
       volRef.current.setData(vols);
       chartRef.current?.timeScale().fitContent();
 
-      // Last bar stats
-      const last = sorted[sorted.length - 1];
       const prev = sorted[sorted.length - 2];
       if (last && prev) {
         setLastBar({ price: last.close, change: ((last.close - prev.close) / prev.close) * 100 });
@@ -306,6 +316,18 @@ const TradingChart: React.FC<TradingChartProps> = ({
       setLoading(false);
     }
   }, [symbol, timeframe]);
+
+  // Trigger backfill for this symbol+timeframe then reload
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await api.post('/condition-scanner/backfill-candles', null, {
+        params: { timeframe: TF_TO_BACKFILL[timeframe], symbols: symbol, days: timeframe === 'daily' ? 365 : 60 },
+      });
+    } catch { /* ignore — loadData will show whatever is in DB */ }
+    await loadData();
+    setRefreshing(false);
+  }, [symbol, timeframe, loadData]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -332,26 +354,45 @@ const TradingChart: React.FC<TradingChartProps> = ({
                 </span>
               </>
             )}
+            {/* Stale data warning + refresh */}
+            {staleDate && (
+              <span className="flex items-center gap-1 text-[10px] text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5">
+                <AlertTriangle className="h-3 w-3" />
+                Data up to {staleDate}
+              </span>
+            )}
           </div>
 
-          {showTimeframeSelector && (
-            <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5">
-              {TF_LIST.map((tf) => (
-                <button
-                  key={tf}
-                  onClick={() => setTimeframe(tf)}
-                  className={cn(
-                    'px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors',
-                    timeframe === tf
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-                  )}
-                >
-                  {TF_LABELS[tf]}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="flex items-center gap-1">
+            {/* Refresh button */}
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing || loading}
+              title="Refresh candles from Zerodha"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition disabled:opacity-40"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', (refreshing || loading) && 'animate-spin')} />
+            </button>
+
+            {showTimeframeSelector && (
+              <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5">
+                {TF_LIST.map((tf) => (
+                  <button
+                    key={tf}
+                    onClick={() => setTimeframe(tf)}
+                    className={cn(
+                      'px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors',
+                      timeframe === tf
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                    )}
+                  >
+                    {TF_LABELS[tf]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -384,9 +425,17 @@ const TradingChart: React.FC<TradingChartProps> = ({
         {/* Error overlay */}
         {!loading && error && (
           <div className="absolute inset-0 flex items-center justify-center bg-card z-10">
-            <div className="flex flex-col items-center gap-2 text-center px-4">
+            <div className="flex flex-col items-center gap-3 text-center px-4">
               <Activity className="h-8 w-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">{error}</p>
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition disabled:opacity-50"
+              >
+                <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
+                {refreshing ? 'Loading from Zerodha…' : 'Load candles from Zerodha'}
+              </button>
             </div>
           </div>
         )}

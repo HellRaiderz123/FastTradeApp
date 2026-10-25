@@ -349,10 +349,10 @@ const DEFAULT_EXIT_CONFIG: ExitConfig = {
 };
 
 const TYPE_COLORS: Record<string, string> = {
-  'Equity Swing': 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-  'Equity Intraday': 'bg-purple-500/20 text-purple-300 border-purple-500/40',
-  'Options Buying': 'bg-green-500/20 text-green-300 border-green-500/40',
-  'Options Selling': 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+  'Equity Swing': 'bg-blue-500/20 text-blue-600 dark:text-blue-300 border-blue-500/40',
+  'Equity Intraday': 'bg-purple-500/20 text-purple-600 dark:text-purple-300 border-purple-500/40',
+  'Options Buying': 'bg-green-500/20 text-green-700 dark:text-green-300 border-green-500/40',
+  'Options Selling': 'bg-orange-500/20 text-orange-600 dark:text-orange-300 border-orange-500/40',
 };
 
 const LAST_SELECTED_SCANNER_STRATEGY_KEY = 'scanner:lastSelectedStrategyId';
@@ -449,7 +449,7 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
           value={value}
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder || 'Value'}
-          className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-blue-500 focus:outline-none"
+          className="scanner-input bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white w-24 focus:border-blue-500 focus:outline-none"
         />
       )}
 
@@ -458,7 +458,7 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
         <button
           type="button"
           onClick={() => setShowDropdown(v => !v)}
-          className="flex items-center gap-1.5 bg-indigo-600/20 border border-indigo-500/50 hover:border-indigo-400 rounded-lg px-3 py-2 text-sm text-indigo-200 font-medium transition min-w-[90px] max-w-[160px] truncate"
+          className="scanner-ind-pill flex items-center gap-1.5 bg-indigo-600/20 border border-indigo-500/50 hover:border-indigo-400 rounded-lg px-3 py-2 text-sm font-medium transition min-w-[90px] max-w-[160px] truncate"
           title={value}
         >
           <span className="text-indigo-400 text-xs">ƒ</span>
@@ -473,7 +473,7 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
         title="Compare against an indicator (e.g. Close(0), SMA(50), EMA(20)…)"
         className={`flex items-center gap-1 px-2 py-2 rounded-lg border text-xs font-semibold transition ${
           isInd
-            ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300'
+            ? 'scanner-ind-active bg-indigo-600/30 border-indigo-500/50'
             : 'bg-slate-800 border-slate-600 text-slate-400 hover:text-indigo-300 hover:border-indigo-500/50'
         }`}
       >
@@ -483,7 +483,7 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
 
       {/* Dropdown */}
       {showDropdown && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-48 max-h-72 overflow-y-auto custom-scrollbar">
+        <div className="scanner-dropdown absolute top-full left-0 mt-1 z-50 bg-slate-900 border border-slate-700 rounded-xl shadow-xl w-48 max-h-72 overflow-y-auto custom-scrollbar">
           <div className="p-1.5">
             <div className="px-2 py-1 text-[10px] text-slate-500 uppercase tracking-wider mb-1">Compare vs indicator</div>
             {/* Custom input */}
@@ -492,7 +492,7 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
               placeholder="Custom e.g. EMA(9)"
               value={isInd ? value : ''}
               onChange={e => { onChange(e.target.value); }}
-              className="w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded-lg text-xs text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none mb-1"
+              className="scanner-input w-full px-2 py-1.5 bg-slate-800 border border-slate-600 rounded-lg text-xs text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none mb-1"
               autoFocus
             />
             {/* Clear to number */}
@@ -500,7 +500,7 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
               <button
                 type="button"
                 onClick={() => { onChange('0'); setShowDropdown(false); }}
-                className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-800 hover:text-white mb-1"
+                className="scanner-dropdown-item w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-800 hover:text-white mb-1"
               >
                 ✕ Clear (use number)
               </button>
@@ -512,8 +512,8 @@ const ConditionValueInput: React.FC<ConditionValueInputProps> = ({ value, onChan
                 onClick={() => { onChange(opt.value); setShowDropdown(false); }}
                 className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition ${
                   value === opt.value
-                    ? 'bg-indigo-600/30 text-indigo-200'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    ? 'scanner-ind-selected bg-indigo-600/30'
+                    : 'scanner-dropdown-item text-slate-300 hover:bg-slate-800 hover:text-white'
                 }`}
               >
                 <span className="text-indigo-400 mr-1">ƒ</span>{opt.label}

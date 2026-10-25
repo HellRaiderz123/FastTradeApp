@@ -120,19 +120,22 @@ def get_env_value(key: str) -> str:
     return os.getenv(key, "")
 
 
-SUPPORTED_BROKERS = ["ZERODHA", "INDMONEY"]
+def _get_supported_brokers() -> list[str]:
+    from app.core.broker.registry import get_registry
+    return get_registry().list_supported("order_placement")
 
 
 def normalize_broker_name(broker: str | None) -> str:
+    from app.core.broker.registry import get_registry
     raw = (broker or "").strip().upper().replace(" ", "")
     aliases = {
         "IND_MONEY": "INDMONEY",
         "IND-MONEY": "INDMONEY",
+        "INDSTOCKS": "INDMONEY",
     }
     normalized = aliases.get(raw, raw)
-    if normalized in SUPPORTED_BROKERS:
-        return normalized
-    return "ZERODHA"
+    supported = get_registry().list_supported("order_placement")
+    return normalized if normalized in supported else "ZERODHA"
 
 
 @router.get("/zerodha", response_model=SettingsResponse)
@@ -158,7 +161,7 @@ def get_broker_settings():
     active = normalize_broker_name(get_env_value("ACTIVE_BROKER"))
     return BrokerSettingsResponse(
         active_broker=active,
-        supported_brokers=SUPPORTED_BROKERS,
+        supported_brokers=_get_supported_brokers(),
     )
 
 
@@ -172,10 +175,11 @@ def set_active_broker(payload: BrokerUpdateRequest):
     }
     broker = aliases.get(raw, raw)
 
-    if broker not in SUPPORTED_BROKERS:
+    supported = _get_supported_brokers()
+    if broker not in supported:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid broker. Valid brokers: {', '.join(SUPPORTED_BROKERS)}"
+            detail=f"Invalid broker. Valid brokers: {', '.join(supported)}"
         )
 
     set_key(str(ENV_FILE), "ACTIVE_BROKER", broker)
@@ -341,7 +345,7 @@ def set_execution_mode(mode: str):
     """
     try:
         normalized = normalize_execution_mode(mode)
-        valid_modes = ["ZERODHA_LIVE", "ZERODHA_DRY_RUN", "PAPER_TRADING", "BACKTEST"]
+        valid_modes = ["LIVE", "DRY_RUN", "PAPER_TRADING", "BACKTEST"]
 
         if normalized not in valid_modes:
             raise HTTPException(

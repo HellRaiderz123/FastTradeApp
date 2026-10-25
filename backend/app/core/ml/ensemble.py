@@ -141,72 +141,72 @@ def _per_symbol_split(
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
     """
     Find the best operating threshold on the val set.
-
-    Priority order:
-      1. precision >= 0.50 AND recall >= 0.10 AND pred_rate 10-50%  -> maximise F1
-      2. precision >= 0.45 AND recall >= 0.10 AND pred_rate 10-50%  -> maximise F1
-      3. Any threshold with pred_rate 10-50%                        -> maximise F1
-      4. Hard fallback: 0.50
-
-    Recall floor of 0.10 prevents the model from firing on <1% of bars.
+    Requires minimum 40% precision (to pass diagnostics) while maximizing F1.
     """
     from sklearn.metrics import precision_score as _p, recall_score as _r, f1_score as _f1
     n = len(y_true)
     if n < 50:
         return 0.50
 
-    candidates = []  # (threshold, precision, recall, f1)
-    for t in np.arange(0.25, 0.85, 0.01):
+    candidates = []
+    
+    for t in np.arange(0.30, 0.75, 0.01):
         preds = (y_proba >= t).astype(int)
         pred_rate = preds.sum() / n
-        if pred_rate < 0.10 or pred_rate > 0.55:
+        if pred_rate < 0.10 or pred_rate > 0.60:
             continue
         p = _p(y_true, preds, zero_division=0)
         r = _r(y_true, preds, zero_division=0)
         f = _f1(y_true, preds, zero_division=0)
-        candidates.append((round(t, 2), p, r, f))
+        candidates.append((round(t, 2), p, r, f, pred_rate))
 
     if not candidates:
-        logger.warning("Threshold search: no threshold found in pred_rate 10-55%. Using 0.50.")
+        logger.warning(f"Threshold search: no valid threshold. Using 0.50")
         return 0.50
 
-    # Priority 1: precision>=0.50, recall>=0.10, best F1
-    p1 = [(t, p, r, f) for t, p, r, f in candidates if p >= 0.50 and r >= 0.10]
-    if p1:
-        best = max(p1, key=lambda x: x[3])
-        logger.info(f"Threshold (P1): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
+    # Priority 1: precision >= 40% AND recall >= 15%, maximize F1
+    valid = [(t, p, r, f, pr) for t, p, r, f, pr in candidates if p >= 0.40 and r >= 0.15]
+    if valid:
+        best = max(valid, key=lambda x: x[3])  # Best F1
+        logger.info(f"Threshold: t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}, pred_rate={best[4]:.3f}")
         return best[0]
 
-    # Priority 2: precision>=0.45, recall>=0.10, best F1
-    p2 = [(t, p, r, f) for t, p, r, f in candidates if p >= 0.45 and r >= 0.10]
-    if p2:
-        best = max(p2, key=lambda x: x[3])
-        logger.warning(f"Threshold (P2 fallback): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
+    # Priority 2: precision >= 40%, any recall - maximize recall
+    valid_prec = [(t, p, r, f, pr) for t, p, r, f, pr in candidates if p >= 0.40]
+    if valid_prec:
+        best = max(valid_prec, key=lambda x: x[2])  # Best recall
+        logger.info(f"Threshold (prec-only): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
         return best[0]
 
-    # Priority 3: any valid pred_rate, best F1
-    best = max(candidates, key=lambda x: x[3])
-    logger.warning(f"Threshold (P3 fallback): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f} — model signal quality is weak")
+    # Priority 3: best precision available (model may be weak)
+    best = max(candidates, key=lambda x: x[1])
+    logger.warning(f"Threshold (best-prec): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
     return best[0]
 
 
-def _build_gbm_pipeline() -> Pipeline:
+def _build_gbm_pipeline(y_train: pd.Series) -> Pipeline:
+    n_pos = int(y_train.sum())
+    n_neg = len(y_train) - n_pos
+    # Balanced class weight with cap
+    pos_weight = min(n_neg / max(n_pos, 1), 2.5) if n_neg > n_pos else 1.0
+    
     return Pipeline([
         ("scaler", StandardScaler()),
         ("clf", GradientBoostingClassifier(
-            n_estimators=200, max_depth=4, learning_rate=0.05,
-            subsample=0.8, min_samples_split=40, min_samples_leaf=20,
+            n_estimators=150, max_depth=3, learning_rate=0.08,
+            subsample=0.8, min_samples_split=30, min_samples_leaf=15,
             max_features="sqrt", random_state=42,
         )),
-    ])
+    ]), pos_weight
 
 
-def _build_rf_pipeline() -> Pipeline:
+def _build_rf_pipeline(y_train: pd.Series) -> Pipeline:
     return Pipeline([
         ("scaler", StandardScaler()),
         ("clf", RandomForestClassifier(
-            n_estimators=300, max_depth=8, min_samples_split=40,
-            min_samples_leaf=20, max_features="sqrt",
+            n_estimators=200, max_depth=6, min_samples_split=30,
+            min_samples_leaf=15, max_features="sqrt",
+            class_weight="balanced_subsample",  # Handle imbalance
             random_state=42, n_jobs=-1,
         )),
     ])
@@ -214,13 +214,17 @@ def _build_rf_pipeline() -> Pipeline:
 
 def _build_xgb_pipeline(y_train: pd.Series) -> Pipeline:
     XGBClassifier = _get_xgb()
-    scale_pos_weight = float((y_train == 0).sum()) / max(float((y_train == 1).sum()), 1.0)
+    n_pos = int(y_train.sum())
+    n_neg = len(y_train) - n_pos
+    # Cap scale_pos_weight to prevent over-correction
+    scale_pos_weight = min(n_neg / max(n_pos, 1), 2.5)
+    
     return Pipeline([
         ("scaler", StandardScaler()),
         ("clf", XGBClassifier(
-            n_estimators=250, max_depth=4, learning_rate=0.05,
+            n_estimators=150, max_depth=3, learning_rate=0.08,
             subsample=0.8, colsample_bytree=0.8,
-            min_child_weight=20, reg_alpha=0.5, reg_lambda=2.0,
+            min_child_weight=15, reg_alpha=0.3, reg_lambda=1.5,
             scale_pos_weight=scale_pos_weight,
             eval_metric="logloss", random_state=42, n_jobs=-1, verbosity=0,
         )),
@@ -249,13 +253,16 @@ def train_ensemble(
     # x_train, y_train = _balance_train(x_train, y_train) //as per google
     logger.info(f"📊 Full chronological train: {len(x_train)} rows")
 
-    # Build & fit each pipeline
-    gbm = _build_gbm_pipeline()
-    rf  = _build_rf_pipeline()
+    # Build & fit each pipeline with class balancing
+    gbm, gbm_pos_weight = _build_gbm_pipeline(y_train)
+    rf  = _build_rf_pipeline(y_train)
     xgb = _build_xgb_pipeline(y_train)
 
+    # Sample weights for GBM
+    sample_weight = np.where(y_train.values == 1, gbm_pos_weight, 1.0).astype(float)
+
     logger.info("🔧 Training GBM …")
-    gbm.fit(x_train, y_train)
+    gbm.fit(x_train, y_train, clf__sample_weight=sample_weight)
     logger.info("🔧 Training RandomForest …")
     rf.fit(x_train, y_train)
     logger.info("🔧 Training XGBoost …")

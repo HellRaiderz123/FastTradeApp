@@ -54,6 +54,7 @@ from app.api.routes import ml
 from app.api.routes import candles
 from app.api.routes import zerodha_broker
 from app.api.routes import indmoney_broker
+from app.api.routes import broker as broker_routes
 from app.api.routes import position_suggestions
 from app.api.routes import auto_trader as auto_trader_routes
 from app.api.routes import auth
@@ -69,6 +70,7 @@ from app.api.routes import simple_ai
 from app.api.routes import ai_analysis
 from app.api.routes import holdings as holdings_routes
 from app.api.routes import scalp
+from app.api.routes import quant
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -207,7 +209,7 @@ async def lifespan(app: FastAPI):
         # Schedule AI job cleanup every 30 minutes (fix 7: unbounded in-memory job store)
         try:
             from apscheduler.triggers.interval import IntervalTrigger
-            from app.core.market.scheduler import _scheduler
+            from app.core.market.scheduler import scheduler as _scheduler
             from app.services.trading_agents import cleanup_expired_jobs
 
             _scheduler.add_job(
@@ -223,7 +225,7 @@ async def lifespan(app: FastAPI):
         # Schedule daily AI outcome evaluation
         try:
             from apscheduler.triggers.interval import IntervalTrigger
-            from app.core.market.scheduler import _scheduler
+            from app.core.market.scheduler import scheduler as _scheduler
             from app.services.trading_agents import evaluate_pending_outcomes
 
             def _run_outcome_evaluation():
@@ -408,6 +410,7 @@ app.include_router(safety.router, dependencies=[Depends(require_authenticated_us
 app.include_router(candles.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(zerodha_broker.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(indmoney_broker.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(broker_routes.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(position_suggestions.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(auto_trader_routes.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(trade_costs.router, dependencies=[Depends(require_authenticated_user)])
@@ -422,5 +425,6 @@ app.include_router(simple_ai.router, dependencies=[Depends(require_authenticated
 app.include_router(ai_analysis.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(holdings_routes.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(scalp.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(quant.router, dependencies=[Depends(require_authenticated_user)])
 
-logger.info(" All routers registered (including Phase 5 features)")
+logger.info(" All routers registered (including Phase 5 features + Quant APIs)")

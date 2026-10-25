@@ -7,38 +7,24 @@ from typing import List, Dict, Any
 import logging
 
 from app.core.broker.zerodha.client import get_kite_client
+from app.core.broker.registry import get_registry, get_active_broker, BrokerUnsupportedError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/zerodha", tags=["Zerodha"])
 
 
+def _require_zerodha_capability(capability: str):
+    """Check active broker supports the capability, raise 400 with clear message if not."""
+    broker = get_active_broker()
+    try:
+        get_registry().require(broker, capability)
+    except BrokerUnsupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/positions")
 def get_zerodha_positions() -> Dict[str, Any]:
-    """
-    Fetch live positions from Zerodha broker
-    
-    Returns:
-        {
-            "net": [
-                {
-                    "tradingsymbol": "NIFTY24FEB25000PE",
-                    "quantity": 1,
-                    "used_quantity": 1,
-                    "average_price": 150.00,
-                    "last_price": 145.50,
-                    "close_price": 152.00,
-                    "pnl": -4.50,
-                    "p_l": -4.50,
-                    "m2m": -4.50,
-                    "unrealised": -4.50,
-                    "realised": 0.00,
-                    "multiplier": 100,
-                    ...
-                },
-                ...
-            ]
-        }
-    """
+    _require_zerodha_capability("positions")
     try:
         kite = get_kite_client()
         positions = kite.positions()
@@ -54,11 +40,7 @@ def get_zerodha_positions() -> Dict[str, Any]:
 
 @router.get("/orders")
 def get_zerodha_orders() -> List[Dict[str, Any]]:
-    """
-    Fetch all orders (active and completed) from Zerodha
-    
-    Returns list of orders with status, quantity, price, etc.
-    """
+    _require_zerodha_capability("order_book")
     try:
         kite = get_kite_client()
         orders = kite.orders()
@@ -74,11 +56,7 @@ def get_zerodha_orders() -> List[Dict[str, Any]]:
 
 @router.get("/holdings")
 def get_zerodha_holdings() -> List[Dict[str, Any]]:
-    """
-    Fetch holdings (stocks held overnight) from Zerodha
-    
-    Returns list of holdings with quantity, LTP, P&L, etc.
-    """
+    _require_zerodha_capability("holdings")
     try:
         kite = get_kite_client()
         holdings = kite.holdings()

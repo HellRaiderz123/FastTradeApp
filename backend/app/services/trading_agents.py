@@ -838,7 +838,8 @@ def _llm_agent(
     from app.services.llm_service import call_llm, is_available, extract_json
 
     if not is_available():
-        return {"error": "LLM_API_KEY not configured"}
+        logger.warning("%s: LLM not available (API key not configured or circuit breaker open)", agent_name)
+        return {"error": "LLM_API_KEY not configured or circuit breaker open"}
 
     raw = call_llm(
         prompt=user_prompt,
@@ -848,17 +849,24 @@ def _llm_agent(
         timeout=45.0,
     )
     if not raw:
+        logger.warning("%s: LLM returned empty response", agent_name)
         return {"error": f"{agent_name}: LLM returned empty response"}
 
     parsed = extract_json(raw)
-    if not parsed:
-        # Fallback: try to parse the whole response as JSON
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            parsed = {"raw_response": raw[:500]}
-
-    return parsed
+    if parsed:
+        return parsed
+    
+    # Fallback: try to parse the whole response as JSON
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    
+    # If still no valid JSON, log the raw response for debugging
+    logger.warning("%s: Failed to parse JSON from response (first 300 chars): %s", agent_name, raw[:300])
+    return {"error": f"{agent_name}: Failed to parse JSON", "raw_response": raw[:500]}
 
 
 def _run_technical_agent(symbol: str, indicators: dict, multi_tf: Optional[dict] = None) -> dict:

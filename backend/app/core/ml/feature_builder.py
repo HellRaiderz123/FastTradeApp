@@ -21,6 +21,7 @@ FEATURE_COLUMNS: List[str] = [
     "volatility_change",
     # Trend indicators
     "rsi",
+    "rsi_normalized",
     "macd_hist",
     "macd_hist_change",
     "adx",
@@ -55,6 +56,12 @@ FEATURE_COLUMNS: List[str] = [
     "low_vol_regime",
     "trend_up",
     "trend_strength",
+    # New: Mean reversion signals
+    "mean_reversion_signal",
+    "price_momentum_ratio",
+    # New: Trend quality
+    "trend_consistency",
+    "breakout_strength",
 ]
 
 
@@ -89,6 +96,7 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
 
     # --- Trend Indicators ---
     data["rsi"] = compute_rsi(data["close"], period=config.rsi_period)
+    data["rsi_normalized"] = (data["rsi"] - 50) / 50  # Normalize to [-1, 1]
     _, _, macd_hist = compute_macd(data["close"])
     data["macd_hist"] = macd_hist
 
@@ -172,6 +180,24 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
         data["ema_fast_slope"].clip(-0.02, 0.02) +
         data["macd_hist"].clip(-0.5, 0.5) / 10
     )
+
+    # --- New: Mean reversion signal (oversold/overbought with reversal) ---
+    oversold = (data["rsi"] < 30) & (data["rsi"].diff() > 0)
+    overbought = (data["rsi"] > 70) & (data["rsi"].diff() < 0)
+    data["mean_reversion_signal"] = oversold.astype(float) - overbought.astype(float)
+    
+    # --- New: Price momentum ratio (short vs long momentum) ---
+    data["price_momentum_ratio"] = data["ret_short"] / (data["ret_long"].abs() + 1e-8)
+    data["price_momentum_ratio"] = data["price_momentum_ratio"].clip(-3, 3)
+    
+    # --- New: Trend consistency (how consistent is the trend direction) ---
+    pos_days = (data["ret_1"] > 0).rolling(10).sum() / 10
+    data["trend_consistency"] = (pos_days - 0.5) * 2  # Normalize to [-1, 1]
+    
+    # --- New: Breakout strength (price vs recent range) ---
+    range_20 = rolling_high - rolling_low
+    data["breakout_strength"] = (data["close"] - rolling_low) / (range_20 + 1e-8) - 0.5
+    data["breakout_strength"] = data["breakout_strength"].clip(-1, 1)
 
     data = data.replace([np.inf, -np.inf], np.nan).dropna()
     return data

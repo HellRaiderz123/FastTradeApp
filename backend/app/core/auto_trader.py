@@ -262,8 +262,7 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
         # ── SL / TP check against live MTM ────────────────────────
         if intent.sl is not None or intent.tp is not None:
             try:
-                from app.core.execution.paper import PaperExecutionAdapter
-                current_pnl = PaperExecutionAdapter().mtm(intent)
+                current_pnl = executor.mtm(intent)
                 intent.pnl = current_pnl
                 db.commit()
                 sl_hit = intent.sl is not None and current_pnl <= intent.sl

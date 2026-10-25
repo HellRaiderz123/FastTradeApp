@@ -1,19 +1,22 @@
 """
 INDMoney / INDstocks auth handler.
 
-Flow:
-  .env holds INDMONEY_MOBILE + INDMONEY_PIN (static, never changes).
-  At login time the user supplies:
-    - mtp   : Mobile Transaction Password (changes per session)
-    - totp  : 6-digit authenticator code
+Correct flow (per INDstocks API docs, verified from OpenAlgo):
+  Endpoint : POST /generate/token
+  Header   : x-api-key: <client_id>   (NOT Authorization)
+  Body     : { "mpin": "...", "totp": "..." }
+  Response : { "data": { "token": "..." } }
 
-  POST /user/login  →  access_token stored in DB
+  client_id comes from INDMONEY_CLIENT_ID env var or supplied at login time.
+  Token expires after 24 hours. Only one TOTP token is live at a time.
+
+  POST /indmoney/login  ->  token stored in DB
   client.py reads token from DB first, falls back to INDMONEY_ACCESS_TOKEN in .env.
 """
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import requests
@@ -25,57 +28,61 @@ from app.core.utils.time import now_ist
 logger = logging.getLogger(__name__)
 
 _BASE_URL = os.getenv("INDMONEY_BASE_URL", "https://api.indstocks.com").rstrip("/")
-_TIMEOUT = int(os.getenv("INDMONEY_HTTP_TIMEOUT_SECONDS", "15"))
+_TIMEOUT = int(os.getenv("INDMONEY_HTTP_TIMEOUT_SECONDS", "30"))
 
 
-def login(db: Session, mtp: str, totp: str) -> str:
+def login(db: Session, client_id: str, mpin: str, totp: str) -> str:
     """
-    Authenticate with INDstocks using mobile+pin+mtp+totp.
-    Stores the returned access_token in DB and returns it.
+    Authenticate with INDstocks via POST /generate/token.
 
-    Raises RuntimeError on auth failure.
+    Args:
+        client_id : Client ID from INDstocks access-tokens page (sent as x-api-key header)
+        mpin      : Account MPIN
+        totp      : Current 6-digit TOTP code from authenticator app
+
+    Returns the access token and stores it in DB.
+    Raises RuntimeError on failure.
+
+    NOTE: Rate limited to 1 call/60s. 5 wrong TOTPs in 15 min locks the endpoint.
+    Never retry automatically.
     """
-    mobile = os.getenv("INDMONEY_MOBILE", "")
-    pin = os.getenv("INDMONEY_PIN", "")
+    client_id = (client_id or "").strip()
+    mpin = (mpin or "").strip()
+    totp = (str(totp) if totp is not None else "").strip()  # preserve leading zeros
 
-    if not mobile or not pin:
-        raise RuntimeError("INDMONEY_MOBILE and INDMONEY_PIN must be set in .env")
-
-    payload = {
-        "mobileNumber": mobile,
-        "pin": pin,
-        "mtp": mtp,
-        "totp": totp,
-    }
+    if not client_id or not mpin or not totp:
+        raise RuntimeError("client_id, mpin and totp are all required")
 
     resp = requests.post(
-        f"{_BASE_URL}/user/login",
-        json=payload,
-        headers={"Content-Type": "application/json"},
+        f"{_BASE_URL}/generate/token",
+        json={"mpin": mpin, "totp": totp},
+        headers={
+            "x-api-key": client_id,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
         timeout=_TIMEOUT,
     )
 
     if resp.status_code >= 400:
-        raise RuntimeError(f"INDMoney login failed ({resp.status_code}): {resp.text[:400]}")
+        try:
+            body = resp.json()
+            msg = body.get("message") or body.get("error") or resp.text[:300]
+        except Exception:
+            msg = resp.text[:300]
+        raise RuntimeError(f"INDMoney login failed ({resp.status_code}): {msg}")
 
     body = resp.json()
-
-    # Support both flat and nested response shapes
+    data = body.get("data") or {}
     token = (
-        body.get("accessToken")
+        data.get("token")
+        or data.get("access_token")
+        or body.get("token")
         or body.get("access_token")
-        or (body.get("data") or {}).get("accessToken")
-        or (body.get("data") or {}).get("access_token")
-    )
-    client_id = (
-        body.get("clientID")
-        or body.get("client_id")
-        or (body.get("data") or {}).get("clientID")
-        or (body.get("data") or {}).get("client_id")
     )
 
     if not token:
-        raise RuntimeError(f"INDMoney login: no access token in response: {body}")
+        raise RuntimeError(f"INDMoney login: no token in response: {body}")
 
     _store_token(db, token, client_id=client_id)
     logger.info("INDMoney login successful, token stored (client_id=%s)", client_id)
@@ -83,7 +90,6 @@ def login(db: Session, mtp: str, totp: str) -> str:
 
 
 def _store_token(db: Session, token: str, client_id: Optional[str] = None) -> INDMoneySession:
-    # Deactivate all existing sessions
     db.query(INDMoneySession).filter(INDMoneySession.is_active == 1).update({"is_active": 0})
 
     existing = db.query(INDMoneySession).filter(INDMoneySession.access_token == token).first()

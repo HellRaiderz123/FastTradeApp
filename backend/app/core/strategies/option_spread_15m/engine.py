@@ -1,7 +1,7 @@
 from app.db.session import SessionLocal
 from app.db.repository import save_strategy_run
 from app.db.models import StrategyRun
-from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
+from app.core.broker.option_symbols import build_option_symbol
 from app.core.market.expiry import get_current_weekly_expiry, get_next_weekly_expiry_from_kite
 from sqlalchemy.orm import Session
 
@@ -410,7 +410,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": short_strike,
                     "type": opt_type,
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=short_strike,
@@ -421,7 +421,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": long_strike,
                     "type": opt_type,
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=long_strike,
@@ -446,7 +446,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": short_put,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=short_put,
@@ -457,7 +457,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": long_put,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=long_put,
@@ -468,7 +468,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": short_call,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=short_call,
@@ -479,7 +479,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": long_call,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=long_call,
@@ -504,7 +504,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": straddle_call,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=straddle_call,
@@ -515,7 +515,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": straddle_put,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=straddle_put,
@@ -540,7 +540,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": straddle_call,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=straddle_call,
@@ -551,7 +551,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": straddle_put,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=straddle_put,
@@ -576,7 +576,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": strangle_call,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=strangle_call,
@@ -587,7 +587,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": strangle_put,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=strangle_put,
@@ -612,7 +612,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": strangle_call,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=strangle_call,
@@ -623,7 +623,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": strangle_put,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=strangle_put,
@@ -648,7 +648,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": butterfly_lower,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=butterfly_lower,
@@ -661,7 +661,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "type": "CE",
                     "qty": 2,
                     "quantity": 2,
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=butterfly_middle,
@@ -672,7 +672,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": butterfly_upper,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=butterfly_upper,
@@ -697,7 +697,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": ratio_short,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=ratio_short,
@@ -708,7 +708,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_near,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=ratio_long_near,
@@ -719,7 +719,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_far,
                     "type": "CE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=ratio_long_far,
@@ -744,7 +744,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": ratio_short,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=ratio_short,
@@ -755,7 +755,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_near,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=ratio_long_near,
@@ -766,7 +766,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_far,
                     "type": "PE",
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=ratio_long_far,
@@ -791,7 +791,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": naked_strike,
                     "type": opt_type,
-                    "symbol": build_zerodha_option_symbol(
+                    "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
                         strike=naked_strike,

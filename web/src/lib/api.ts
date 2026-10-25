@@ -431,6 +431,12 @@ export const settingsAPI = {
 
   resolveINDMoneySecurity: (symbol: string) =>
     api.post('/settings/indmoney/resolve-security', { symbol }),
+
+  indmoneyLogin: (client_id: string, mpin: string, totp: string) =>
+    api.post('/indmoney/login', { client_id, mpin, totp }),
+
+  getINDMoneySessionStatus: () =>
+    api.get('/indmoney/session-status'),
   
   setExecutionMode: (mode: string) =>
     api.post(`/settings/execution-mode`, {}, { params: { mode } }),

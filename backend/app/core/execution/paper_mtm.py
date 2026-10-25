@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.models_intent import ExecutionIntent
 from app.core.execution.base import get_ticket
 from app.core.utils.time import now_ist
-from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
+from app.core.broker.option_symbols import build_option_symbol
 
 EXECUTION_MODE = os.getenv("EXECUTION_MODE")  # legacy; do not rely on this at runtime
 
@@ -24,7 +24,7 @@ def calculate_spread_mtm(
     not a valid Zerodha symbol. get_ltp() expects full NSE symbols like
     "NIFTY2601026000CE". All MTM values were silently 0 or wrong.
 
-    Now uses build_zerodha_option_symbol() — same builder used by the execution
+    Now uses build_option_symbol() — same builder used by the execution
     adapter — so LTP lookups return real prices.
     """
     symbols = []
@@ -34,7 +34,7 @@ def calculate_spread_mtm(
         # Use pre-stored symbol if available (set during execution)
         sym = leg.get("symbol")
         if not sym and expiry is not None:
-            sym = build_zerodha_option_symbol(
+            sym = build_option_symbol(
                 underlying=underlying,
                 expiry=expiry,
                 strike=int(leg["strike"]),

@@ -44,26 +44,33 @@ def get_db():
 
 def _resolve_capital(db: Session) -> float:
     """
-    Fetch live capital from Zerodha. Falls back to most recent daily_capital record.
-    Raises 503 if neither is available (prevents trading with wrong capital).
+    Fetch live capital from the active broker. Falls back to most recent
+    daily_capital record. Raises 503 if neither is available.
     """
-    try:
-        kite = get_kite_client()
-        margins = kite.margins()
-        return float(margins["equity"]["available"]["live_balance"])
-    except Exception:
-        last_record = (
-            db.query(DailyCapital)
-            .order_by(DailyCapital.trade_date.desc())
-            .first()
-        )
-        if last_record and last_record.closing_capital:
-            return float(last_record.closing_capital)
+    from app.core.broker.registry import get_active_broker, get_registry
+
+    broker = get_active_broker()
+    if get_registry().supports(broker, "funds"):
+        try:
+            if broker == "ZERODHA":
+                kite = get_kite_client()
+                margins = kite.margins()
+                return float(margins["equity"]["available"]["live_balance"])
+        except Exception:
+            pass  # fall through to DB fallback
+    # For brokers without funds API (INDMONEY etc.), go straight to DB
+    last_record = (
+        db.query(DailyCapital)
+        .order_by(DailyCapital.trade_date.desc())
+        .first()
+    )
+    if last_record and last_record.closing_capital:
+        return float(last_record.closing_capital)
 
     raise HTTPException(
         status_code=503,
         detail=(
-            "Cannot determine capital — Zerodha API unavailable and no historical "
+            "Cannot determine capital — broker funds API unavailable and no historical "
             "capital found. Record your capital via POST /account/daily-capital first."
         ),
     )

@@ -90,8 +90,8 @@ export default function CandleBackfill() {
           <h1 className="text-2xl font-bold text-white">Candle Backfill</h1>
         </div>
         <p className="text-slate-400 text-sm">
-          Backfill candles directly from Zerodha for 1m, 5m, 15m, 1h, daily, and weekly timeframes.
-          Weekly candles are aggregated from daily data. Leave symbols empty to use NIFTY50 universe.
+          Backfill candles from your configured data broker for 1m, 5m, 15m, 1h, daily, and weekly timeframes.
+          Weekly candles are aggregated from daily data. Leave symbols empty to use NIFTY500 universe.
         </p>
       </div>
 
@@ -148,7 +148,7 @@ export default function CandleBackfill() {
             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500"
           />
           <p className="text-xs text-slate-500 mt-1">
-            Comma-separated symbols. Keep blank for default NIFTY50 backfill.
+            Comma-separated symbols. Keep blank for default NIFTY500 backfill.
           </p>
         </div>
 
@@ -164,7 +164,8 @@ export default function CandleBackfill() {
         <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-400/20 rounded-lg p-3 flex items-start gap-2">
           <AlertTriangle className="w-4 h-4 mt-0.5" />
           <span>
-            Requires valid Zerodha API credentials and access token in backend settings.
+            Requires valid broker API credentials and access token in backend settings.
+            For INDMoney: intraday data is limited to 7-day windows per API call.
           </span>
         </div>
       </div>

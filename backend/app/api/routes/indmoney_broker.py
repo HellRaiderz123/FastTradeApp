@@ -23,18 +23,19 @@ def _get_db():
 
 @router.post("/login")
 def indmoney_login(
-    mtp: str = Body(..., description="Mobile Transaction Password"),
-    totp: str = Body(..., description="6-digit authenticator code"),
+    client_id: str = Body(..., description="Client ID from INDstocks access-tokens page"),
+    mpin: str = Body(..., description="Account MPIN"),
+    totp: str = Body(..., description="6-digit TOTP code from authenticator app"),
     db: Session = Depends(_get_db),
 ) -> Dict[str, Any]:
     """
-    Authenticate with INDMoney.
-    .env must have INDMONEY_MOBILE and INDMONEY_PIN.
-    Supply mtp + totp from your authenticator app.
+    Authenticate with INDstocks via POST /generate/token.
+    Requires Client ID (x-api-key), MPIN, and live TOTP code.
+    Token is valid for 24 hours. Do NOT retry on failure — wrong TOTPs cause lockout.
     """
     from app.core.broker.indmoney.oauth import login
     try:
-        token = login(db, mtp=mtp, totp=totp)
+        login(db, client_id=client_id, mpin=mpin, totp=totp)
         return {"status": "ok", "message": "INDMoney login successful"}
     except RuntimeError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -46,9 +47,12 @@ def indmoney_session_status(db: Session = Depends(_get_db)) -> Dict[str, Any]:
     from app.core.broker.indmoney.oauth import get_active_session
     session = get_active_session(db)
     if session:
+        mobile = session.mobile or ""
+        masked = f"****{mobile[-4:]}" if len(mobile) >= 4 else mobile
         return {
             "active": True,
             "client_id": session.client_id,
+            "mobile": masked,
             "expires_at": session.expires_at.isoformat() if session.expires_at else None,
         }
     return {"active": False}

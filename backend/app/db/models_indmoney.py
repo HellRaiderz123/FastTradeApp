@@ -9,6 +9,7 @@ class INDMoneySession(Base):
     id = Column(Integer, primary_key=True)
     access_token = Column(String, nullable=False, unique=True, index=True)
     client_id = Column(String, nullable=True)
+    mobile = Column(String, nullable=True)  # last 4 digits shown in UI
     created_at = Column(DateTime(timezone=True), default=now_ist)
     expires_at = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Integer, default=1)  # 1 = active, 0 = revoked/expired

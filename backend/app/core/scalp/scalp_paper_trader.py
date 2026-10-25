@@ -119,10 +119,9 @@ def generate_trade_id() -> str:
 def get_option_ltp(symbol: str) -> Optional[float]:
     """Get current LTP for an option symbol."""
     try:
-        from app.core.broker.zerodha.client import get_kite_client
-        kite = get_kite_client()
-        data = kite.ltp([f"NFO:{symbol}"])
-        return data.get(f"NFO:{symbol}", {}).get("last_price")
+        from app.core.market.ltp import get_ltp
+        ltp_map = get_ltp([symbol])
+        return ltp_map.get(symbol)
     except Exception as e:
         logger.warning(f"Could not fetch LTP for {symbol}: {e}")
         return None
@@ -162,7 +161,7 @@ def create_scalp_entry(db: Session, underlying: str, signal: Dict) -> Optional[S
     """Create a new scalp paper trade entry."""
     try:
         from app.services.market_data import get_spot, pick_atm_strike
-        from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
+        from app.core.broker.option_symbols import build_option_symbol
         from app.core.market.expiry import get_next_weekly_expiry_from_kite
         
         spot = get_spot(underlying)
@@ -179,7 +178,7 @@ def create_scalp_entry(db: Session, underlying: str, signal: Dict) -> Optional[S
             return None
         
         strike = atm
-        option_symbol = build_zerodha_option_symbol(
+        option_symbol = build_option_symbol(
             underlying=underlying, expiry=expiry, strike=strike, option_type=option_type
         )
         

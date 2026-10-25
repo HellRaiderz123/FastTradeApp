@@ -39,11 +39,32 @@ ZERODHA_MAX_DAYS = {
     "Week":   2000,  # aggregated from daily
 }
 
-def fetch_15m_candles(db: Session, symbol: str, days: int = 15):
+def fetch_15m_candles(db: Session, symbol: str, days: int = 30):
+    """Fetch and store 15-minute candles for a symbol.
+    
+    Note: INDstocks API has a 7-day window limit per call for intraday data.
+    The provider.fetch_candles() handles pagination automatically.
+    """
+    import time
     symbol = symbol.upper().strip()
     to_dt = now_ist()
-    from_dt = to_dt - timedelta(days=days)
-    candles = fetch_candles(symbol, "15 Min", from_dt, to_dt)
+    # Cap days to reasonable limit for intraday data
+    effective_days = min(days, ZERODHA_MAX_DAYS.get("15 Min", 200))
+    from_dt = to_dt - timedelta(days=effective_days)
+    
+    logger.info("Fetching 15m candles for %s: %s to %s (%d days)", 
+                symbol, from_dt.date(), to_dt.date(), effective_days)
+    
+    try:
+        candles = fetch_candles(symbol, "15 Min", from_dt, to_dt)
+    except Exception as e:
+        logger.error("Failed to fetch 15m candles for %s: %s", symbol, e)
+        raise
+    
+    if not candles:
+        logger.warning("No 15m candles returned for %s", symbol)
+        return 0
+    
     rows = [
         {"symbol": symbol, "timestamp": c["date"],
          "open": c["open"], "high": c["high"], "low": c["low"],
@@ -51,7 +72,12 @@ def fetch_15m_candles(db: Session, symbol: str, days: int = 15):
         for c in candles
     ]
     inserted = _bulk_upsert(db, Candle15m, rows)
-    logger.info("15m candles inserted for %s: %d (skipped duplicates)", symbol, inserted)
+    logger.info("15m candles inserted for %s: %d rows (fetched %d, skipped duplicates)", 
+                symbol, inserted, len(candles))
+    
+    # Small delay to respect API rate limits (5 req/sec for INDstocks)
+    time.sleep(0.25)
+    return inserted
 
 
 def _get_recent_close(db: Session, symbol: str) -> float | None:

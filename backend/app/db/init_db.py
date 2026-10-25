@@ -14,6 +14,13 @@ _MIGRATIONS = [
     "ALTER TABLE execution_intents ADD COLUMN IF NOT EXISTS execution_mode VARCHAR;",
     "ALTER TABLE risk_limits ADD COLUMN IF NOT EXISTS per_trade_risk_pct FLOAT DEFAULT 2.0;",
     "ALTER TABLE finance_transactions ADD COLUMN IF NOT EXISTS merchant VARCHAR;",
+    "ALTER TABLE indmoney_sessions ADD COLUMN IF NOT EXISTS mobile VARCHAR;",
+    # Phase 1.3: Time-series composite indexes for performance
+    "CREATE INDEX IF NOT EXISTS idx_candle_5m_symbol_ts ON candle_5m (symbol, timestamp DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_candle_15m_symbol_ts ON candle_15m (symbol, timestamp DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_candle_1h_symbol_ts ON candle_1h (symbol, timestamp DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_candle_daily_symbol_date ON candle_daily (symbol, date DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_ai_decisions_symbol_date ON ai_decisions (symbol, analysed_at DESC);",
 ]
 
 

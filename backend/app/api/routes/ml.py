@@ -196,34 +196,44 @@ _backfill_status = {
 
 def _run_backfill(symbols: list, days: int):
     """Background task: fetch daily candles for all NIFTY100 symbols."""
+    from app.core.broker.registry import get_data_broker, BrokerUnsupportedError
+    
     global _backfill_status
     _backfill_status["running"] = True
     _backfill_status["total"] = len(symbols)
     _backfill_status["progress"] = 0
     _backfill_status["completed"] = []
     _backfill_status["failed"] = []
-    _backfill_status["message"] = "Backfilling daily candles..."
+    
+    broker = get_data_broker()
+    _backfill_status["message"] = f"Backfilling daily candles via {broker}..."
+    logger.info(f"📊 Starting backfill for {len(symbols)} symbols using broker: {broker}")
 
     db = SessionLocal()
     try:
         for i, symbol in enumerate(symbols):
             _backfill_status["current_symbol"] = symbol
             _backfill_status["progress"] = i
-            _backfill_status["message"] = f"Fetching {symbol} ({i+1}/{len(symbols)})"
+            _backfill_status["message"] = f"Fetching {symbol} ({i+1}/{len(symbols)}) via {broker}"
             
             try:
                 fetch_daily_candles(db, symbol, days=days)
                 _backfill_status["completed"].append(symbol)
                 logger.info(f"✅ Backfilled {symbol} ({i+1}/{len(symbols)})")
+            except BrokerUnsupportedError as e:
+                _backfill_status["failed"].append({"symbol": symbol, "error": f"Broker {broker} does not support historical data"})
+                logger.error(f"❌ Broker {broker} does not support historical data: {e}")
+                _backfill_status["message"] = f"Backfill stopped: {broker} does not support historical data"
+                break  # Stop if broker doesn't support it
             except Exception as e:
                 _backfill_status["failed"].append({"symbol": symbol, "error": str(e)})
                 logger.warning(f"⚠️ Failed {symbol}: {e}")
             
-            # Rate limit: Zerodha allows ~3 requests/sec for historical data
+            # Rate limit: allow ~2-3 requests/sec
             time.sleep(0.4)
         
         _backfill_status["progress"] = len(symbols)
-        _backfill_status["message"] = f"Backfill complete: {len(_backfill_status['completed'])} succeeded, {len(_backfill_status['failed'])} failed"
+        _backfill_status["message"] = f"Backfill complete via {broker}: {len(_backfill_status['completed'])} succeeded, {len(_backfill_status['failed'])} failed"
     except Exception as e:
         _backfill_status["message"] = f"Backfill error: {str(e)}"
         logger.exception("❌ Backfill failed")
@@ -237,14 +247,27 @@ def _run_backfill(symbols: list, days: int):
 async def backfill_daily_candles(background_tasks: BackgroundTasks):
     """
     Backfill daily candle data for all NIFTY100 symbols (runs in background).
-    Fetches 900 days of daily data per symbol from Zerodha.
+    Uses the configured data broker (CANDLES_SOURCE env var: ZERODHA or INDMONEY).
     """
+    from app.core.broker.registry import get_data_broker, get_registry, BrokerUnsupportedError
+    
     if _backfill_status["running"]:
         return {
             "status": "already_running",
             "message": _backfill_status["message"],
             "progress": _backfill_status["progress"],
             "total": _backfill_status["total"],
+        }
+    
+    # Check if broker supports historical data
+    broker = get_data_broker()
+    try:
+        get_registry().require(broker, "historical_data")
+    except BrokerUnsupportedError as e:
+        return {
+            "status": "error",
+            "message": f"Broker '{broker}' does not support historical data. Set CANDLES_SOURCE=ZERODHA or CANDLES_SOURCE=INDMONEY in .env",
+            "broker": broker,
         }
     
     # Get NIFTY100 symbols from scheduler
@@ -255,14 +278,17 @@ async def backfill_daily_candles(background_tasks: BackgroundTasks):
     
     return {
         "status": "started",
-        "message": f"Backfilling {len(symbols)} NIFTY100 symbols with 2000 days of daily data",
+        "message": f"Backfilling {len(symbols)} NIFTY100 symbols with 2000 days of daily data via {broker}",
         "total_symbols": len(symbols),
+        "broker": broker,
     }
 
 
 @router.get("/backfill-status")
 async def get_backfill_status():
     """Get the current status of the backfill operation."""
+    from app.core.broker.registry import get_data_broker
+    
     return {
         "running": _backfill_status["running"],
         "progress": _backfill_status["progress"],
@@ -272,6 +298,7 @@ async def get_backfill_status():
         "failed_count": len(_backfill_status["failed"]),
         "failed_symbols": _backfill_status["failed"][:10],  # First 10 failures
         "message": _backfill_status["message"],
+        "broker": get_data_broker(),
     }
 
 

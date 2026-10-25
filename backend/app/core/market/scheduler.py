@@ -254,22 +254,27 @@ def _update_twitter_sentiment():
 
 def _update():
     logger.info("⏱️ Running 15m candle update")
+    from app.core.market.provider import get_data_broker
+    broker = get_data_broker()
 
     db = SessionLocal()
     try:
         fetch_15m_candles(db, "NIFTY")
         fetch_15m_candles(db, "BANKNIFTY")
         fetch_15m_candles(db, "FINNIFTY")
-        # Also fetch Nifty IT sector stocks for IT-specific strategies
         nifty_it_symbols = ["TCS", "INFY", "WIPRO", "HCLTECH", "TECHM", "LTIM", "COFORGE", "PERSISTENT", "MPHASIS"]
         for sym in nifty_it_symbols:
             try:
                 fetch_15m_candles(db, sym)
             except Exception as e:
-                logger.warning(f"\u26a0\ufe0f Skip IT candle {sym}: {e}")
-        logger.info("\u2705 15m candles updated (indices + NIFTY_IT)")
-    except Exception:
-        logger.exception("❌ Candle update failed")
+                logger.warning("⚠️ Skip IT candle %s [broker=%s]: %s", sym, broker, e)
+        logger.info("✅ 15m candles updated (indices + NIFTY_IT) [broker=%s]", broker)
+    except Exception as exc:
+        logger.error(
+            "❌ 15m candle update failed [broker=%s]: %s",
+            broker, exc,
+            exc_info=True,
+        )
     finally:
         db.close()
 
@@ -373,9 +378,12 @@ def _get_daily_symbols() -> list[str]:
 
 def _update_daily_candles():
     """Update daily candles for swing trading."""
+    from app.core.market.provider import get_data_broker
+    from app.core.broker.registry import BrokerUnsupportedError
+    broker = get_data_broker()
     days = int(os.getenv("DAILY_CANDLES_DAYS", "2000"))
     symbols = _get_daily_symbols()
-    logger.info("⏱️ Running daily candle update | symbols=%d | days=%d", len(symbols), days)
+    logger.info("⏱️ Running daily candle update | broker=%s | symbols=%d | days=%d", broker, len(symbols), days)
 
     db = SessionLocal()
     success = 0
@@ -385,12 +393,15 @@ def _update_daily_candles():
             try:
                 fetch_daily_candles(db, symbol, days=days)
                 success += 1
+            except BrokerUnsupportedError as e:
+                logger.error("❌ Daily candles: broker '%s' does not support historical data — %s", broker, e)
+                break  # No point continuing if broker doesn't support it
             except Exception as e:
                 failed += 1
-                logger.warning(f"\u26a0\ufe0f Skip {symbol}: {e}")
-        logger.info(f"\u2705 Daily candles updated: {success} ok, {failed} skipped")
-    except Exception:
-        logger.exception("❌ Daily candles update failed")
+                logger.warning("⚠️ Skip daily candle %s [broker=%s]: %s", symbol, broker, e)
+        logger.info("✅ Daily candles updated [broker=%s]: %d ok, %d skipped", broker, success, failed)
+    except Exception as exc:
+        logger.error("❌ Daily candles update failed [broker=%s]: %s", broker, exc, exc_info=True)
     finally:
         db.close()
 
@@ -410,36 +421,48 @@ def _auto_exit_check():
 
 def _update_5m_candles():
     """Update 5-minute candles for intraday strategies."""
-    logger.info("⏱️ Running 5m candle update")
+    from app.core.market.provider import get_data_broker
+    from app.core.broker.registry import BrokerUnsupportedError
+    broker = get_data_broker()
+    logger.info("⏱️ Running 5m candle update [broker=%s]", broker)
     db = SessionLocal()
     try:
-        symbols = _get_daily_symbols()[:30]  # Top 30 liquid stocks
+        symbols = _get_daily_symbols()[:30]
         for sym in ["NIFTY", "BANKNIFTY", "FINNIFTY"] + symbols:
             try:
                 fetch_5m_candles(db, sym, days=30)
+            except BrokerUnsupportedError as e:
+                logger.error("❌ 5m candles: broker '%s' does not support historical data — %s", broker, e)
+                break
             except Exception as e:
-                logger.warning(f"⚠️ Skip 5m {sym}: {e}")
-        logger.info("✅ 5m candles updated")
-    except Exception:
-        logger.exception("❌ 5m candle update failed")
+                logger.warning("⚠️ Skip 5m %s [broker=%s]: %s", sym, broker, e)
+        logger.info("✅ 5m candles updated [broker=%s]", broker)
+    except Exception as exc:
+        logger.error("❌ 5m candle update failed [broker=%s]: %s", broker, exc, exc_info=True)
     finally:
         db.close()
 
 
 def _update_1h_candles():
     """Update 1-hour candles for swing/intraday strategies."""
-    logger.info("⏱️ Running 1h candle update")
+    from app.core.market.provider import get_data_broker
+    from app.core.broker.registry import BrokerUnsupportedError
+    broker = get_data_broker()
+    logger.info("⏱️ Running 1h candle update [broker=%s]", broker)
     db = SessionLocal()
     try:
         symbols = _get_daily_symbols()
         for sym in ["NIFTY", "BANKNIFTY", "FINNIFTY"] + symbols:
             try:
                 fetch_1h_candles(db, sym, days=60)
+            except BrokerUnsupportedError as e:
+                logger.error("❌ 1h candles: broker '%s' does not support historical data — %s", broker, e)
+                break
             except Exception as e:
-                logger.warning(f"⚠️ Skip 1h {sym}: {e}")
-        logger.info("✅ 1h candles updated")
-    except Exception:
-        logger.exception("❌ 1h candle update failed")
+                logger.warning("⚠️ Skip 1h %s [broker=%s]: %s", sym, broker, e)
+        logger.info("✅ 1h candles updated [broker=%s]", broker)
+    except Exception as exc:
+        logger.error("❌ 1h candle update failed [broker=%s]: %s", broker, exc, exc_info=True)
     finally:
         db.close()
 
@@ -587,6 +610,7 @@ def start_daily_candles_scheduler(delay_minutes: int = 5):
         id="daily_candles_job",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
 
     # Schedule initial backfill after delay to avoid blocking startup
@@ -599,6 +623,7 @@ def start_daily_candles_scheduler(delay_minutes: int = 5):
             run_date=run_time,
             id="daily_candles_initial_run",
             replace_existing=True,
+            misfire_grace_time=3600,  # run even if up to 1h late (e.g. container restart)
         )
         logger.info(f"🟢 Daily candles scheduler started (daily: 3:50 PM IST, initial backfill: {delay_minutes}m delay)")
     else:
@@ -714,6 +739,7 @@ def start_intraday_candles_scheduler(delay_minutes: int = 3):
             run_date=run_5m,
             id="candle_5m_initial_run",
             replace_existing=True,
+            misfire_grace_time=3600,
         )
         scheduler.add_job(
             func=_update_1h_candles,
@@ -721,6 +747,7 @@ def start_intraday_candles_scheduler(delay_minutes: int = 3):
             run_date=run_1h,
             id="candle_1h_initial_run",
             replace_existing=True,
+            misfire_grace_time=3600,
         )
 
     logger.info("🟢 Intraday candles scheduler started (5m: every 10min, 1h: every hour)")

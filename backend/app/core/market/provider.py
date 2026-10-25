@@ -1,20 +1,25 @@
 """
 Market data provider abstraction.
 
-Routes historical candle fetches and LTP calls to either Zerodha or INDstocks
-based on the CANDLES_SOURCE environment variable.
+Routes historical candle fetches and LTP calls to the configured data broker.
+Data broker is determined by CANDLES_SOURCE env var (ZERODHA | INDSTOCKS/INDMONEY).
 
-  CANDLES_SOURCE=ZERODHA    -> KiteConnect (default, existing behaviour)
-  CANDLES_SOURCE=INDSTOCKS  -> INDstocks REST API (free, no subscription needed)
-
-All callers (candles.py, ltp.py, spot.py) import from here instead of
-importing directly from the Zerodha client.
+Errors are NEVER swallowed silently. If a broker doesn't support an operation,
+BrokerUnsupportedError is raised immediately with a clear message.
+If a broker call fails (token expired, network error), the exception propagates
+so the scheduler can log it with full context.
 """
 
 import logging
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+
+from app.core.broker.registry import (
+    BrokerUnsupportedError,
+    get_data_broker,
+    get_registry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +34,12 @@ _ZERODHA_INTERVAL_MAP = {
 
 
 def get_candles_source() -> str:
-    return os.getenv("CANDLES_SOURCE", "ZERODHA").upper().strip()
+    """Legacy helper — returns the data broker name."""
+    return get_data_broker()
 
 
 def is_indstocks() -> bool:
-    return get_candles_source() == "INDSTOCKS"
+    return get_data_broker() == "INDMONEY"
 
 
 # ── Historical candles ─────────────────────────────────────────────────────
@@ -49,10 +55,22 @@ def fetch_candles(
 
     Returns list of dicts: {date, open, high, low, close, volume}
     interval_label: "1 Min" | "5 Min" | "15 Min" | "1 Hour" | "Day" | "Week"
+
+    Raises:
+        BrokerUnsupportedError — if the configured broker doesn't support historical data
+        RuntimeError / Exception — if the broker call itself fails (token expired, network, etc.)
     """
-    if is_indstocks():
+    broker = get_data_broker()
+    reg = get_registry()
+    reg.require(broker, "historical_data")  # raises BrokerUnsupportedError if not supported
+
+    if broker == "INDMONEY":
         return _fetch_candles_indstocks(symbol, interval_label, from_dt, to_dt)
-    return _fetch_candles_zerodha(symbol, interval_label, from_dt, to_dt)
+    if broker == "ZERODHA":
+        return _fetch_candles_zerodha(symbol, interval_label, from_dt, to_dt)
+
+    # Should never reach here — registry.require() would have raised already
+    raise BrokerUnsupportedError(broker, "historical_data")
 
 
 def _fetch_candles_zerodha(
@@ -67,7 +85,12 @@ def _fetch_candles_zerodha(
     kite = get_kite_client()
     sym = symbol.upper().strip()
     token = get_index_token(sym) if sym in INDEX_TOKENS else get_equity_token(sym, exchange="NSE")
-    interval = _ZERODHA_INTERVAL_MAP[interval_label]
+    interval = _ZERODHA_INTERVAL_MAP.get(interval_label)
+    if not interval:
+        raise ValueError(
+            f"Unsupported interval '{interval_label}' for Zerodha. "
+            f"Valid: {list(_ZERODHA_INTERVAL_MAP)}"
+        )
 
     candles = kite.historical_data(
         instrument_token=token,
@@ -97,7 +120,7 @@ def _fetch_candles_indstocks(
     from app.core.broker.indstocks.market_data import fetch_historical, get_scrip_code
 
     sym = symbol.upper().strip()
-    scrip_code = get_scrip_code(sym)
+    scrip_code = get_scrip_code(sym)  # raises KeyError if symbol not found — let it propagate
     return fetch_historical(scrip_code, interval_label, from_dt, to_dt)
 
 
@@ -107,10 +130,19 @@ def fetch_ltp(symbols: List[str]) -> Dict[str, float]:
     """
     Fetch last traded price for a list of symbols.
     Returns {symbol: ltp} for symbols that returned data.
+
+    Raises BrokerUnsupportedError if broker doesn't support live LTP.
     """
-    if is_indstocks():
+    broker = get_data_broker()
+    reg = get_registry()
+    reg.require(broker, "live_ltp")
+
+    if broker == "INDMONEY":
         return _fetch_ltp_indstocks(symbols)
-    return _fetch_ltp_zerodha(symbols)
+    if broker == "ZERODHA":
+        return _fetch_ltp_zerodha(symbols)
+
+    raise BrokerUnsupportedError(broker, "live_ltp")
 
 
 def _fetch_ltp_zerodha(symbols: List[str]) -> Dict[str, float]:
@@ -131,11 +163,8 @@ def _fetch_ltp_zerodha(symbols: List[str]) -> Dict[str, float]:
             ) or sym_upper.endswith("FUT")
             normalized[sym] = f"NFO:{sym}" if is_option else f"NSE:{sym}"
 
-    try:
-        data = kite.ltp(list(normalized.values()))
-    except Exception as exc:
-        logger.warning("Zerodha LTP fetch error: %s", exc)
-        return {}
+    # Let exceptions propagate — caller (scheduler) will log with context
+    data = kite.ltp(list(normalized.values()))
 
     result: Dict[str, float] = {}
     for original, key in normalized.items():
@@ -157,13 +186,22 @@ def _fetch_ltp_indstocks(symbols: List[str]) -> Dict[str, float]:
 def get_bulk_quotes(symbols: List[str]) -> Dict[str, Dict]:
     """
     Return full quotes keyed by "NSE:SYMBOL" with last_price, ohlc, and volume.
-    Uses Zerodha quote() for full data; falls back to LTP-only shape for IndMoney.
+
+    Raises BrokerUnsupportedError if broker doesn't support live quotes.
     """
     if not symbols:
         return {}
-    if is_indstocks():
+
+    broker = get_data_broker()
+    reg = get_registry()
+    reg.require(broker, "live_quotes")
+
+    if broker == "INDMONEY":
         return _get_bulk_quotes_indstocks(symbols)
-    return _get_bulk_quotes_zerodha(symbols)
+    if broker == "ZERODHA":
+        return _get_bulk_quotes_zerodha(symbols)
+
+    raise BrokerUnsupportedError(broker, "live_quotes")
 
 
 def _get_bulk_quotes_zerodha(symbols: List[str]) -> Dict[str, Dict]:
@@ -183,7 +221,7 @@ def _get_bulk_quotes_zerodha(symbols: List[str]) -> Dict[str, Dict]:
         sym_to_key[sym_upper] = key
 
     result: Dict[str, Dict] = {}
-    batch_size = 500  # Zerodha quote() supports up to 500
+    batch_size = 500
     for i in range(0, len(instrument_keys), batch_size):
         batch = instrument_keys[i: i + batch_size]
         try:
@@ -204,10 +242,6 @@ def _get_bulk_quotes_zerodha(symbols: List[str]) -> Dict[str, Dict]:
 
 
 def _get_bulk_quotes_indstocks(symbols: List[str]) -> Dict[str, Dict]:
-    """
-    INDstocks full quote via /market/quotes/full.
-    Falls back to LTP-only shape if full quote is unavailable.
-    """
     from app.core.broker.indstocks.market_data import (
         get_scrip_code, _headers, BASE_URL,
     )
@@ -218,7 +252,7 @@ def _get_bulk_quotes_indstocks(symbols: List[str]) -> Dict[str, Dict]:
         try:
             sym_to_scrip[sym.upper()] = get_scrip_code(sym)
         except KeyError:
-            logger.warning("INDstocks: no scrip-code for '%s'", sym)
+            logger.warning("INDstocks: no scrip-code for '%s', skipping quote", sym)
 
     if not sym_to_scrip:
         return {}
@@ -250,7 +284,7 @@ def _get_bulk_quotes_indstocks(symbols: List[str]) -> Dict[str, Dict]:
                 }
         except Exception as exc:
             logger.warning("INDstocks full quote batch failed: %s", exc)
-            # fallback to LTP-only
+            # Fallback to LTP-only shape
             from app.core.broker.indstocks.market_data import fetch_ltp_by_symbol
             ltps = fetch_ltp_by_symbol(batch_syms)
             for sym_upper, price in ltps.items():
@@ -269,10 +303,33 @@ def fetch_spot(underlying: str) -> Optional[float]:
     """
     Fetch live spot price for an index/underlying.
     Returns None if unavailable (caller should fall back to candle close).
+    Does NOT raise — spot price is best-effort.
     """
     try:
         prices = fetch_ltp([underlying])
         return prices.get(underlying)
+    except BrokerUnsupportedError as exc:
+        logger.warning("fetch_spot: broker does not support live LTP — %s", exc)
+        return None
     except Exception as exc:
         logger.warning("fetch_spot failed for %s: %s", underlying, exc)
         return None
+
+
+# ── Broker info helpers ────────────────────────────────────────────────────
+
+def get_broker_info() -> Dict:
+    """Return current broker configuration for diagnostics/UI."""
+    broker = get_data_broker()
+    try:
+        caps = get_registry().get(broker)
+        return {
+            "data_broker": broker,
+            "display_name": caps.display_name,
+            "historical_data": caps.historical_data,
+            "live_ltp": caps.live_ltp,
+            "live_quotes": caps.live_quotes,
+            "market_depth": caps.market_depth,
+        }
+    except BrokerUnsupportedError:
+        return {"data_broker": broker, "error": f"Broker '{broker}' is not registered"}

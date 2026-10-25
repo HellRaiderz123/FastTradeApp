@@ -350,13 +350,63 @@ async def call_llm_async(
 
 
 def extract_json(text: str) -> Optional[dict]:
-    """Extract the first JSON object from an LLM response string."""
+    """Extract the first JSON object from an LLM response string.
+    
+    Handles nested objects and arrays properly by finding matching braces.
+    """
     if not text:
         return None
+    
+    # First, try to parse the entire text as JSON (common case)
+    text = text.strip()
+    if text.startswith('{'):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+    
+    # Find the first '{' and match braces to find the complete JSON object
+    start_idx = text.find('{')
+    if start_idx == -1:
+        return None
+    
+    # Track brace depth to find matching closing brace
+    depth = 0
+    in_string = False
+    escape_next = False
+    
+    for i, char in enumerate(text[start_idx:], start=start_idx):
+        if escape_next:
+            escape_next = False
+            continue
+        if char == '\\':
+            escape_next = True
+            continue
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                # Found complete JSON object
+                json_str = text[start_idx:i + 1]
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    # Try to clean up common issues
+                    pass
+                break
+    
+    # Fallback: try regex for simple flat objects
     match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+    
+    return None

@@ -3693,7 +3693,7 @@ async def backfill_candles_for_strategy(
 @router.post("/backfill-candles")
 async def backfill_candles_manual(
     timeframe: str = Query(default="1 Hour", description="Timeframe: 1 Min, 5 Min, 15 Min, 1 Hour, Day"),
-    symbols: str = Query(default="", description="Comma-separated symbols, or empty for NIFTY50"),
+    symbols: str = Query(default="", description="Comma-separated symbols, or empty for NIFTY500"),
     days: int = Query(default=30, ge=1, le=900, description="Number of days to fetch"),
     db: Session = Depends(get_db),
 ):
@@ -3712,7 +3712,7 @@ async def backfill_candles_manual(
     if symbols.strip():
         sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     else:
-        sym_list = get_symbols("NIFTY50")
+        sym_list = get_symbols("NIFTY500")
 
     success = 0
     failed = 0

@@ -4,8 +4,6 @@ from typing import Dict, Any
 from app.core.execution.base import ExecutionAdapter, get_ticket
 from app.core.market.ltp import get_ltp
 from app.core.utils.time import now_ist
-from app.core.broker.zerodha.client import get_kite_client
-from app.core.execution.zerodha import ZerodhaExecutionAdapter
 
 
 class PaperExecutionAdapter(ExecutionAdapter):
@@ -33,16 +31,21 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
     def estimate_margin_required(self, intent, entry_credit_total: float | None = None) -> float:
         """
-        Estimate broker-style margin for paper trades so the UI can show a
-        realistic capital block / return-on-margin similar to Zerodha.
+        Estimate broker-style margin for paper trades.
+        Uses the active broker's margin API if available, otherwise estimates from spread width.
         """
-        try:
-            kite = get_kite_client()
-            margin = ZerodhaExecutionAdapter(kite_client=kite, dry_run=True).calculate_margin_required(intent)
-            if margin and float(margin) > 0:
-                return round(float(margin), 2)
-        except Exception:
-            pass
+        from app.core.broker.registry import get_active_broker, get_registry
+        broker = get_active_broker()
+        if get_registry().supports(broker, "margin_calculation"):
+            try:
+                from app.core.broker.zerodha.client import get_kite_client
+                from app.core.execution.zerodha import ZerodhaExecutionAdapter
+                kite = get_kite_client()
+                margin = ZerodhaExecutionAdapter(kite_client=kite, dry_run=True).calculate_margin_required(intent)
+                if margin and float(margin) > 0:
+                    return round(float(margin), 2)
+            except Exception:
+                pass
 
         try:
             ticket = get_ticket(intent)

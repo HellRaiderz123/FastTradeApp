@@ -121,21 +121,21 @@ def _build_lstm_model(seq_length: int, n_features: int) -> "Sequential":
     from tensorflow.keras.regularizers import l2
     model = Sequential([
         Input(shape=(seq_length, n_features)),
-        LSTM(32, return_sequences=True, dropout=0.3, recurrent_dropout=0.2,
-             kernel_regularizer=l2(1e-4)),
+        LSTM(48, return_sequences=True, dropout=0.25, recurrent_dropout=0.15,
+             kernel_regularizer=l2(5e-5)),
         LayerNormalization(),
 
-        LSTM(16, return_sequences=False, dropout=0.3, recurrent_dropout=0.2,
-             kernel_regularizer=l2(1e-4)),
+        LSTM(24, return_sequences=False, dropout=0.25, recurrent_dropout=0.15,
+             kernel_regularizer=l2(5e-5)),
         LayerNormalization(),
 
-        Dense(8, activation='relu', kernel_regularizer=l2(1e-4)),
-        Dropout(0.3),
+        Dense(16, activation='relu', kernel_regularizer=l2(5e-5)),
+        Dropout(0.2),
         Dense(1, activation='sigmoid')
     ])
 
     model.compile(
-        optimizer=Adam(learning_rate=0.001, clipnorm=1.0),
+        optimizer=Adam(learning_rate=0.0008, clipnorm=1.0),
         loss='binary_crossentropy',
         metrics=['accuracy', tf.keras.metrics.AUC(name='roc_auc')]
     )
@@ -143,21 +143,26 @@ def _build_lstm_model(seq_length: int, n_features: int) -> "Sequential":
 
 
 def _optimize_threshold_on_val(y_val: np.ndarray, y_proba_val: np.ndarray) -> float:
-    """Find threshold maximising F1 on val set.
-    Pred rate must be 15-55%. Prefers higher precision on ties.
+    """Find threshold maximising balanced F1 on val set.
+    Pred rate must be 20-55%. Requires minimum recall of 25%.
     Falls back to 0.45 if no valid threshold found.
     """
-    best_t, best_f1, best_p = 0.45, 0.0, 0.0
-    for t in np.arange(0.30, 0.75, 0.01):
+    best_t, best_score = 0.45, 0.0
+    for t in np.arange(0.30, 0.65, 0.01):
         preds = (y_proba_val >= t).astype(int)
         rate = preds.mean()
-        if rate < 0.15 or rate > 0.55:
+        if rate < 0.20 or rate > 0.55:
             continue
         p = precision_score(y_val, preds, zero_division=0)
         r = recall_score(y_val, preds, zero_division=0)
+        if r < 0.25:  # Minimum recall requirement
+            continue
         f1 = f1_score(y_val, preds, zero_division=0)
-        if f1 > best_f1 or (f1 == best_f1 and p > best_p):
-            best_f1, best_p, best_t = f1, p, t
+        # Balanced score: F1 with penalty for precision-recall imbalance
+        balance_penalty = abs(p - r) * 0.2
+        score = f1 - balance_penalty
+        if score > best_score:
+            best_score, best_t = score, t
     return round(float(best_t), 3)
 
 
@@ -186,11 +191,13 @@ def train_lstm_model(
 
     logger.info(f"Sequences -> Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
 
-    # Balanced class weighting
+    # Balanced class weighting with cap to prevent over-correction
     n_pos = np.sum(y_train == 1)
     n_neg = np.sum(y_train == 0)
     total = len(y_train)
-    class_weight = {0: total / (2.0 * max(n_neg, 1)), 1: total / (2.0 * max(n_pos, 1))}
+    # Cap weight ratio to prevent extreme over-correction
+    weight_ratio = min(n_neg / max(n_pos, 1), 2.0)
+    class_weight = {0: 1.0, 1: weight_ratio}
 
     model = _build_lstm_model(seq_length, len(FEATURE_COLUMNS))
     
