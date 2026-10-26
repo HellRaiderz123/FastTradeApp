@@ -89,6 +89,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/ml', icon: Brain, label: 'ML Center' },
       { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
       { path: '/ai-analysis', icon: BarChart3, label: 'AI Analysis' },
+      { path: '/quant-bot', icon: Activity, label: 'Quant Bot' },
       { path: '/signal-reconciliation', icon: RefreshCw, label: 'Signal Reconciliation' },
     ],
   },

@@ -5,6 +5,7 @@ Phase 5: FastAPI endpoints for CashQuantReport and OptionsQuantReport.
 """
 
 import logging
+import math
 from datetime import date
 from typing import Any, Dict, Optional
 
@@ -12,11 +13,27 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
+from app.db.session import SessionLocal
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _sanitize_float(value: float, default: float = 0.0) -> float:
+    """Sanitize float values - replace inf/nan with default."""
+    if value is None or math.isnan(value) or math.isinf(value):
+        return default
+    return value
+
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/quant", tags=["Quantitative Analysis"])
+router = APIRouter(prefix="/quant", tags=["Quantitative Analysis"])
 
 
 class CashQuantResponse(BaseModel):
@@ -181,27 +198,27 @@ async def get_cash_quant_report(
         return CashQuantResponse(
             symbol=report.symbol,
             timestamp=report.timestamp.isoformat(),
-            orb_high=report.orb_high,
-            orb_low=report.orb_low,
+            orb_high=_sanitize_float(report.orb_high),
+            orb_low=_sanitize_float(report.orb_low),
             orb_breakout=report.orb_breakout,
-            rvol=report.rvol,
+            rvol=_sanitize_float(report.rvol, 1.0),
             rvol_signal=report.rvol_signal,
-            vwap=report.vwap,
-            vwap_upper_1sd=report.vwap_upper_1sd,
-            vwap_lower_1sd=report.vwap_lower_1sd,
-            vwap_upper_2sd=report.vwap_upper_2sd,
-            vwap_lower_2sd=report.vwap_lower_2sd,
+            vwap=_sanitize_float(report.vwap),
+            vwap_upper_1sd=_sanitize_float(report.vwap_upper_1sd),
+            vwap_lower_1sd=_sanitize_float(report.vwap_lower_1sd),
+            vwap_upper_2sd=_sanitize_float(report.vwap_upper_2sd),
+            vwap_lower_2sd=_sanitize_float(report.vwap_lower_2sd),
             price_vs_vwap=report.price_vs_vwap,
-            rs_vs_nifty_5d=report.rs_vs_nifty_5d,
-            rs_vs_sector_5d=report.rs_vs_sector_5d,
-            hurst_exponent=report.hurst_exponent,
+            rs_vs_nifty_5d=_sanitize_float(report.rs_vs_nifty_5d),
+            rs_vs_sector_5d=_sanitize_float(report.rs_vs_sector_5d),
+            hurst_exponent=_sanitize_float(report.hurst_exponent, 0.5),
             regime=report.regime,
-            zscore_20=report.zscore_20,
-            bb_width_percentile=report.bb_width_percentile,
-            atr_14=report.atr_14,
-            suggested_stop_loss=report.suggested_stop_loss,
+            zscore_20=_sanitize_float(report.zscore_20),
+            bb_width_percentile=_sanitize_float(report.bb_width_percentile, 50.0),
+            atr_14=_sanitize_float(report.atr_14),
+            suggested_stop_loss=_sanitize_float(report.suggested_stop_loss),
             position_size_lots=report.position_size_lots,
-            delivery_pct=report.delivery_pct,
+            delivery_pct=_sanitize_float(report.delivery_pct),
             institutional_accumulation=report.institutional_accumulation,
         )
         
@@ -225,15 +242,14 @@ async def get_options_quant_report(
     try:
         from app.services.quant_bots import get_options_quant_bot
         from app.services.indian_market_data_service import get_nse_option_chain_sync
-        from app.services.zerodha import KiteConnectService
+        from app.core.market.provider import fetch_ltp
         
         symbol = symbol.upper()
         bot = get_options_quant_bot()
         
-        # Get spot price
-        kite = KiteConnectService()
-        quote = kite.get_full_quote(symbol)
-        spot = float(quote.get("last_price", 0)) if quote else 0.0
+        # Get spot price using configured data broker
+        ltp_data = fetch_ltp([symbol])
+        spot = ltp_data.get(symbol, 0.0)
         
         if spot <= 0:
             raise HTTPException(status_code=400, detail=f"Could not fetch spot price for {symbol}")
@@ -299,26 +315,26 @@ async def get_options_quant_report(
         
         return OptionsQuantResponse(
             underlying=report.underlying,
-            spot=report.spot,
+            spot=_sanitize_float(report.spot),
             timestamp=report.timestamp.isoformat(),
-            atm_strike=report.atm_strike,
-            atm_ce_delta=report.atm_ce_delta,
-            atm_ce_gamma=report.atm_ce_gamma,
-            atm_ce_theta=report.atm_ce_theta,
-            atm_ce_vega=report.atm_ce_vega,
-            atm_pe_delta=report.atm_pe_delta,
-            atm_pe_gamma=report.atm_pe_gamma,
-            atm_pe_theta=report.atm_pe_theta,
-            atm_pe_vega=report.atm_pe_vega,
-            atm_iv=report.atm_iv,
-            iv_percentile=report.iv_percentile,
-            iv_rank=report.iv_rank,
-            pcr_oi=report.pcr_oi,
-            pcr_change_oi=report.pcr_change_oi,
-            max_pain=report.max_pain,
-            call_wall=report.call_wall,
-            put_wall=report.put_wall,
-            net_gex=report.net_gex,
+            atm_strike=_sanitize_float(report.atm_strike),
+            atm_ce_delta=_sanitize_float(report.atm_ce_delta),
+            atm_ce_gamma=_sanitize_float(report.atm_ce_gamma),
+            atm_ce_theta=_sanitize_float(report.atm_ce_theta),
+            atm_ce_vega=_sanitize_float(report.atm_ce_vega),
+            atm_pe_delta=_sanitize_float(report.atm_pe_delta),
+            atm_pe_gamma=_sanitize_float(report.atm_pe_gamma),
+            atm_pe_theta=_sanitize_float(report.atm_pe_theta),
+            atm_pe_vega=_sanitize_float(report.atm_pe_vega),
+            atm_iv=_sanitize_float(report.atm_iv),
+            iv_percentile=_sanitize_float(report.iv_percentile, 50.0),
+            iv_rank=_sanitize_float(report.iv_rank, 50.0),
+            pcr_oi=_sanitize_float(report.pcr_oi, 1.0),
+            pcr_change_oi=_sanitize_float(report.pcr_change_oi, 1.0),
+            max_pain=_sanitize_float(report.max_pain),
+            call_wall=_sanitize_float(report.call_wall),
+            put_wall=_sanitize_float(report.put_wall),
+            net_gex=_sanitize_float(report.net_gex),
             gex_regime=report.gex_regime,
             recommended_structure=report.recommended_structure,
             structure_rationale=report.structure_rationale,

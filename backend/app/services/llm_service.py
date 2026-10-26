@@ -58,7 +58,7 @@ LLM_MAX_RETRIES = max(int(os.getenv("LLM_MAX_RETRIES", "3") or 3), 0)
 LLM_RETRY_BASE_DELAY_SEC = max(float(os.getenv("LLM_RETRY_BASE_DELAY_SEC", "2.0") or 2.0), 0.1)
 
 # --- Circuit breaker ---
-_CIRCUIT_FAILURE_THRESHOLD = 3
+_CIRCUIT_FAILURE_THRESHOLD = 10
 _CIRCUIT_RECOVERY_SEC = 60.0
 _circuit_failures = 0
 _circuit_open_until = 0.0
@@ -150,7 +150,7 @@ def _do_chat_completion(
         return None, None, "LLM circuit breaker is open (recent failures)"
 
     last_error: str | None = None
-    http_timeout = httpx.Timeout(connect=5.0, read=min(timeout, 20.0), write=10.0, pool=5.0)
+    http_timeout = httpx.Timeout(connect=5.0, read=timeout, write=10.0, pool=5.0)
 
     with httpx.Client(timeout=http_timeout) as client:
         for model_name in get_model_candidates(preferred_model):
@@ -352,30 +352,41 @@ async def call_llm_async(
 def extract_json(text: str) -> Optional[dict]:
     """Extract the first JSON object from an LLM response string.
     
-    Handles nested objects and arrays properly by finding matching braces.
+    Handles markdown code fences, nested objects/arrays, trailing commas,
+    and truncated outputs (e.g. when LLM token limits are hit).
     """
     if not text:
         return None
     
-    # First, try to parse the entire text as JSON (common case)
-    text = text.strip()
-    if text.startswith('{'):
+    s = text.strip()
+
+    # Strip markdown code fences if present
+    if "```" in s:
+        fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', s, re.IGNORECASE)
+        if fence_match:
+            candidate = fence_match.group(1).strip()
+            if candidate.startswith('{'):
+                s = candidate
+
+    # 1. Direct parse attempt
+    if s.startswith('{'):
         try:
-            return json.loads(text)
+            parsed = json.loads(s)
+            if isinstance(parsed, dict):
+                return parsed
         except json.JSONDecodeError:
             pass
-    
-    # Find the first '{' and match braces to find the complete JSON object
-    start_idx = text.find('{')
+
+    # 2. Match braces to find complete JSON object
+    start_idx = s.find('{')
     if start_idx == -1:
         return None
-    
-    # Track brace depth to find matching closing brace
+
     depth = 0
     in_string = False
     escape_next = False
-    
-    for i, char in enumerate(text[start_idx:], start=start_idx):
+
+    for i, char in enumerate(s[start_idx:], start=start_idx):
         if escape_next:
             escape_next = False
             continue
@@ -392,21 +403,80 @@ def extract_json(text: str) -> Optional[dict]:
         elif char == '}':
             depth -= 1
             if depth == 0:
-                # Found complete JSON object
-                json_str = text[start_idx:i + 1]
+                json_str = s[start_idx:i + 1]
                 try:
-                    return json.loads(json_str)
+                    parsed = json.loads(json_str)
+                    if isinstance(parsed, dict):
+                        return parsed
                 except json.JSONDecodeError:
-                    # Try to clean up common issues
-                    pass
+                    cleaned = re.sub(r',\s*([}\]])', r'\1', json_str)
+                    try:
+                        parsed = json.loads(cleaned)
+                        if isinstance(parsed, dict):
+                            return parsed
+                    except json.JSONDecodeError:
+                        pass
                 break
-    
-    # Fallback: try regex for simple flat objects
-    match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+
+    # 3. Fallback regex for simple complete object
+    match = re.search(r'\{[^{}]*\}', s, re.DOTALL)
     if match:
         try:
-            return json.loads(match.group(0))
+            parsed = json.loads(match.group(0))
+            if isinstance(parsed, dict):
+                return parsed
         except json.JSONDecodeError:
             pass
-    
+
+    # 4. Truncated JSON auto-repair (handles mid-generation cutoff)
+    sub = s[start_idx:].strip()
+    stack = []
+    in_str = False
+    esc = False
+    for char in sub:
+        if esc:
+            esc = False
+            continue
+        if char == '\\':
+            esc = True
+            continue
+        if char == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if char in ('{', '['):
+            stack.append(char)
+        elif char == '}':
+            if stack and stack[-1] == '{':
+                stack.pop()
+        elif char == ']':
+            if stack and stack[-1] == '[':
+                stack.pop()
+
+    repaired = sub
+    if in_str:
+        repaired += '"'
+
+    repaired = re.sub(r',\s*"[^"]*"\s*:\s*$', '', repaired)
+    repaired = re.sub(r',\s*"[^"]*"\s*$', '', repaired)
+    repaired = re.sub(r',\s*$', '', repaired.strip())
+
+    while stack:
+        open_c = stack.pop()
+        if open_c == '{':
+            repaired += '}'
+        elif open_c == '[':
+            repaired += ']'
+
+    repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+
+    try:
+        parsed = json.loads(repaired)
+        if isinstance(parsed, dict):
+            logger.info("extract_json: successfully auto-repaired truncated JSON")
+            return parsed
+    except Exception:
+        pass
+
     return None

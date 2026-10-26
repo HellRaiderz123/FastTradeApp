@@ -552,7 +552,7 @@ def get_indmoney_settings():
 @router.post("/indmoney/token")
 def save_indmoney_token(token: INDMoneyAccessToken):
     """
-    Save INDMoney access token to .env file.
+    Save INDMoney access token to database AND .env file.
     
     Get your token from: https://indstocks.com/app/api-trading
     
@@ -569,17 +569,46 @@ def save_indmoney_token(token: INDMoneyAccessToken):
                 detail="Access token cannot be empty"
             )
         
-        # Save to .env file
-        set_key(str(ENV_FILE), "INDMONEY_ACCESS_TOKEN", token.access_token)
+        # Save to database (primary storage)
+        from datetime import timedelta
+        from app.db.models_indmoney import INDMoneySession
+        from app.core.utils.time import now_ist
         
-        # Update environment variable
+        db = SessionLocal()
+        try:
+            # Deactivate all existing sessions
+            db.query(INDMoneySession).filter(INDMoneySession.is_active == 1).update({"is_active": 0})
+            
+            # Check if token already exists
+            existing = db.query(INDMoneySession).filter(INDMoneySession.access_token == token.access_token).first()
+            expires_at = now_ist() + timedelta(days=1)
+            
+            if existing:
+                existing.is_active = 1
+                existing.expires_at = expires_at
+            else:
+                session = INDMoneySession(
+                    access_token=token.access_token,
+                    expires_at=expires_at,
+                    is_active=1,
+                )
+                db.add(session)
+            
+            db.commit()
+        finally:
+            db.close()
+        
+        # Also save to .env file as fallback
+        set_key(str(ENV_FILE), "INDMONEY_ACCESS_TOKEN", token.access_token)
         os.environ["INDMONEY_ACCESS_TOKEN"] = token.access_token
         
-        logger.info("INDMoney access token updated successfully")
+        logger.info("INDMoney access token saved to DB and .env")
         return {
             "status": "success",
             "message": "INDMoney access token saved successfully"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error saving INDMoney token: {str(e)}")
         raise HTTPException(

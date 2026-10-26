@@ -1,8 +1,8 @@
 import AIAnalysis from './AIAnalysis';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Bot, User, Loader2, CheckCircle, XCircle, Zap, BarChart3, ClipboardList, Target, ArrowRight, Mic, MicOff, Volume2, VolumeX, ShieldAlert, Newspaper, TrendingUp, ChevronDown, ChevronUp, RefreshCw, Radio, Activity, Cpu, Gauge, Sparkles } from 'lucide-react';
-import axios from 'axios';
-import api from '../lib/api';
+
+import api, { authTokenStore } from '../lib/api';
 import { AnimatePresence, motion } from 'framer-motion';
 
 interface TableRow { [key: string]: string }
@@ -567,9 +567,9 @@ function NewsRadarPanel() {
     setFetching(true);
     try {
       const [feedResp, trendResp, alertResp] = await Promise.all([
-        axios.get('/api/news/feed').catch(() => ({ data: {} })),
-        axios.get('/api/news/trending').catch(() => ({ data: {} })),
-        axios.get('/api/news/alerts').catch(() => ({ data: {} })),
+        api.get('/news/feed').catch(() => ({ data: {} })),
+        api.get('/news/trending').catch(() => ({ data: {} })),
+        api.get('/news/alerts').catch(() => ({ data: {} })),
       ]);
       const newsItems: NewsHeadline[] = feedResp.data.news || [];
       const trendItems: TrendingTopic[] = trendResp.data.topics || [];
@@ -592,7 +592,9 @@ function NewsRadarPanel() {
   useEffect(() => {
     if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
 
-    const stream = new EventSource('/api/news/stream?limit=12&interval_seconds=15');
+    const token = authTokenStore.get();
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    const stream = new EventSource(`/api/news/stream?limit=12&interval_seconds=15${tokenParam}`);
 
     const onNews = (event: MessageEvent) => {
       try {

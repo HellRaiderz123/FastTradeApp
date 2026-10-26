@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime, timedelta, date
@@ -27,6 +27,22 @@ from app.services.llm_service import get_model_candidates, request_chat_completi
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai-chat", tags=["AI Chat"])
+
+INTERNAL_API_BASE = os.getenv("INTERNAL_API_BASE", "http://localhost:8000").rstrip("/")
+
+
+def _get_internal_auth_headers(auth_token: str | None = None) -> dict[str, str]:
+    token = auth_token
+    if not token:
+        try:
+            from app.core.auth import create_access_token
+            token = create_access_token("internal_ai_chat")["access_token"]
+        except Exception as ex:
+            logger.warning("Could not generate internal auth token: %s", ex)
+            token = None
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
 
 # ── LLM provider config ────────────────────────────────────────────────────
 # Default: Groq (free, fast — get key at console.groq.com)
@@ -1102,7 +1118,7 @@ TOOLS = [
 
 # ── Tool executor ──────────────────────────────────────────────────────────
 
-def _execute_tool(name: str, args: dict, db: Session) -> dict:
+def _execute_tool(name: str, args: dict, db: Session, auth_token: str | None = None) -> dict:
     """Execute a single tool call and return a result dict."""
     try:
         if name == "create_budget":
@@ -1223,7 +1239,8 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
         elif name == "get_market_sentiment":
             try:
                 resp = httpx.get(
-                    "http://localhost:8000/sentiment/overall",
+                    f"{INTERNAL_API_BASE}/sentiment/overall",
+                    headers=_get_internal_auth_headers(auth_token),
                     timeout=20.0,
                 )
                 if resp.status_code != 200:
@@ -1251,10 +1268,8 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
             limit = max(1, min(int(args.get("limit", 8)), 20))
             keyword = str(args.get("keyword") or "").strip().lower()
             try:
-                feed_resp = httpx.get(
-                    f"http://localhost:8000/news/feed?limit={limit}",
-                    timeout=20.0,
-                )
+
+                feed_resp = httpx.get(f"{INTERNAL_API_BASE}/news/feed?limit={limit}", headers=_get_internal_auth_headers(auth_token), timeout=20.0)
                 if feed_resp.status_code != 200:
                     return {"success": False, "error": f"News API returned HTTP {feed_resp.status_code}"}
 
@@ -1292,7 +1307,8 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
 
                 trending_topics = []
                 try:
-                    trending_resp = httpx.get("http://localhost:8000/news/trending", timeout=10.0)
+    
+                    trending_resp = httpx.get(f"{INTERNAL_API_BASE}/news/trending", headers=_get_internal_auth_headers(auth_token), timeout=10.0)
                     if trending_resp.status_code == 200 and isinstance(trending_resp.json(), dict):
                         trending_topics = (trending_resp.json().get("topics") or [])[:5]
                 except Exception:
@@ -1600,7 +1616,8 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
 
             market_sentiment = {}
             try:
-                resp = httpx.get("http://localhost:8000/sentiment/overall", timeout=15.0)
+
+                resp = httpx.get(f"{INTERNAL_API_BASE}/sentiment/overall", headers=_get_internal_auth_headers(auth_token), timeout=15.0)
                 if resp.status_code == 200 and isinstance(resp.json(), dict):
                     raw = resp.json()
                     market_sentiment = {
@@ -1935,8 +1952,10 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
             if not strategy:
                 return {"success": False, "error": f"No scanner strategy matching '{args['strategy_name']}'. Check available strategies."}
             try:
+
                 resp = httpx.post(
-                    f"http://localhost:8000/condition-scanner/scan/{strategy.id}",
+                    f"{INTERNAL_API_BASE}/condition-scanner/scan/{strategy.id}",
+                    headers=_get_internal_auth_headers(auth_token),
                     timeout=60.0,
                 )
                 if resp.status_code == 200:
@@ -1984,8 +2003,10 @@ def _execute_tool(name: str, args: dict, db: Session) -> dict:
                     intent = open_positions[0]
 
             try:
+
                 resp = httpx.post(
-                    f"http://localhost:8000/exit/manual/{intent.intent_id}",
+                    f"{INTERNAL_API_BASE}/exit/manual/{intent.intent_id}",
+                    headers=_get_internal_auth_headers(auth_token),
                     timeout=30.0,
                 )
                 if resp.status_code == 200:
@@ -2418,6 +2439,7 @@ def _call_llm(
     db: Session,
     voice_mode: bool = False,
     assistant_style: str | None = None,
+    auth_token: str | None = None,
 ) -> tuple[str, list]:
     """
     Run the LLM with agentic tool support.
@@ -2498,7 +2520,7 @@ JARVIS VOICE MODE:
                     tool_args = {}
 
                 logger.info("AI tool call via %s: %s(%s)", model_used or LLM_MODEL, tool_name, tool_args)
-                result = _execute_tool(tool_name, tool_args, db)
+                result = _execute_tool(tool_name, tool_args, db, auth_token=auth_token)
                 actions_taken.append({"tool": tool_name, "args": tool_args, "result": result, "model": model_used})
 
                 messages.append({
@@ -2550,14 +2572,16 @@ JARVIS VOICE MODE:
 
 
 @router.post("/query")
-def chat_query(req: ChatRequest, db: Session = Depends(get_db)):
+def chat_query(req: ChatRequest, request: Request, db: Session = Depends(get_db)):
     try:
         voice_mode = bool(req.voice_mode) or (req.assistant_style or "").strip().lower() == "jarvis"
+        auth_header = request.headers.get("authorization") or ""
+        auth_token = auth_header.split(" ", 1)[1].strip() if auth_header.lower().startswith("bearer ") else None
 
         direct_action = _extract_direct_ai_action(req.message)
         if direct_action:
             tool_name, tool_args = direct_action
-            result = _execute_tool(tool_name, tool_args, db)
+            result = _execute_tool(tool_name, tool_args, db, auth_token=auth_token)
             actions = [{"tool": tool_name, "args": tool_args, "result": result}]
             answer = _summarize_direct_action(tool_name, result, voice_mode=voice_mode)
             return {"ok": True, "answer": answer, "actions": actions}
@@ -2568,6 +2592,7 @@ def chat_query(req: ChatRequest, db: Session = Depends(get_db)):
             db,
             voice_mode=voice_mode,
             assistant_style=req.assistant_style,
+            auth_token=auth_token,
         )
         return {"ok": True, "answer": answer, "actions": actions}
     except Exception as e:

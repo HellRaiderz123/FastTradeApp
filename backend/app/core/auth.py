@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
-from fastapi import Depends, HTTPException, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 logger = logging.getLogger(__name__)
@@ -122,18 +122,25 @@ def verify_login_credentials(username: str, password: str) -> bool:
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> Dict[str, Any]:
     if not _is_auth_enabled():
         return {"username": "anonymous", "auth_enabled": False}
 
-    if credentials is None or not credentials.credentials:
+    token = None
+    if credentials and credentials.credentials:
+        token = credentials.credentials
+    elif request is not None:
+        token = request.query_params.get("token")
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
 
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_access_token(token)
     return {
         "username": payload["sub"],
         "auth_enabled": True,

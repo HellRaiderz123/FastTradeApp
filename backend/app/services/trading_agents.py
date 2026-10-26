@@ -450,7 +450,7 @@ def _generate_reflection(row: Any, actual_return: float, correct: int) -> Option
             f"{abs(actual_return):.1f}% — making the call {outcome_word}. "
             "Write one concise sentence reflecting on what the analysis got right or wrong."
         )
-        return call_llm(prompt, max_tokens=120, temperature=0.3, timeout=20.0)
+        return call_llm(prompt, max_tokens=200, temperature=0.3, timeout=20.0)
     except Exception:
         return None
 
@@ -739,7 +739,19 @@ def _compute_indicators(candles: list[dict], timeframe: str = "15m") -> dict:
     Falls back to a minimal summary dict if candles are insufficient.
     """
     if not candles:
-        return {"available": False, "summary": "No candle data available."}
+        return {
+            "available": False,
+            "summary": "No candle data available in database for this symbol.",
+            "trend": "SIDEWAYS",
+            "rsi14": None,
+            "ema20": None,
+            "ema50": None,
+            "macd_line": None,
+            "support": None,
+            "resistance": None,
+            "volume_signal": "UNKNOWN",
+            "bars_analysed": 0,
+        }
 
     try:
         from app.core.signals.ta_engine import (
@@ -846,7 +858,7 @@ def _llm_agent(
         system_prompt=system_prompt,
         max_tokens=max_tokens,
         temperature=0.15,
-        timeout=45.0,
+        timeout=60.0,
     )
     if not raw:
         logger.warning("%s: LLM returned empty response", agent_name)
@@ -873,7 +885,7 @@ def _run_technical_agent(symbol: str, indicators: dict, multi_tf: Optional[dict]
     system = (
         "You are a senior technical analyst for Indian equity markets (NSE/BSE). "
         "Analyse the provided multi-timeframe price data and indicator values. "
-        "Always respond with a single valid JSON object and nothing else."
+        "Keep rationale and explanations concise (under 2-3 sentences max). Always respond with a single valid JSON object and nothing else."
     )
     tf_section = ""
     if multi_tf:
@@ -902,7 +914,7 @@ def _run_technical_agent(symbol: str, indicators: dict, multi_tf: Optional[dict]
         '"mtf_alignment": "ALIGNED_BULL|ALIGNED_BEAR|MIXED|UNAVAILABLE", '
         '"summary": "2-3 sentence technical outlook including multi-timeframe view"}'
     )
-    return _llm_agent("TechnicalAnalyst", system, user, max_tokens=500)
+    return _llm_agent("TechnicalAnalyst", system, user, max_tokens=800)
 
 
 def _run_news_agent(symbol: str, news_items: list[dict]) -> dict:
@@ -926,7 +938,7 @@ def _run_news_agent(symbol: str, news_items: list[dict]) -> dict:
         '"news_impact": "POSITIVE|NEGATIVE|NEUTRAL", '
         '"summary": "2-3 sentence news outlook for this symbol"}'
     )
-    return _llm_agent("NewsAnalyst", system, user, max_tokens=400)
+    return _llm_agent("NewsAnalyst", system, user, max_tokens=800)
 
 
 def _run_sentiment_agent(symbol: str, vix: Optional[float], twitter: Optional[dict]) -> dict:
@@ -955,7 +967,7 @@ def _run_sentiment_agent(symbol: str, vix: Optional[float], twitter: Optional[di
         '"overall_sentiment": "BULLISH|BEARISH|NEUTRAL", '
         '"summary": "2-3 sentence sentiment outlook"}'
     )
-    return _llm_agent("SentimentAnalyst", system, user, max_tokens=350)
+    return _llm_agent("SentimentAnalyst", system, user, max_tokens=750)
 
 
 def _run_bull_researcher(
@@ -993,7 +1005,7 @@ def _run_bull_researcher(
         '"suggested_action": "BUY|HOLD", '
         '"price_target_upside_pct": <number or null>}'
     )
-    return _llm_agent("BullResearcher", system, user, max_tokens=450)
+    return _llm_agent("BullResearcher", system, user, max_tokens=2000)
 
 
 def _run_bear_researcher(
@@ -1031,7 +1043,7 @@ def _run_bear_researcher(
         '"suggested_action": "SELL|HOLD", '
         '"price_target_downside_pct": <number or null>}'
     )
-    return _llm_agent("BearResearcher", system, user, max_tokens=450)
+    return _llm_agent("BearResearcher", system, user, max_tokens=2000)
 
 
 def _get_fundamental_data(symbol: str) -> dict:
@@ -1197,7 +1209,7 @@ def _run_fundamentals_analyst(
         '"fundamentals_signal": "BULLISH|NEUTRAL|BEARISH", '
         '"summary": "2-3 sentence fundamental outlook"}'
     )
-    return _llm_agent("FundamentalsAnalyst", system, user, max_tokens=450)
+    return _llm_agent("FundamentalsAnalyst", system, user, max_tokens=2000)
 
 
 def _run_trader_decision(
@@ -1252,7 +1264,7 @@ def _run_trader_decision(
         '"suggested_stop_loss_pct": <number or null>, '
         '"suggested_target_pct": <number or null>}'
     )
-    return _llm_agent("TraderDecision", system, user, max_tokens=600)
+    return _llm_agent("TraderDecision", system, user, max_tokens=2000)
 
 
 def _run_risk_manager(
@@ -1300,7 +1312,7 @@ def _run_risk_manager(
         '"hard_limits": ["..."], '
         '"summary": "2-3 sentence risk verdict"}'
     )
-    return _llm_agent("RiskManager", system, user, max_tokens=500)
+    return _llm_agent("RiskManager", system, user, max_tokens=2000)
 
 
 def _run_portfolio_manager(
@@ -1331,7 +1343,7 @@ def _run_portfolio_manager(
         '"reasons": ["..."], '
         '"summary": "2-3 sentence portfolio-level verdict"}'
     )
-    return _llm_agent("PortfolioManager", system, user, max_tokens=450)
+    return _llm_agent("PortfolioManager", system, user, max_tokens=2000)
 
 
 def _as_bool(value: Any, default: bool = True) -> bool:
@@ -1655,6 +1667,46 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str, debate_rounds
                 fundamentals_report,
                 history=history,
             )
+            # Guarantee minimum required fields so UI always renders something meaningful
+            if "action" not in decision or decision.get("error"):
+                logger.warning("TraderDecision: missing action field, applying safe fallback. Raw: %s", decision)
+                # Derive a sensible default from upstream signals
+                _tech_bias = (tech_report or {}).get("trend", "")
+                _bull_conf = float((bull_report or {}).get("bull_confidence") or 0)
+                _bear_conf = float((bear_report or {}).get("bear_confidence") or 0)
+                if _tech_bias in ("BULLISH", "UPTREND") and _bull_conf > _bear_conf:
+                    _fallback_action = "BUY"
+                    _fallback_conf = max(0.35, _bull_conf)
+                elif _tech_bias in ("BEARISH", "DOWNTREND") and _bear_conf > _bull_conf:
+                    _fallback_action = "SELL"
+                    _fallback_conf = max(0.35, _bear_conf)
+                else:
+                    _fallback_action = "HOLD"
+                    _fallback_conf = 0.3
+                _rationale = (
+                    (tech_report or {}).get("summary", "") or
+                    (news_report or {}).get("summary", "") or
+                    "Insufficient LLM data; falling back to indicator-based signal."
+                )
+                decision = {
+                    "action": _fallback_action,
+                    "confidence": round(_fallback_conf, 2),
+                    "conviction": "LOW",
+                    "rationale": _rationale,
+                    "key_factors": [
+                        f"Technical bias: {_tech_bias}",
+                        f"Bull confidence: {_bull_conf:.0%}",
+                        f"Bear confidence: {_bear_conf:.0%}",
+                    ],
+                    "time_horizon": "SWING",
+                    "risk_level": "HIGH",
+                    "suggested_stop_loss_pct": 2.0,
+                    "suggested_target_pct": 4.0,
+                    "_fallback": True,
+                }
+            # Normalise confidence: if model returns 0–100 scale, convert to 0–1
+            if isinstance(decision.get("confidence"), (int, float)) and decision["confidence"] > 1:
+                decision["confidence"] = round(decision["confidence"] / 100, 4)
             context["decision"] = decision
             if "trader_decision" not in steps_done:
                 steps_done.append("trader_decision")

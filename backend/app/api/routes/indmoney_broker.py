@@ -58,6 +58,59 @@ def indmoney_session_status(db: Session = Depends(_get_db)) -> Dict[str, Any]:
     return {"active": False}
 
 
+@router.post("/set-token")
+def indmoney_set_manual_token(
+    access_token: str = Body(..., description="Access token from INDstocks"),
+    client_id: str = Body(None, description="Optional client ID"),
+    db: Session = Depends(_get_db),
+) -> Dict[str, Any]:
+    """
+    Manually set an INDMoney access token.
+    
+    Use this when you have a token from another source (e.g., browser dev tools)
+    and want to use it without going through the TOTP login flow.
+    """
+    from datetime import timedelta
+    from app.db.models_indmoney import INDMoneySession
+    from app.core.utils.time import now_ist
+    
+    access_token = (access_token or "").strip()
+    if not access_token:
+        raise HTTPException(status_code=400, detail="access_token is required")
+    
+    # Deactivate all existing sessions
+    db.query(INDMoneySession).filter(INDMoneySession.is_active == 1).update({"is_active": 0})
+    
+    # Check if token already exists
+    existing = db.query(INDMoneySession).filter(INDMoneySession.access_token == access_token).first()
+    expires_at = now_ist() + timedelta(days=1)
+    
+    if existing:
+        existing.is_active = 1
+        existing.expires_at = expires_at
+        if client_id:
+            existing.client_id = client_id
+        session = existing
+    else:
+        session = INDMoneySession(
+            access_token=access_token,
+            client_id=client_id,
+            expires_at=expires_at,
+            is_active=1,
+        )
+        db.add(session)
+    
+    db.commit()
+    db.refresh(session)
+    
+    logger.info("INDMoney manual token set (client_id=%s)", client_id)
+    return {
+        "status": "ok",
+        "message": "Token set successfully",
+        "expires_at": session.expires_at.isoformat() if session.expires_at else None,
+    }
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)

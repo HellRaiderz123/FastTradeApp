@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import axios from 'axios';
+import { authTokenStore } from '@/lib/api';
 
 export interface QuoteData {
   ltp: number;
@@ -42,23 +43,38 @@ export function useRealtimeQuotes(symbols: string[], enabled: boolean = true) {
   const reconnectAttempts = useRef<number>(0);
   const symbolsKey = symbols.join(',');
 
+
   // ── Step 1: Fetch quotes via REST for instant first-paint ──
-  const fetchInitialQuotes = useCallback(async (symbolsList: string[]) => {
-    if (symbolsList.length === 0) return;
-    try {
-      const resp = await axios.get('/api/market/quotes/bulk', {
-        params: { symbols: symbolsList.join(',') },
-        timeout: 8000,
-      });
-      if (resp.data?.success && resp.data.data) {
-        setQuotes(prev => ({ ...prev, ...resp.data.data }));
-        setLoading(false);
-      }
-    } catch (err) {
-      console.warn('[useRealtimeQuotes] Initial REST fetch failed, waiting for WS:', err);
-      // Not fatal — WS will provide data
+const fetchInitialQuotes = useCallback(async (symbolsList: string[]) => {
+  if (!symbolsList || symbolsList.length === 0) {
+    setLoading(false);
+    return;
+  }
+
+  try {
+    const token = await authTokenStore.get();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
-  }, []);
+
+    const resp = await axios.get('/api/market/quotes/bulk', {
+      params: { symbols: symbolsList.join(',') },
+      timeout: 8000,
+      headers,
+    });
+
+    if (resp.data?.success && resp.data.data) {
+      // Merge REST response without overwriting newer state if keys already exist
+      setQuotes(prev => ({ ...resp.data.data, ...prev }));
+    }
+  } catch (err) {
+    console.warn('[useRealtimeQuotes] Initial REST fetch failed, waiting for WS:', err);
+    // Not fatal — WebSocket stream will provide live data
+  } finally {
+    setLoading(false);
+  }
+}, []);
 
   useEffect(() => {
     if (!enabled || symbols.length === 0) {

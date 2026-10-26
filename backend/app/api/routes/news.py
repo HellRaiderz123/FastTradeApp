@@ -4,6 +4,7 @@ Fetches real news from NSE RSS feeds (MoneyControl, Economic Times, Business Sta
 """
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from app.services.nse_news_service import NSENewsService
 from typing import Dict, List, Any
 from datetime import datetime
 from collections import Counter
@@ -321,3 +322,15 @@ async def get_market_alerts() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error fetching market alerts: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+nse_service = NSENewsService()
+
+@router.get("/nse/live")
+async def get_live_nse_news(
+    high_impact_only: bool = Query(default=True, description="Filter only high impact events")
+):
+    """Fetches real-time NSE filings and corporate announcements."""
+    items = await nse_service.fetch_nse_announcements()
+    if high_impact_only:
+        items = [item for item in items if item.is_high_impact]
+    return {"status": "success", "count": len(items), "data": items}

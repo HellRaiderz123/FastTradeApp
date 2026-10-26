@@ -267,6 +267,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
       const candidates: Timeframe[] = [timeframe, '15m', 'daily'];
       for (const tf of [...new Set(candidates)]) {
         const res = await marketAPI.getCandlesDB(symbol, tf, 300);
+        console.log('loadData - Tarun', symbol, tf, res);
         const data = Array.isArray(res.data) ? res.data : [];
         if (data.length > 0) { raw = data; break; }
       }

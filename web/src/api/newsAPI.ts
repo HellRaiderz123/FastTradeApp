@@ -1,9 +1,41 @@
+import { authTokenStore } from '@/lib/api';
 import axios from 'axios';
 
 const NEWS_API = axios.create({
   baseURL:(import.meta as any).env?.VITE_API_BASE ? `${(import.meta as any).env?.VITE_API_BASE}/news` : '/api/news',
   timeout: 15000,
 });
+
+// Attach Axios Request Interceptor
+NEWS_API.interceptors.request.use(
+  async (config) => {
+    try {
+      // 1. Fetch token asynchronously from your auth store
+      const token = await authTokenStore.get();
+      // const token = localStorage.getItem('access_token') || localStorage.getItem('token');
+
+      // 2. Safely attach Bearer token if present
+      if (token) {
+        // Axios v1.x supports config.headers.set or direct header access
+        if (config.headers && typeof config.headers.set === 'function') {
+          config.headers.set('Authorization', `Bearer ${token}`);
+        } else {
+          config.headers = config.headers || {};
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      }
+    } catch (err) {
+      // Avoid blocking the request completely if fetching token fails,
+      // or log/handle based on auth failure requirements
+      console.error('Failed to resolve auth token:', err);
+    }
+
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
 export interface NewsItem {
   title: string;
