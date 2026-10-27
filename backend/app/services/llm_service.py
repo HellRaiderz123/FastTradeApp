@@ -30,6 +30,68 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+def _log_ai_usage(
+    *,
+    caller: str | None,
+    model: str | None,
+    messages: list[dict],
+    response_json: dict | None,
+    error: str | None,
+    latency_ms: float,
+) -> None:
+    """Persist one row to ai_usage_logs. Runs in the LLM thread — never raises."""
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models_ai_log import AIUsageLog
+
+        system_text = next(
+            (m.get("content") for m in messages if m.get("role") == "system"), None
+        )
+        user_text = next(
+            (m.get("content") for m in reversed(messages) if m.get("role") == "user"), None
+        )
+
+        response_text: str | None = None
+        finish_reason: str | None = None
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
+        total_tokens: int | None = None
+
+        if response_json:
+            try:
+                choice = response_json["choices"][0]
+                response_text = (choice.get("message") or {}).get("content")
+                finish_reason = choice.get("finish_reason")
+            except Exception:
+                pass
+            usage = response_json.get("usage") or {}
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            total_tokens = usage.get("total_tokens")
+
+        db = SessionLocal()
+        try:
+            row = AIUsageLog(
+                caller=caller,
+                model=model,
+                system_prompt=(system_text or "")[:4000] if system_text else None,
+                user_prompt=(user_text or "")[:8000] if user_text else None,
+                response_text=(response_text or "")[:8000] if response_text else None,
+                finish_reason=finish_reason or ("error" if error else None),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                latency_ms=round(latency_ms, 1),
+                error=(error or "")[:2000] if error else None,
+            )
+            db.add(row)
+            db.commit()
+        finally:
+            db.close()
+    except Exception as _log_err:
+        logger.debug("AI usage log write failed: %s", _log_err)
+
 # --- Dedicated thread pool for LLM calls (isolated from main app threads) ---
 _LLM_POOL_SIZE = int(os.getenv("LLM_THREAD_POOL_SIZE", "3"))
 _llm_executor = ThreadPoolExecutor(max_workers=_LLM_POOL_SIZE, thread_name_prefix="llm")
@@ -141,6 +203,7 @@ def _do_chat_completion(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any | None = None,
     preferred_model: str | None = None,
+    caller: str | None = None,
 ) -> tuple[Optional[dict], Optional[str], Optional[str]]:
     """Internal: runs the actual HTTP call. Always executed inside _llm_executor."""
     if not LLM_API_KEY:
@@ -170,6 +233,7 @@ def _do_chat_completion(
             for attempt in range(1, LLM_MAX_RETRIES + 2):
                 try:
                     _wait_for_rate_limit()
+                    t0 = time.monotonic()
                     resp = client.post(
                         f"{LLM_BASE_URL}/chat/completions",
                         headers={
@@ -178,9 +242,19 @@ def _do_chat_completion(
                         },
                         json=payload,
                     )
+                    latency_ms = (time.monotonic() - t0) * 1000
                     resp.raise_for_status()
                     _circuit_record_success()
-                    return resp.json(), model_name, None
+                    result_json = resp.json()
+                    _log_ai_usage(
+                        caller=caller,
+                        model=model_name,
+                        messages=messages,
+                        response_json=result_json,
+                        error=None,
+                        latency_ms=latency_ms,
+                    )
+                    return result_json, model_name, None
                 except httpx.HTTPStatusError as e:
                     if e.response.status_code == 429:
                         last_error = f"429 Too Many Requests for model {model_name}"
@@ -206,6 +280,14 @@ def _do_chat_completion(
                     break
 
     _circuit_record_failure()
+    _log_ai_usage(
+        caller=caller,
+        model=preferred_model or LLM_MODEL,
+        messages=messages,
+        response_json=None,
+        error=last_error,
+        latency_ms=0.0,
+    )
     return None, None, last_error
 
 
@@ -218,6 +300,7 @@ def request_chat_completion(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any | None = None,
     preferred_model: str | None = None,
+    caller: str | None = None,
 ) -> tuple[Optional[dict], Optional[str], Optional[str]]:
     """Make a chat completion request. Runs in dedicated LLM thread pool."""
     future = _llm_executor.submit(
@@ -229,6 +312,7 @@ def request_chat_completion(
         tools=tools,
         tool_choice=tool_choice,
         preferred_model=preferred_model,
+        caller=caller,
     )
     return future.result(timeout=timeout + 10)
 
@@ -242,6 +326,7 @@ async def request_chat_completion_async(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any | None = None,
     preferred_model: str | None = None,
+    caller: str | None = None,
 ) -> tuple[Optional[dict], Optional[str], Optional[str]]:
     """Async version — awaits LLM thread pool without blocking the event loop."""
     loop = asyncio.get_event_loop()
@@ -256,6 +341,7 @@ async def request_chat_completion_async(
             tools=tools,
             tool_choice=tool_choice,
             preferred_model=preferred_model,
+            caller=caller,
         ),
     )
 
@@ -269,6 +355,7 @@ def call_llm(
     max_tokens: int = 300,
     temperature: float = 0.1,
     timeout: float = 30.0,
+    caller: str | None = None,
 ) -> Optional[str]:
     """
     Synchronous LLM call. Runs in dedicated thread pool — never blocks main thread.
@@ -290,6 +377,7 @@ def call_llm(
         max_tokens=max_tokens,
         temperature=temperature,
         timeout=timeout,
+        caller=caller,
     )
     if not response_json:
         if error:
@@ -316,6 +404,7 @@ async def call_llm_async(
     max_tokens: int = 300,
     temperature: float = 0.1,
     timeout: float = 30.0,
+    caller: str | None = None,
 ) -> Optional[str]:
     """
     Async LLM call — awaits dedicated thread pool, never blocks event loop.
@@ -332,6 +421,7 @@ async def call_llm_async(
         max_tokens=max_tokens,
         temperature=temperature,
         timeout=timeout,
+        caller=caller,
     )
     if not response_json:
         if error:

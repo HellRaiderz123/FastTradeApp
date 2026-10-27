@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.core.utils.time import now_ist
 from app.db.models_intent import ExecutionIntent
-from app.core.broker.zerodha.client import get_kite_client
 from app.core.learning.signal_diagnostics import record_exit_outcome
 
 logger = logging.getLogger(__name__)
@@ -49,6 +48,7 @@ def reconcile_broker_positions(db: Session, force: bool = False) -> List[str]:
 
     # ── 1. Fetch broker positions ────────────────────────────────
     try:
+        from app.core.broker.zerodha.client import get_kite_client
         kite = get_kite_client()
         broker_positions = kite.positions()
     except Exception as e:

@@ -161,6 +161,7 @@ const Positions: React.FC = () => {
             if (ZERODHA_STRATEGIES.includes(strat)) return false;
             if (id.startsWith('SCANNER-') || id.startsWith('AI-')) return false;
             if (strat === 'STOCK_MOMENTUM' || strat === 'AI_TRADE') return false;
+            if (strat.startsWith('SUPERTREND')) return false;
             return true;
           });
           console.log('[Positions] 📊 Received update with', updates.length, 'intents');
@@ -303,6 +304,7 @@ const Positions: React.FC = () => {
         if (id.startsWith('SCANNER-')) return false;
         if (id.startsWith('AI-')) return false;
         if (strat === 'STOCK_MOMENTUM' || strat === 'AI_TRADE') return false;
+        if (strat.startsWith('SUPERTREND')) return false;
         return true;
       });
       setLocalTrades(activeIntents);

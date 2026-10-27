@@ -11,7 +11,7 @@ def get_or_create_risk_limits(db: Session) -> RiskLimitConfig:
     if record is None:
         record = RiskLimitConfig(
             max_portfolio_loss_pct=3.0,
-            max_trades_per_day=3,
+            max_trades_per_day=10,
             iv_regime_limits=default_iv_limits(),
         )
         db.add(record)

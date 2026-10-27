@@ -67,9 +67,7 @@ class NSENewsService:
     ]
 
     def __init__(self):
-        self._nse_client: Optional[httpx.AsyncClient] = None
         self._seen_event_hashes: Set[str] = set()
-        self._lock = asyncio.Lock()
 
     def _calculate_materiality(self, text: str) -> tuple[float, bool]:
         text_lower = text.lower()
@@ -188,35 +186,31 @@ class NSENewsService:
         return items
 
     async def fetch_nse_announcements(self) -> List[DisclosedNewsItem]:
-        """Tries NSE announcements; if blocked by Akamai, pulls BSE announcements."""
-        async with self._lock:
-            try:
-                if not self._nse_client:
-                    self._nse_client = httpx.AsyncClient(headers=self.HEADERS_NSE, timeout=8.0, follow_redirects=True)
-                    resp = await self._nse_client.get(self.NSE_BASE_URL)
-                    if resp.status_code != 200:
-                        await self._nse_client.aclose()
-                        self._nse_client = None
-                        return await self.fetch_bse_announcements()
-
-                url = f"{self.NSE_BASE_URL}{self.NSE_ANNOUNCEMENTS_ENDPOINT}"
-                resp = await self._nse_client.get(url)
-                if resp.status_code in (401, 403):
-                    await self._nse_client.aclose()
-                    self._nse_client = None
-                    return await self.fetch_bse_announcements()
+        """Fetches NSE corporate announcements directly with Mac UA (bypasses Akamai block)."""
+        MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        url = f"{self.NSE_BASE_URL}{self.NSE_ANNOUNCEMENTS_ENDPOINT}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.get(url, headers={
+                    "User-Agent": MAC_UA,
+                    "Accept": "application/json",
+                    "Referer": "https://www.nseindia.com/",
+                })
+                if resp.status_code != 200:
+                    logger.warning("NSE announcements returned %s", resp.status_code)
+                    return []
 
                 data = resp.json()
                 rows = data if isinstance(data, list) else data.get("data", [])
-                
+
                 items: List[DisclosedNewsItem] = []
                 for row in rows:
                     symbol = row.get("symbol", "").strip()
                     desc = row.get("desc", "")
-                    headline = row.get("subject", desc)
-                    att_url = row.get("attmntFile")
+                    headline = desc or row.get("attchmntText", "")
+                    att_url = row.get("attchmntFile")
 
-                    event_hash = f"NSE_{symbol}_{row.get('seqId', headline[:20])}"
+                    event_hash = f"NSE_{symbol}_{row.get('seq_id', headline[:20])}"
                     if not symbol or event_hash in self._seen_event_hashes:
                         continue
                     self._seen_event_hashes.add(event_hash)
@@ -230,22 +224,16 @@ class NSENewsService:
                             symbol=symbol,
                             company_name=row.get("sm_name", symbol),
                             headline=headline,
-                            description=desc,
+                            description=row.get("attchmntText", desc),
                             pdf_url=att_url,
                             pdf_summary=pdf_summary,
-                            category=row.get("an_dt", "Corporate Filing"),
+                            category=row.get("smIndustry") or "Corporate Filing",
                             materiality_score=materiality,
                             is_high_impact=is_high_impact,
                             published_at=row.get("sort_date", datetime.now().isoformat()),
                         )
                     )
-                if items:
-                    return items
-            except Exception as e:
-                logger.warning(f"NSE fetch encountered {e}. Re-routing to BSE.")
-
-        return await self.fetch_bse_announcements()
-
-    async def close(self):
-        if self._nse_client:
-            await self._nse_client.aclose()
+                return items
+        except Exception as e:
+            logger.warning("NSE announcements fetch failed: %s", e)
+            return []

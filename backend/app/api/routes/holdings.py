@@ -27,12 +27,9 @@ from sqlalchemy.orm import Session
 from app.core.utils.time import now_ist
 from app.db.models_stock_holding import StockHolding
 from app.db.session import SessionLocal
-from app.services.zerodha import KiteConnectService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/holdings", tags=["holdings"])
-
-kite_service = KiteConnectService()
 
 
 def get_db():
@@ -68,12 +65,12 @@ class HoldingCloseBody(BaseModel):
 
 def _get_ltp(symbol: str) -> Optional[float]:
     try:
-        quote = kite_service.get_quote(symbol)
-        if quote:
-            return float(quote.get("last_price") or 0) or None
+        from app.core.market.provider import fetch_ltp
+        prices = fetch_ltp([symbol])
+        val = prices.get(symbol)
+        return float(val) if val and float(val) > 0 else None
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _recalc_pnl(holding: StockHolding) -> float:
@@ -89,11 +86,8 @@ def _enrich_with_ltp(holdings: List[StockHolding]) -> List[dict]:
     ltps: dict = {}
     if symbols:
         try:
-            quotes = kite_service.get_bulk_quotes(symbols) or {}
-            for sym in symbols:
-                q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
-                if q:
-                    ltps[sym] = float(q.get("last_price") or 0)
+            from app.core.market.provider import fetch_ltp
+            ltps = fetch_ltp(symbols) or {}
         except Exception:
             pass
 
@@ -229,11 +223,8 @@ def close_all_holdings(db: Session = Depends(get_db)):
     symbols = list({h.symbol for h in open_holdings})
     ltps: dict = {}
     try:
-        quotes = kite_service.get_bulk_quotes(symbols) or {}
-        for sym in symbols:
-            q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
-            if q:
-                ltps[sym] = float(q.get("last_price") or 0)
+        from app.core.market.provider import fetch_ltp
+        ltps = fetch_ltp(symbols) or {}
     except Exception:
         pass
 

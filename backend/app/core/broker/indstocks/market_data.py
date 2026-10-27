@@ -201,6 +201,7 @@ def _refresh_instruments_cache() -> None:
                 
             resp.raise_for_status()
             reader = csv.DictReader(io.StringIO(resp.text))
+            rows_loaded = 0
             for row in reader:
                 if source == "index":
                     exch = (row.get("EXCH") or "NSE").strip().upper()
@@ -208,12 +209,39 @@ def _refresh_instruments_cache() -> None:
                     sym = (row.get("SEGMENT") or "").strip().upper()
                     if sym and sid:
                         merged[sym] = f"{exch}_{sid}"
+                        rows_loaded += 1
                 else:
                     exch = (row.get("EXCH") or "NSE").strip().upper()
                     sid = (row.get("SECURITY_ID") or "").strip()
                     sym = (row.get("TRADING_SYMBOL") or "").strip().upper()
                     if sym and sid:
-                        merged[sym] = f"{exch}_{sid}"
+                        # F&O instruments use NFO segment prefix
+                        segment = "NFO" if source == "fno" else exch
+                        scrip = f"{segment}_{sid}"
+                        # NSE always wins over BSE for dual-listed stocks
+                        if sym not in merged or exch == "NSE":
+                            merged[sym] = scrip
+                        rows_loaded += 1
+                        # For F&O, also index by a normalised lookup key so
+                        # build_option_symbol() can find it without knowing the
+                        # exact TRADING_SYMBOL string.
+                        # Key format: UNDERLYING|EXPIRY_DATE|STRIKE|OPTTYPE
+                        # e.g. "NIFTY|2026-11-03|22500|PE"
+                        if source == "fno":
+                            try:
+                                underlying_name = (row.get("UNDERLYING_SCRIP_NAME") or "").strip().upper()
+                                strike_raw = (row.get("STRIKE_PRICE") or "").strip()
+                                opt_type = (row.get("OPTION_TYPE") or "").strip().upper()
+                                expiry_raw = (row.get("EXPIRY_DATE") or "").strip()  # MM/DD/YYYY HH:MM
+                                if underlying_name and strike_raw and opt_type and expiry_raw:
+                                    from datetime import datetime as _dt
+                                    exp_date = _dt.strptime(expiry_raw.split()[0], "%m/%d/%Y").date()
+                                    strike_int = int(float(strike_raw))
+                                    lookup_key = f"{underlying_name}|{exp_date}|{strike_int}|{opt_type}"
+                                    merged[lookup_key] = scrip
+                            except Exception:
+                                pass
+            logger.info("INDstocks instruments loaded source=%s: %d rows", source, rows_loaded)
         except Exception as exc:
             logger.warning("INDstocks instruments fetch failed source=%s: %s", source, exc)
 
@@ -231,10 +259,11 @@ def _refresh_instruments_cache() -> None:
 
 
 # Common index aliases that callers use (FastTrade uses these names)
+# Keys match what callers pass; values match SEGMENT column in INDstocks index CSV (uppercased)
 _INDEX_ALIASES: Dict[str, str] = {
     "NIFTY":     "NIFTY 50",
-    "BANKNIFTY": "NIFTY BANK",
-    "FINNIFTY":  "NIFTY FIN SERVICE",
+    "BANKNIFTY": "BANK NIFTY",
+    "FINNIFTY":  "NIFTYFINSRV25 50",
     "NIFTYVIX":  "INDIA VIX",
 }
 
@@ -242,15 +271,18 @@ _INDEX_ALIASES: Dict[str, str] = {
 # Covers indices + full NIFTY 100 / scheduler symbol list.
 # Security IDs sourced from INDstocks instrument CSV (NSE equity segment).
 _INDEX_FALLBACK_SCRIP: Dict[str, str] = {
-    # ── Indices ──────────────────────────────────────────────────────────
-    "NIFTY 50":          "NSE_26000",
-    "NIFTY":             "NSE_26000",
-    "NIFTY BANK":        "NSE_26009",
-    "BANKNIFTY":         "NSE_26009",
-    "NIFTY FIN SERVICE": "NSE_26037",
-    "FINNIFTY":          "NSE_26037",
-    "INDIA VIX":         "NSE_26017",
-    "NIFTYVIX":          "NSE_26017",
+    # ── Indices (SECURITY_IDs from INDstocks /market/instruments?source=index) ──
+    "NIFTY 50":          "NSE_40000001",
+    "NIFTY":             "NSE_40000001",
+    "BANK NIFTY":        "NSE_40000003",  # exact CSV name
+    "NIFTY BANK":        "NSE_40000003",  # legacy alias
+    "BANKNIFTY":         "NSE_40000003",
+    "NIFTY IT":          "NSE_40000004",
+    "NIFTYFINSRV25 50":  "NSE_40000076",  # exact CSV name (uppercased)
+    "NIFTY FIN SERVICE": "NSE_40000076",  # legacy alias
+    "FINNIFTY":          "NSE_40000076",
+    "INDIA VIX":         "NSE_40000107",
+    "NIFTYVIX":          "NSE_40000107",
     # ── NIFTY 50 / top weights ────────────────────────────────────────────
     "RELIANCE":    "NSE_2885",
     "TCS":         "NSE_11536",
@@ -398,38 +430,45 @@ def get_scrip_code(symbol: str) -> str:
     """
     Resolve a plain symbol to an INDstocks scrip-code (e.g. NSE_2885).
 
-    Tries:
-      1. Hardcoded fallback map (instant, no API needed)
-      2. Index alias lookup (NIFTY -> NIFTY 50, etc.)
-      3. Live instruments cache (from API)
+    Lookup order:
+      1. DB instruments table (synced from live API — always up to date)
+      2. In-memory instruments cache (15-min TTL, from API CSV)
+      3. Hardcoded fallback map (emergency only — last resort)
     """
     sym = symbol.upper().strip()
 
-    # 1. Hardcoded fallback first — works even when API/token is broken
-    scrip = _INDEX_FALLBACK_SCRIP.get(sym)
-    if scrip:
-        return scrip
-
-    # 2. Index alias (e.g. NIFTY -> NIFTY 50)
-    alias = _INDEX_ALIASES.get(sym)
-    if alias:
-        scrip = _INDEX_FALLBACK_SCRIP.get(alias.upper())
+    # 1. DB lookup — live contract, no hardcoding needed
+    try:
+        from app.core.broker.indstocks.instruments_sync import get_scrip_code_from_db
+        scrip = get_scrip_code_from_db(sym)
         if scrip:
             return scrip
+    except Exception:
+        pass  # DB unavailable — fall through
 
-    # 3. Live instruments cache
+    # 2. In-memory cache (populated from API CSV)
     cache = _instruments_cache()
     scrip = cache.get(sym)
     if scrip:
         return scrip
+    alias = _INDEX_ALIASES.get(sym)
     if alias:
         scrip = cache.get(alias.upper())
         if scrip:
             return scrip
 
+    # 3. Hardcoded fallback — emergency only
+    scrip = _INDEX_FALLBACK_SCRIP.get(sym)
+    if scrip:
+        return scrip
+    if alias:
+        scrip = _INDEX_FALLBACK_SCRIP.get(alias.upper())
+        if scrip:
+            return scrip
+
     raise KeyError(
         f"INDstocks scrip-code not found for '{symbol}'. "
-        "Ensure INDMONEY_ACCESS_TOKEN is set and instruments are loaded."
+        "Ensure INDMONEY_ACCESS_TOKEN is set and instruments are synced."
     )
 
 

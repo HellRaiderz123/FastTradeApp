@@ -8,12 +8,8 @@ from typing import List, Dict, Any, Optional
 import logging
 import random
 
-from app.services.zerodha import KiteConnectService
-
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/market-depth", tags=["market_depth"])
-
-kite_service = KiteConnectService()
 
 
 def generate_mock_market_depth(symbol: str, spot_price: float) -> Dict[str, Any]:
@@ -145,74 +141,14 @@ async def get_market_depth(symbol: str):
         # Try to get real quote data with depth
         spot_price = None
         
-        if kite_service.kite:
-            try:
-                quote = kite_service.get_full_quote(symbol)
-                if quote and "last_price" in quote and quote["last_price"] is not None:
-                    spot_price = float(quote["last_price"])
-                    
-                    # If Zerodha provides depth data, use it
-                    depth_data = quote.get("depth")
-                    if depth_data:
-                        
-                        # Transform Zerodha depth format to our format
-                        bids = []
-                        asks = []
-                        
-                        if "buy" in depth_data:
-                            cumulative_bid = 0
-                            for level in depth_data["buy"]:
-                                qty = level.get("quantity", 0)
-                                cumulative_bid += qty
-                                bids.append({
-                                    "price": level.get("price", 0),
-                                    "quantity": qty,
-                                    "orders": level.get("orders", 1),
-                                    "cumulative_qty": cumulative_bid,
-                                })
-                        
-                        if "sell" in depth_data:
-                            cumulative_ask = 0
-                            for level in depth_data["sell"]:
-                                qty = level.get("quantity", 0)
-                                cumulative_ask += qty
-                                asks.append({
-                                    "price": level.get("price", 0),
-                                    "quantity": qty,
-                                    "orders": level.get("orders", 1),
-                                    "cumulative_qty": cumulative_ask,
-                                })
-                        
-                        # If we have real depth data, return it
-                        if bids and asks:
-                            total_bid_qty = sum(b["quantity"] for b in bids)
-                            total_ask_qty = sum(a["quantity"] for a in asks)
-                            best_bid = bids[0]["price"]
-                            best_ask = asks[0]["price"]
-                            spread = best_ask - best_bid
-                            spread_pct = (spread / spot_price) * 100
-                            imbalance = (total_bid_qty - total_ask_qty) / (total_bid_qty + total_ask_qty) * 100
-                            
-                            return {
-                                "symbol": symbol,
-                                "timestamp": quote.get("timestamp", ""),
-                                "spot_price": spot_price,
-                                "best_bid": best_bid,
-                                "best_ask": best_ask,
-                                "spread": round(spread, 2),
-                                "spread_percentage": round(spread_pct, 4),
-                                "bids": bids,
-                                "asks": asks,
-                                "total_bid_qty": total_bid_qty,
-                                "total_ask_qty": total_ask_qty,
-                                "total_bid_orders": sum(b["orders"] for b in bids),
-                                "total_ask_orders": sum(a["orders"] for a in asks),
-                                "imbalance": round(imbalance, 2),
-                                "imbalance_direction": "bullish" if imbalance > 5 else "bearish" if imbalance < -5 else "neutral",
-                                "data_source": "live",
-                            }
-            except Exception as e:
-                logger.warning(f"Failed to fetch real depth for {symbol}: {e}")
+        from app.core.market.provider import fetch_ltp
+        try:
+            prices = fetch_ltp([symbol])
+            ltp_val = prices.get(symbol)
+            if ltp_val and float(ltp_val) > 0:
+                spot_price = float(ltp_val)
+        except Exception as e:
+            logger.warning(f"Failed to fetch LTP for {symbol}: {e}")
         
         # Fall back to mock data (use LTP if available, otherwise a reasonable default)
         if spot_price is None:
@@ -221,6 +157,7 @@ async def get_market_depth(symbol: str):
         
         mock_depth = generate_mock_market_depth(symbol, spot_price)
         mock_depth["data_source"] = "simulated"
+        mock_depth["simulated_reason"] = "INDMoney/INDstocks API does not provide Level 2 market depth. Showing simulated order book for UI preview only."
         return mock_depth
     
     except Exception as e:

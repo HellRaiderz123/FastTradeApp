@@ -21,10 +21,8 @@ from app.db.models_stock_holding import StockHolding
 from app.db.models_scanner_signal import ScannerSignalHistory
 from app.db.models_condition_strategy import ConditionStrategy
 from app.core.utils.time import now_ist
-from app.services.zerodha import KiteConnectService
 
 logger = logging.getLogger(__name__)
-kite_service = KiteConnectService()
 
 
 def _get_bulk_ltps(symbols: List[str]) -> Dict[str, float]:
@@ -32,13 +30,8 @@ def _get_bulk_ltps(symbols: List[str]) -> Dict[str, float]:
     if not symbols:
         return {}
     try:
-        quotes = kite_service.get_bulk_quotes(symbols) or {}
-        ltps = {}
-        for sym in symbols:
-            q = quotes.get(f"NSE:{sym}") or quotes.get(sym)
-            if q:
-                ltps[sym] = float(q.get("last_price") or 0)
-        return ltps
+        from app.core.market.provider import fetch_ltp
+        return fetch_ltp(symbols) or {}
     except Exception as e:
         logger.warning(f"Failed to fetch LTPs: {e}")
         return {}

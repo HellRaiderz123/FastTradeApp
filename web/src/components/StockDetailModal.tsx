@@ -22,6 +22,7 @@ import TechnicalChart from './TechnicalChart';
 import HistoricalReturns from './HistoricalReturns';
 import PeerComparison from './PeerComparison';
 import StockStrategyPanel from './StockStrategyPanel';
+import FundamentalsPanel from './FundamentalsPanel';
 
 interface StockDetailModalProps {
   symbol: string;
@@ -73,7 +74,7 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
   changePercent = 0
 }) => {
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'news' | 'technicals' | 'timeframes' | 'peers' | 'strategies'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'news' | 'technicals' | 'timeframes' | 'peers' | 'strategies' | 'fundamentals'>('overview');
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [technicals, setTechnicals] = useState<TechnicalAnalysis | null>(null);
   const [timeframeSuggestions, setTimeframeSuggestions] = useState<TimeframeSuggestion[]>([]);
@@ -291,7 +292,8 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
               { id: 'overview', label: 'Overview', icon: Eye },            { id: 'strategies', label: 'Strategies', icon: Zap },              { id: 'news', label: 'News', icon: Newspaper },
               { id: 'technicals', label: 'Technicals', icon: BarChart3 },
               { id: 'timeframes', label: 'Timeframes', icon: Clock },
-              { id: 'peers', label: 'Peers', icon: TrendIcon }
+              { id: 'peers', label: 'Peers', icon: TrendIcon },
+              { id: 'fundamentals', label: 'Fundamentals', icon: Activity }
             ].map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
@@ -692,6 +694,11 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
               {/* Peers Tab */}
               {activeTab === 'peers' && (
                 <PeerComparison symbol={symbol} onClose={onClose} />
+              )}
+
+              {/* Fundamentals Tab */}
+              {activeTab === 'fundamentals' && (
+                <FundamentalsPanel initialSymbol={symbol} compact />
               )}
             </>
           )}

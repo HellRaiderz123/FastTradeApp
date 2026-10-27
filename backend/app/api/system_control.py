@@ -31,7 +31,6 @@ _JOB_LABELS = {
     "strategy_decay_job": "Strategy Decay Check",
     "strategy_discovery_job": "Strategy Discovery",
     "neon_sync_job": "Neon Delta Sync",
-    "zerodha_auto_login_job": "Zerodha Auto Login",
     "watchlist_ai_analysis_job": "Watchlist AI Analysis",
     "nifty100_reconciliation_job": "Nifty100 Reconciliation",
     "holdings_reconciliation_job": "Holdings Reconciliation",

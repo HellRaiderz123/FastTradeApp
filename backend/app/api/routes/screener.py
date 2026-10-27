@@ -9,12 +9,10 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
 
-from app.services.zerodha import KiteConnectService
+from app.core.indicators.technical import TechnicalIndicators
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/screener", tags=["screener"])
-
-kite_service = KiteConnectService()
 
 
 def _get_real_indicators(symbol: str) -> dict:
@@ -209,8 +207,8 @@ async def filter_stocks(filters: ScreenerFilters):
         
         # Fetch all quotes in a single bulk API call (fixes O(N) latency)
         symbols = [s["symbol"] for s in NIFTY50_STOCKS]
-        nse_symbols = [f"NSE:{sym}" for sym in symbols]
-        bulk_data = kite_service.get_bulk_quotes(nse_symbols) or {}
+        from app.core.market.provider import get_bulk_quotes as _provider_bulk_quotes
+        bulk_data = _provider_bulk_quotes(symbols) or {}
 
         results = []
 

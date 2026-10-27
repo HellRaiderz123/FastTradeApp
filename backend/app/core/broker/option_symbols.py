@@ -113,28 +113,32 @@ def _lookup_indmoney_option_symbol(
     expiry: date,
 ) -> Optional[str]:
     """
-    Look up the exact option tradingsymbol from INDMoney instruments cache.
-    
-    Returns None if not found.
+    Resolve an option to its INDstocks scrip-code via the normalised lookup key
+    built during cache load: UNDERLYING|EXPIRY_DATE|STRIKE|OPTTYPE -> NFO_XXXXX
     """
     try:
-        from app.core.broker.indstocks.market_data import _instruments_cache
-        
+        from app.core.broker.indstocks.market_data import _instruments_cache, _refresh_instruments_cache
+
+        lookup_key = f"{underlying.upper()}|{expiry}|{int(strike)}|{option_type.upper()}"
+
         cache = _instruments_cache()
-        if not cache:
-            return None
-        
-        # Build possible symbol patterns to search for
-        # INDMoney uses various formats, try common ones
-        patterns = _generate_option_symbol_patterns(underlying, strike, option_type, expiry)
-        
-        for pattern in patterns:
-            if pattern in cache:
-                logger.debug("Found INDMoney option symbol: %s", pattern)
-                return pattern
-        
+        scrip = cache.get(lookup_key)
+        if scrip:
+            logger.debug("INDMoney option resolved: %s -> %s", lookup_key, scrip)
+            return scrip
+
+        # Cache miss — refresh once and retry
+        logger.info("INDMoney option not in cache for key %s — refreshing instruments", lookup_key)
+        _refresh_instruments_cache()
+        cache = _instruments_cache()
+        scrip = cache.get(lookup_key)
+        if scrip:
+            logger.debug("INDMoney option resolved after refresh: %s -> %s", lookup_key, scrip)
+            return scrip
+
+        logger.warning("INDMoney option not found after refresh: %s", lookup_key)
         return None
-        
+
     except Exception as e:
         logger.warning("Failed to lookup INDMoney option symbol: %s", e)
         return None

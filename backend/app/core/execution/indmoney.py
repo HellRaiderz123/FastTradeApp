@@ -72,6 +72,14 @@ class INDMoneyExecutionAdapter:
 
         symbol = str(leg.get("symbol") or "")
         normalized_symbol = symbol.strip().upper().replace(" ", "")
+
+        # Handle token-format symbols like 'NFO_53701', 'BSE_12345'
+        # The numeric part after the exchange prefix IS the security_id
+        import re as _re
+        token_match = _re.match(r'^[A-Z]+_([0-9]+)$', normalized_symbol)
+        if token_match:
+            return token_match.group(1)
+
         ticket_map = ticket.get("security_map") or {}
         if symbol and isinstance(ticket_map, dict):
             if symbol in ticket_map:

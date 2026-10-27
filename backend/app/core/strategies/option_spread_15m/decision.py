@@ -85,8 +85,13 @@ def decide_strategy(
         if market_mode == "RANGE":
             if high_quality and confidence >= 70:
                 return (
+                    "SHORT_STRADDLE",
+                    f"HIGH IV + RANGE + high quality = ATM straddle sell (conf={confidence:.0f}%)"
+                )
+            if base_quality_ok and confidence >= 55:
+                return (
                     "SHORT_STRANGLE",
-                    f"HIGH IV + RANGE = premium selling edge (VIX elevated, conf={confidence:.0f}%)"
+                    f"HIGH IV + RANGE = OTM strangle sell (conf={confidence:.0f}%)"
                 )
             if base_quality_ok:
                 return (

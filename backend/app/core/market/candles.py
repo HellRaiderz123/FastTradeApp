@@ -4,7 +4,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import and_, text
 from app.core.market.provider import fetch_candles
-from app.core.broker.zerodha.instruments import INDEX_TOKENS
 from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily, CandleWeekly
 from app.db.session import engine
 from app.core.utils.time import now_ist
@@ -15,6 +14,14 @@ logger = logging.getLogger("candles")
 logger.setLevel(logging.INFO)
 
 _IS_POSTGRES = engine.dialect.name == "postgresql"
+
+# Symbols that are indices — skip price sanity checks for these
+# (index values like 22000 would fail a stock-price sanity check)
+_INDEX_SYMBOLS = {
+    "NIFTY", "BANKNIFTY", "FINNIFTY", "NIFTYVIX",
+    "NIFTY 50", "BANK NIFTY", "NIFTY BANK", "INDIA VIX",
+    "MIDCPNIFTY", "SENSEX",
+}
 
 
 def _bulk_upsert(db: Session, model, rows: list[dict]) -> int:
@@ -109,7 +116,7 @@ def fetch_daily_candles(db: Session, symbol: str, days: int = 2000):
     candles = fetch_candles(symbol, "Day", from_dt, to_dt)
     candles = sorted(candles, key=lambda c: c["date"])
 
-    is_index = symbol in INDEX_TOKENS
+    is_index = symbol in _INDEX_SYMBOLS
     baseline_close = None
     if not is_index and candles:
         latest_row = (

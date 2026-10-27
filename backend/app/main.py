@@ -71,6 +71,8 @@ from app.api.routes import ai_analysis
 from app.api.routes import holdings as holdings_routes
 from app.api.routes import scalp
 from app.api.routes import quant
+from app.api.routes import fundamentals as fundamentals_routes
+from app.api.routes import fii_dii as fii_dii_routes
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -131,6 +133,8 @@ async def lifespan(app: FastAPI):
         from app.db.models_indmoney import INDMoneySession  # noqa: F401
         from app.db.models_ai_decisions import AIDecision, ensure_ai_decisions_schema  # noqa: F401 — trading agents memory
         from app.db.models_stock_holding import StockHolding  # noqa: F401 — stock holdings table
+        from app.db.models_instruments import IndstocksInstrument  # noqa: F401
+        from app.db.models_fundamentals import FundamentalsCache  # noqa: F401
         Base.metadata.create_all(bind=engine)
         ensure_auto_trader_schema(engine)
         ensure_ai_decisions_schema(engine)
@@ -144,6 +148,15 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Database tables initialized")
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")
+
+    # Sync INDstocks instruments contract in background (non-blocking)
+    try:
+        import threading
+        from app.core.broker.indstocks.instruments_sync import sync_instruments
+        threading.Thread(target=sync_instruments, name="instruments-sync", daemon=True).start()
+        logger.info("🔄 INDstocks instruments sync started in background")
+    except Exception as e:
+        logger.warning(f"⚠️ INDstocks instruments sync failed to start: {e}")
     
     # Initialize schedulers only if enabled (set SCHEDULERS_ENABLED=false to skip)
     schedulers_enabled = os.getenv("SCHEDULERS_ENABLED", "true").lower() == "true"
@@ -176,13 +189,7 @@ async def lifespan(app: FastAPI):
             logger.warning(f"⚠️ Schedulers failed to start: {e}")
 
         # Fire Zerodha auto-login immediately on startup
-        try:
-            import threading
-            from app.core.market.scheduler import _zerodha_auto_login_job
-            threading.Thread(target=_zerodha_auto_login_job, name="zerodha-startup-login", daemon=True).start()
-            logger.info("🔐 Zerodha auto-login triggered on startup")
-        except Exception as e:
-            logger.warning(f"⚠️ Zerodha startup login failed: {e}")
+        # REMOVED — Zerodha auto-login disabled
 
         # Resume auto-trader scheduler if it was RUNNING before restart
         try:
@@ -242,6 +249,22 @@ async def lifespan(app: FastAPI):
             logger.info("✅ AI outcome evaluator scheduled (daily)")
         except Exception as e:
             logger.warning(f"⚠️ AI outcome evaluator scheduler failed: {e}")
+
+        # Schedule daily INDstocks instruments re-sync (keeps scrip codes fresh)
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+            from app.core.market.scheduler import scheduler as _scheduler
+            from app.core.broker.indstocks.instruments_sync import sync_instruments
+
+            _scheduler.add_job(
+                lambda: sync_instruments(force=True),
+                trigger=CronTrigger(hour=8, minute=0, timezone="Asia/Kolkata"),
+                id="instruments_daily_sync",
+                replace_existing=True,
+            )
+            logger.info("✅ INDstocks instruments daily re-sync scheduled (08:00 IST)")
+        except Exception as e:
+            logger.warning(f"⚠️ INDstocks instruments daily sync scheduler failed: {e}")
     else:
         logger.info("⏭️ Schedulers DISABLED (SCHEDULERS_ENABLED=false)")
 
@@ -426,5 +449,7 @@ app.include_router(ai_analysis.router, dependencies=[Depends(require_authenticat
 app.include_router(holdings_routes.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(scalp.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(quant.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(fundamentals_routes.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(fii_dii_routes.router, dependencies=[Depends(require_authenticated_user)])
 
 logger.info(" All routers registered (including Phase 5 features + Quant APIs)")

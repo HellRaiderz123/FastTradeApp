@@ -106,53 +106,15 @@ class MacroTelemetry:
 class IndianMarketDataService:
     """
     Service for fetching legitimate Indian market data from NSE.
-    
-    Uses httpx.AsyncClient with automatic session cookie handling.
+    Uses shared nse_client for session cookie management.
     """
 
-    def __init__(self):
-        self._client: Optional[httpx.AsyncClient] = None
-        self._session_initialized = False
-        self._last_session_init: Optional[datetime] = None
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create async HTTP client with NSE session."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                headers=NSE_HEADERS,
-                timeout=httpx.Timeout(15.0),
-                follow_redirects=True,
-            )
-            self._session_initialized = False
-        
-        # Initialize session if needed (NSE requires visiting homepage first)
-        if not self._session_initialized or self._session_expired():
-            await self._init_nse_session()
-        
-        return self._client
-
-    def _session_expired(self) -> bool:
-        """Check if NSE session needs refresh (every 5 minutes)."""
-        if self._last_session_init is None:
-            return True
-        return datetime.now() - self._last_session_init > timedelta(minutes=5)
-
-    async def _init_nse_session(self) -> None:
-        """Initialize NSE session by visiting homepage."""
-        try:
-            if self._client:
-                await self._client.get(NSE_BASE_URL)
-                self._session_initialized = True
-                self._last_session_init = datetime.now()
-                logger.debug("NSE session initialized")
-        except Exception as e:
-            logger.warning("Failed to initialize NSE session: %s", e)
+    async def _get(self, url: str) -> httpx.Response:
+        from app.core.market.nse_client import nse_async_get
+        return await nse_async_get(url)
 
     async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        pass  # session managed by nse_client singleton
 
     # ─────────────────────────────────────────────────────────────────────────
     # Option Chain
@@ -174,15 +136,11 @@ class IndianMarketDataService:
             OptionChainData with all strikes
         """
         try:
-            client = await self._get_client()
-            
-            # Determine endpoint
             if underlying.upper() in ("NIFTY", "BANKNIFTY", "FINNIFTY", "NIFTY BANK"):
                 url = f"{NSE_BASE_URL}/api/option-chain-indices?symbol={underlying.upper()}"
             else:
                 url = f"{NSE_BASE_URL}/api/option-chain-equities?symbol={underlying.upper()}"
-            
-            response = await client.get(url)
+            response = await self._get(url)
             response.raise_for_status()
             data = response.json()
             
@@ -291,10 +249,8 @@ class IndianMarketDataService:
         High delivery % (>60%) with volume expansion = institutional accumulation.
         """
         try:
-            client = await self._get_client()
             url = f"{NSE_BASE_URL}/api/quote-equity?symbol={symbol.upper()}&section=trade_info"
-            
-            response = await client.get(url)
+            response = await self._get(url)
             response.raise_for_status()
             data = response.json()
             
@@ -339,19 +295,8 @@ class IndianMarketDataService:
             limit: Max announcements to return
         """
         try:
-            client = await self._get_client()
-            
-            # Build URL
-            params = {"index": "equities"}
-            if symbol:
-                params["symbol"] = symbol.upper()
-            if from_date:
-                params["from_date"] = from_date.strftime("%d-%m-%Y")
-            if to_date:
-                params["to_date"] = to_date.strftime("%d-%m-%Y")
-            
             url = f"{NSE_BASE_URL}/api/corporate-announcements"
-            response = await client.get(url, params=params)
+            response = await self._get(url)
             response.raise_for_status()
             data = response.json()
             
@@ -392,12 +337,12 @@ class IndianMarketDataService:
         telemetry = MacroTelemetry()
         
         try:
-            client = await self._get_client()
+            client_unused = None  # kept for compat
             
             # Fetch India VIX
             try:
                 vix_url = f"{NSE_BASE_URL}/api/allIndices"
-                response = await client.get(vix_url)
+                response = await self._get(vix_url)
                 response.raise_for_status()
                 data = response.json()
                 
@@ -438,10 +383,8 @@ class IndianMarketDataService:
     async def get_bulk_deals(self, trade_date: Optional[date] = None) -> List[Dict[str, Any]]:
         """Fetch bulk deals from NSE."""
         try:
-            client = await self._get_client()
             url = f"{NSE_BASE_URL}/api/snapshot-capital-market-largedeal"
-            
-            response = await client.get(url)
+            response = await self._get(url)
             response.raise_for_status()
             data = response.json()
             
@@ -453,10 +396,8 @@ class IndianMarketDataService:
     async def get_block_deals(self, trade_date: Optional[date] = None) -> List[Dict[str, Any]]:
         """Fetch block deals from NSE."""
         try:
-            client = await self._get_client()
             url = f"{NSE_BASE_URL}/api/snapshot-capital-market-largedeal"
-            
-            response = await client.get(url)
+            response = await self._get(url)
             response.raise_for_status()
             data = response.json()
             

@@ -1,10 +1,17 @@
 import axios from 'axios';
+import { authTokenStore } from '../lib/api';
 
 const API_BASE = (import.meta as any).env?.VITE_API_BASE || '/api';
 
 const CALENDAR_API = axios.create({
   baseURL: `${API_BASE}/calendar`,
   timeout: 15000,
+});
+
+CALENDAR_API.interceptors.request.use((config) => {
+  const token = authTokenStore.get();
+  if (token) config.headers['Authorization'] = `Bearer ${token}`;
+  return config;
 });
 
 export interface CalendarEvent {

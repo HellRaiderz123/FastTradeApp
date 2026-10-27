@@ -54,8 +54,11 @@ def compute_spread_strikes(
 
     # ============================
     # BASE WIDTH (risk mode)
+    # For spreads: Conservative=2 steps, Aggressive=1 step
+    # For condor wings: always minimum 4 steps (200pts NIFTY) for realistic protection
     # ============================
     width = step * (2 if risk_mode == "Conservative" else 1)
+    condor_wing_width = step * (4 if risk_mode == "Conservative" else 3)
 
     # ============================
     # MINIMUM ATM DISTANCE (at least 1% OTM)
@@ -111,12 +114,14 @@ def compute_spread_strikes(
         bear_long = bear_short + width
 
     # ============================
-    # IRON CONDOR (same offsets/width)
+    # IRON CONDOR — wider wings (min 4 steps = 200pts for NIFTY)
+    # short legs: same offset as spreads
+    # long legs: short +/- condor_wing_width
     # ============================
     condor_short_put = bull_short
-    condor_long_put = bull_long
+    condor_long_put = condor_short_put - condor_wing_width
     condor_short_call = bear_short
-    condor_long_call = bear_long
+    condor_long_call = condor_short_call + condor_wing_width
 
     # ============================
     # STRADDLE (ATM both sides)

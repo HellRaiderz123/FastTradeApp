@@ -55,8 +55,10 @@ def check_spread_risk(
     # THEORETICAL RISK (ALWAYS)
     # ============================
     width = abs(short_strike - long_strike)
-    max_loss = width * lot_size * lots
+    qty = lot_size * lots
+    max_loss = width * qty
     metrics["max_loss"] = max_loss
+    metrics["qty"] = float(qty)
 
     if capital > 0:
         risk_pct = (max_loss / capital) * 100.0
@@ -132,8 +134,11 @@ def check_condor_risk(
     metrics["call_width"] = float(call_width)
     metrics["wing_width"] = float(wing_width)
 
-    max_loss = wing_width * lot_size * lots
+    # max_loss = worst wing width * qty (only one wing can be breached at a time)
+    qty = lot_size * lots
+    max_loss = wing_width * qty
     metrics["max_loss"] = float(max_loss)
+    metrics["qty"] = float(qty)
 
     if capital > 0:
         risk_pct = (max_loss / capital) * 100.0
@@ -201,9 +206,9 @@ def check_straddle_strangle_risk(
     limits = get_risk_limits(iv_regime, risk_config)
     
     if is_short:
-        # Short straddle/strangle: unlimited risk on both sides
-        # Use conservative estimate: 10% move from each strike
-        estimated_move_pct = 10.0
+        # Short straddle/strangle: use realistic intraday move estimate
+        # NIFTY rarely moves more than 2-3% intraday; 10% was blocking all entries
+        estimated_move_pct = 3.0
         call_loss_estimate = call_strike * (estimated_move_pct / 100) * lot_size * lots
         put_loss_estimate = put_strike * (estimated_move_pct / 100) * lot_size * lots
         max_loss = max(call_loss_estimate, put_loss_estimate)

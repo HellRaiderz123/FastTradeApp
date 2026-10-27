@@ -108,7 +108,7 @@ const MarketDepthViewer: React.FC<MarketDepthViewerProps> = ({
               <BarChart2 className="w-5 h-5 text-blue-400" />
               <h3 className="text-lg font-semibold text-gray-200">{symbol} Order Book</h3>
               {depth.data_source === 'simulated' ? (
-                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-yellow-500/20 text-yellow-300 border border-yellow-500/40">
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40">
                   SIMULATED
                 </span>
               ) : (
@@ -128,6 +128,16 @@ const MarketDepthViewer: React.FC<MarketDepthViewerProps> = ({
             <RefreshCw className="w-4 h-4 text-gray-400" />
           </button>
         </div>
+
+        {/* Simulated data notice */}
+        {depth.data_source === 'simulated' && (
+          <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+            <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              INDMoney/INDstocks does not provide a Level 2 market depth API. The order book below is <strong>randomly generated for UI preview only</strong> and does not reflect real bids or asks.
+            </span>
+          </div>
+        )}
 
         {/* Key Metrics */}
         <div className="grid grid-cols-4 gap-3">

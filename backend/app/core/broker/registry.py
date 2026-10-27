@@ -98,12 +98,11 @@ _INDMONEY = BrokerCapabilities(
     positions=True,
     holdings=False,
     order_book=True,
-    funds=False,
+    funds=True,
     unsupported_hints={
         "gtt_orders": "INDstocks does not expose a GTT API. Use app-side SL/TP monitoring instead.",
         "margin_calculation": "INDstocks does not provide a basket margin API. Margin is not calculated.",
         "holdings": "INDstocks holdings API is not yet integrated.",
-        "funds": "INDstocks funds API is not yet integrated.",
     },
 )
 

@@ -22,15 +22,11 @@ from app.db.multi_asset_repo import (
 )
 from app.core.utils.time import now_ist
 from app.services.notifications import get_notification_service, NotificationType, NotificationPriority
-from app.services.zerodha import KiteConnectService
-
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 logger = logging.getLogger(__name__)
 
 # In-memory cache to avoid duplicate alerts within a time window
 _last_ml_alerts: Dict[str, Dict[str, Any]] = {}  # symbol -> {signal, confidence, timestamp}
-
-kite_service = KiteConnectService()
 
 
 def get_db():
@@ -205,8 +201,9 @@ def evaluate_alerts(ticker: Optional[str] = None, db: Session = Depends(get_db))
         if not operator or target_price is None:
             continue
 
-        quote = kite_service.get_full_quote(rule.ticker)
-        current_price = quote.get("last_price") if quote else None
+        from app.core.market.provider import fetch_ltp
+        prices = fetch_ltp([rule.ticker])
+        current_price = prices.get(rule.ticker)
         if current_price is None:
             continue
 

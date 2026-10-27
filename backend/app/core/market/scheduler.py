@@ -1154,51 +1154,9 @@ def start_neon_sync_scheduler():
     logger.info("🟢 Neon delta sync scheduler started (daily at 3:15 PM IST)")
 
 
-def _zerodha_auto_login_job():
-    """Auto-refresh Zerodha access token at 8 AM IST before market opens."""
-    logger.info("⏱️ Running Zerodha auto-login...")
-    db = SessionLocal()
-    try:
-        from app.services.zerodha_auto_login import run_auto_login
-        token = run_auto_login(db)
-        if token:
-            logger.info("✅ Zerodha token refreshed successfully")
-        else:
-            logger.error("❌ Zerodha auto-login failed — check credentials and redirect URL")
-    except Exception as e:
-        logger.exception("❌ Zerodha auto-login job crashed")
-    finally:
-        db.close()
-
-
 def start_zerodha_auto_login_scheduler():
-    """
-    Schedule daily Zerodha auto-login at 8:00 AM IST (before market opens at 9:15 AM).
-    Only activates if ZERODHA_USER_ID and ZERODHA_PASSWORD are set in .env.
-    """
-    if not scheduler.running:
-        logger.warning("⚠️ Cannot start Zerodha auto-login scheduler: main scheduler not running")
-        return
-
-    user_id = os.getenv("ZERODHA_USER_ID", "").strip()
-    password = os.getenv("ZERODHA_PASSWORD", "").strip()
-    if not user_id or not password:
-        logger.info("⏭️  Zerodha auto-login skipped (ZERODHA_USER_ID / ZERODHA_PASSWORD not set)")
-        return
-
-    scheduler.add_job(
-        func=_zerodha_auto_login_job,
-        trigger="cron",
-        day_of_week="mon-fri",
-        hour=8,
-        minute=0,
-        id="zerodha_auto_login_job",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
-
-    logger.info("🟢 Zerodha auto-login scheduler started (Mon-Fri at 8:00 AM IST)")
+    """Zerodha auto-login removed — no-op kept for import compatibility."""
+    pass
 
 
 def start_watchlist_analysis_scheduler():

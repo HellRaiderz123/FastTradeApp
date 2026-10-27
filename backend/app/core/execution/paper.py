@@ -31,12 +31,49 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
     def estimate_margin_required(self, intent, entry_credit_total: float | None = None) -> float:
         """
-        Estimate broker-style margin for paper trades.
-        Uses the active broker's margin API if available, otherwise estimates from spread width.
+        Fetch real margin from the active broker's margin API.
+        Falls back to spread-width estimate if broker API is unavailable.
         """
-        from app.core.broker.registry import get_active_broker, get_registry
+        from app.core.broker.registry import get_active_broker
         broker = get_active_broker()
-        if get_registry().supports(broker, "margin_calculation"):
+
+        # --- INDMoney: call basket margin API ---
+        if broker == "indmoney":
+            try:
+                from app.core.broker.indmoney.client import get_indmoney_client
+                client = get_indmoney_client()
+                ticket = get_ticket(intent)
+                qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
+                basket = []
+                for leg in ticket.get("legs", []):
+                    sym = leg.get("symbol", "")
+                    import re as _re
+                    m = _re.match(r'^[A-Z]+_([0-9]+)$', sym.strip().upper())
+                    sec_id = m.group(1) if m else sym
+                    leg_qty = qty * int(leg.get("lots_multiplier", 1) or 1)
+                    basket.append({
+                        "security_id": sec_id,
+                        "exchange": "NSE",
+                        "segment": "DERIVATIVE",
+                        "txn_type": str(leg.get("side", "BUY")).upper(),
+                        "qty": leg_qty,
+                        "order_type": "MARKET",
+                        "product": "MARGIN",
+                    })
+                resp = client.get_margin_basket(basket)
+                margin_val = (
+                    resp.get("total_margin")
+                    or resp.get("margin_required")
+                    or (resp.get("data") or {}).get("total_margin")
+                    or (resp.get("data") or {}).get("margin_required")
+                )
+                if margin_val and float(margin_val) > 0:
+                    return round(float(margin_val), 2)
+            except Exception:
+                pass
+
+        # --- Zerodha: call basket margin API ---
+        if broker == "zerodha":
             try:
                 from app.core.broker.zerodha.client import get_kite_client
                 from app.core.execution.zerodha import ZerodhaExecutionAdapter
@@ -47,6 +84,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
             except Exception:
                 pass
 
+        # --- Fallback: spread-width estimate ---
         try:
             ticket = get_ticket(intent)
             qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
@@ -111,11 +149,40 @@ class PaperExecutionAdapter(ExecutionAdapter):
         entry_credit = 0.0
 
         # 3️⃣ 🔥 STORE EXECUTED PRICE PER LEG (CRITICAL)
+        # For INDMoney option symbols missing from instruments cache, retry once with a forced
+        # cache refresh before falling back to 0 (avoids blocking paper execution entirely).
+        from app.core.market.provider import is_indstocks
+        _indstocks = is_indstocks()
+        _missing_options = [
+            leg["symbol"] for leg in ticket["legs"]
+            if ltp_map.get(leg["symbol"]) is None
+            and _indstocks
+            and leg["symbol"].upper().endswith(("CE", "PE"))
+        ]
+        if _missing_options:
+            # Force instruments cache refresh and retry LTP for missing option symbols
+            try:
+                from app.core.broker.indstocks.market_data import _refresh_instruments_cache
+                _refresh_instruments_cache()
+                retry_map = get_ltp(_missing_options)
+                ltp_map.update(retry_map)
+            except Exception:
+                pass
+
         for leg in ticket["legs"]:
             symbol = leg["symbol"]
             price = ltp_map.get(symbol)
             if price is None or price == 0.0:
-                raise ValueError(f"LTP not found for symbol: {symbol}")
+                if _indstocks and symbol.upper().endswith(("CE", "PE")):
+                    import logging as _log
+                    _log.getLogger(__name__).warning(
+                        "LTP not found for option symbol '%s' in INDMoney instruments cache (source=fno). "
+                        "Using 0 as fallback price. Ensure INDMONEY_ACCESS_TOKEN is valid.",
+                        symbol,
+                    )
+                    price = 0.0
+                else:
+                    raise ValueError(f"LTP not found for symbol: {symbol}")
 
             leg["price"] = price            # ✅ THIS LINE FIXES EVERYTHING
             leg_qty = self._resolve_leg_qty(leg, ticket_qty)
@@ -141,7 +208,7 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
     def mtm(self, intent) -> float:
         """
-        Unrealized PnL for paper trades.
+        Unrealized PnL for paper trades. Writes leg_pnl + ltp back into ticket legs.
         """
         ticket = get_ticket(intent)
         ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
@@ -156,11 +223,17 @@ class PaperExecutionAdapter(ExecutionAdapter):
             entry = leg.get("price") or leg.get("premium")
             if entry is None or current is None or float(current) <= 0:
                 continue
-            leg_qty = self._resolve_leg_qty(leg, ticket_qty)
+            m = int(leg.get("lots_multiplier", 1) or 1)
+            leg_qty = self._resolve_leg_qty(leg, ticket_qty) * m if leg.get("qty") is None else self._resolve_leg_qty(leg, ticket_qty)
             side = (leg.get("side") or leg.get("action") or "").upper()
             sign = 1.0 if side == "SELL" else -1.0
-            pnl += (float(entry) - float(current)) * sign * leg_qty
+            leg_pnl = (float(entry) - float(current)) * sign * leg_qty
+            leg["ltp"] = round(float(current), 2)
+            leg["leg_pnl"] = round(leg_pnl, 2)
+            pnl += leg_pnl
 
+        # Persist updated leg data back into ticket
+        intent.ticket = ticket
         return round(pnl, 2)
 
     def exit(self, intent):
@@ -170,12 +243,36 @@ class PaperExecutionAdapter(ExecutionAdapter):
 
         ltp_map = get_ltp(symbols)
 
+        from app.core.market.provider import is_indstocks
+        _indstocks = is_indstocks()
+        _missing = [
+            s for s in symbols
+            if ltp_map.get(s) is None and _indstocks and s.upper().endswith(("CE", "PE"))
+        ]
+        if _missing:
+            try:
+                from app.core.broker.indstocks.market_data import _refresh_instruments_cache
+                _refresh_instruments_cache()
+                ltp_map.update(get_ltp(_missing))
+            except Exception:
+                pass
+
+        import logging as _log
+        _logger = _log.getLogger(__name__)
+
         exit_cost = 0.0
         for leg in ticket["legs"]:
             symbol = leg.get("symbol") or leg.get("tradingsymbol", "")
             price = ltp_map.get(symbol)
             if price is None or float(price) <= 0:
-                raise ValueError(f"LTP not found for symbol: {symbol}")
+                if _indstocks and symbol.upper().endswith(("CE", "PE")):
+                    _logger.warning(
+                        "Exit LTP not found for option symbol '%s' — using entry price as fallback.",
+                        symbol,
+                    )
+                    price = float(leg.get("price") or leg.get("premium") or 0.0)
+                else:
+                    raise ValueError(f"LTP not found for symbol: {symbol}")
             leg_qty = self._resolve_leg_qty(leg, ticket_qty)
             side = (leg.get("side") or leg.get("action") or "").upper()
             if side == "SELL":

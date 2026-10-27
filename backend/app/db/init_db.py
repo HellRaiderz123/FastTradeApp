@@ -7,7 +7,9 @@ from app.db.models_candles import Candle15m
 from app.db.models_signal_outcome import SignalOutcome
 from app.db.models_zerodha import ZerodhaSession
 from app.db.models_indmoney import INDMoneySession
+from app.db.models_instruments import IndstocksInstrument  # noqa: F401 — registers table
 from app.core.scalp.scalp_paper_trader import ScalpTrade
+from app.db.models_ai_log import AIUsageLog  # noqa: F401 — registers table
 
 
 _MIGRATIONS = [

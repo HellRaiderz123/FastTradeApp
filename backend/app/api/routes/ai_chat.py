@@ -2489,6 +2489,7 @@ JARVIS VOICE MODE:
             tools=TOOLS,
             tool_choice=tool_choice,
             timeout=30.0,
+            caller="ai_chat",
         )
         if not response_data:
             return f"⚠️ LLM error: {error or 'No response from configured models'}", actions_taken
@@ -2560,7 +2561,7 @@ JARVIS VOICE MODE:
             "Keep it concise and do not call any more tools."
         ),
     })
-    response_data, _, error = request_chat_completion(messages, timeout=30.0)
+    response_data, _, error = request_chat_completion(messages, timeout=30.0, caller="ai_chat")
     if response_data:
         final_text = response_data["choices"][0]["message"].get("content") or ""
         if voice_mode or requested_style == "jarvis":

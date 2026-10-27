@@ -27,6 +27,8 @@ import {
   TrendingUp,
   Wallet,
   Zap,
+  Newspaper,
+  ArrowUpDown,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -91,6 +93,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/ai-analysis', icon: BarChart3, label: 'AI Analysis' },
       { path: '/quant-bot', icon: Activity, label: 'Quant Bot' },
       { path: '/signal-reconciliation', icon: RefreshCw, label: 'Signal Reconciliation' },
+      { path: '/fii-dii', icon: ArrowUpDown, label: 'FII / DII' },
+      { path: '/stock-research', icon: Newspaper, label: 'Stock Research' },
     ],
   },
   {

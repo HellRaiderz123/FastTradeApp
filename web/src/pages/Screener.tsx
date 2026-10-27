@@ -214,19 +214,19 @@ const Screener: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
+    <div className="min-h-screen bg-background p-6">
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Stock Screener</h1>
-            <p className="text-slate-400">
+            <h1 className="text-3xl font-bold text-foreground mb-2">Stock Screener</h1>
+            <p className="text-muted-foreground">
               Filter NIFTY 50 stocks with technical & fundamental criteria
             </p>
           </div>
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-muted hover:bg-accent rounded-lg text-foreground transition-colors border border-border"
           >
             <Filter size={18} />
             {showFilters ? 'Hide Filters' : 'Show Filters'}
@@ -249,7 +249,7 @@ const Screener: React.FC = () => {
               value_picks:            { icon: <Star size={14} />,         color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/30', category: 'Fundamental' },
               dividend_yield:         { icon: <DollarSign size={14} />,   color: 'text-teal-400',   bg: 'bg-teal-500/10',   border: 'border-teal-500/30',   category: 'Fundamental' },
               quality_growth:         { icon: <Shield size={14} />,       color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/30', category: 'Fundamental' },
-              low_volatility:         { icon: <Layers size={14} />,       color: 'text-slate-300',  bg: 'bg-slate-500/10',  border: 'border-slate-500/30',  category: 'Defensive' },
+              low_volatility:         { icon: <Layers size={14} />,       color: 'text-foreground',  bg: 'bg-muted',  border: 'border-border',  category: 'Defensive' },
               large_cap:              { icon: <BarChart3 size={14} />,    color: 'text-cyan-400',   bg: 'bg-cyan-500/10',   border: 'border-cyan-500/30',   category: 'Defensive' },
               high_volume:            { icon: <BarChart3 size={14} />,    color: 'text-blue-300',   bg: 'bg-blue-500/10',   border: 'border-blue-500/30',   category: 'Volume' },
               sector_rotation_finance:{ icon: <Activity size={14} />,     color: 'text-green-300',  bg: 'bg-green-500/10',  border: 'border-green-500/30',  category: 'Sector' },
@@ -267,7 +267,7 @@ const Screener: React.FC = () => {
 
             return categories.filter(c => byCategory[c]?.length).map(cat => (
               <div key={cat}>
-                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5">{cat}</p>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1.5">{cat}</p>
                 <div className="flex flex-wrap gap-2">
                   {byCategory[cat].map((preset) => {
                     const meta = PRESET_META[preset.id];
@@ -276,8 +276,8 @@ const Screener: React.FC = () => {
                         key={preset.id}
                         onClick={() => applyPreset(preset)}
                         title={preset.description}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition hover:brightness-125 ${
-                          meta ? `${meta.bg} ${meta.border} ${meta.color}` : 'bg-slate-800 border-slate-700 text-slate-300'
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition hover:brightness-110 ${
+                          meta ? `${meta.bg} ${meta.border} ${meta.color}` : 'bg-muted border-border text-foreground'
                         }`}
                       >
                         {meta?.icon}
@@ -293,7 +293,7 @@ const Screener: React.FC = () => {
           {/* Custom presets */}
           {customPresets.length > 0 && (
             <div>
-              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5">Saved</p>
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1.5">Saved</p>
               <div className="flex flex-wrap gap-2">
                 {customPresets.map((preset) => (
                   <div key={preset.id} className="flex items-center gap-1">
@@ -307,7 +307,7 @@ const Screener: React.FC = () => {
                     </button>
                     <button
                       onClick={() => deleteCustomPreset(preset.id)}
-                      className="px-1.5 py-1.5 bg-slate-800 hover:bg-red-900/40 rounded-lg text-slate-500 hover:text-red-400 transition text-xs"
+                      className="px-1.5 py-1.5 bg-muted hover:bg-red-500/10 border border-border rounded-lg text-muted-foreground hover:text-red-500 transition text-xs"
                       title="Delete preset"
                     >✕</button>
                   </div>
@@ -320,11 +320,11 @@ const Screener: React.FC = () => {
 
       {/* Filters Panel */}
       {showFilters && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-6 mb-6">
+        <div className="bg-card border border-border rounded-xl p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Price Range */}
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-foreground mb-2">
                 Price Range (₹)
               </label>
               <div className="flex gap-2">
@@ -335,7 +335,7 @@ const Screener: React.FC = () => {
                   onChange={(e) =>
                     setFilters({ ...filters, min_price: Number(e.target.value) || undefined })
                   }
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
                 <input
                   type="number"
@@ -344,14 +344,14 @@ const Screener: React.FC = () => {
                   onChange={(e) =>
                     setFilters({ ...filters, max_price: Number(e.target.value) || undefined })
                   }
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
             </div>
 
             {/* Change % Range */}
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-foreground mb-2">
                 Change % Range
               </label>
               <div className="flex gap-2">
@@ -366,7 +366,7 @@ const Screener: React.FC = () => {
                       min_change_percent: e.target.value ? Number(e.target.value) : undefined,
                     })
                   }
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
                 <input
                   type="number"
@@ -379,14 +379,14 @@ const Screener: React.FC = () => {
                       max_change_percent: e.target.value ? Number(e.target.value) : undefined,
                     })
                   }
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
             </div>
 
             {/* RSI Range */}
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">RSI Range</label>
+              <label className="block text-sm font-medium text-foreground mb-2">RSI Range</label>
               <div className="flex gap-2">
                 <input
                   type="number"
@@ -397,7 +397,7 @@ const Screener: React.FC = () => {
                   onChange={(e) =>
                     setFilters({ ...filters, rsi_min: Number(e.target.value) || undefined })
                   }
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
                 <input
                   type="number"
@@ -408,14 +408,14 @@ const Screener: React.FC = () => {
                   onChange={(e) =>
                     setFilters({ ...filters, rsi_max: Number(e.target.value) || undefined })
                   }
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
               </div>
             </div>
 
             {/* Min Volume */}
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
+              <label className="block text-sm font-medium text-foreground mb-2">
                 Min Volume
               </label>
               <input
@@ -425,17 +425,17 @@ const Screener: React.FC = () => {
                 onChange={(e) =>
                   setFilters({ ...filters, min_volume: Number(e.target.value) || undefined })
                 }
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
             </div>
 
             {/* Sort By */}
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Sort By</label>
+              <label className="block text-sm font-medium text-foreground mb-2">Sort By</label>
               <select
                 value={filters.sort_by || 'change_percent'}
                 onChange={(e) => setFilters({ ...filters, sort_by: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
               >
                 <option value="change_percent">Change %</option>
                 <option value="volume">Volume</option>
@@ -447,11 +447,11 @@ const Screener: React.FC = () => {
 
             {/* Sort Order */}
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Sort Order</label>
+              <label className="block text-sm font-medium text-foreground mb-2">Sort Order</label>
               <select
                 value={filters.sort_order || 'desc'}
                 onChange={(e) => setFilters({ ...filters, sort_order: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
               >
                 <option value="desc">Descending</option>
                 <option value="asc">Ascending</option>
@@ -470,63 +470,63 @@ const Screener: React.FC = () => {
           </div>
 
           {showFundamentals && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4 pt-4 border-t border-slate-700">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4 pt-4 border-t border-border">
               {/* P/E Ratio */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">P/E Ratio</label>
+                <label className="block text-sm font-medium text-foreground mb-2">P/E Ratio</label>
                 <div className="flex gap-2">
                   <input type="number" placeholder="Min" value={filters.min_pe_ratio || ''}
                     onChange={(e) => setFilters({ ...filters, min_pe_ratio: Number(e.target.value) || undefined })}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none" />
                   <input type="number" placeholder="Max" value={filters.max_pe_ratio || ''}
                     onChange={(e) => setFilters({ ...filters, max_pe_ratio: Number(e.target.value) || undefined })}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none" />
                 </div>
               </div>
               {/* P/B Ratio */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">P/B Ratio</label>
+                <label className="block text-sm font-medium text-foreground mb-2">P/B Ratio</label>
                 <div className="flex gap-2">
                   <input type="number" placeholder="Min" value={filters.min_pb_ratio || ''}
                     onChange={(e) => setFilters({ ...filters, min_pb_ratio: Number(e.target.value) || undefined })}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none" />
                   <input type="number" placeholder="Max" value={filters.max_pb_ratio || ''}
                     onChange={(e) => setFilters({ ...filters, max_pb_ratio: Number(e.target.value) || undefined })}
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none" />
                 </div>
               </div>
               {/* Min Dividend Yield */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Min Dividend Yield (%)</label>
+                <label className="block text-sm font-medium text-foreground mb-2">Min Dividend Yield (%)</label>
                 <input type="number" placeholder="e.g. 2.0" step="0.1" value={filters.min_dividend_yield || ''}
                   onChange={(e) => setFilters({ ...filters, min_dividend_yield: Number(e.target.value) || undefined })}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none" />
               </div>
               {/* Max Debt/Equity */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Max Debt/Equity</label>
+                <label className="block text-sm font-medium text-foreground mb-2">Max Debt/Equity</label>
                 <input type="number" placeholder="e.g. 1.0" step="0.1" value={filters.max_debt_to_equity || ''}
                   onChange={(e) => setFilters({ ...filters, max_debt_to_equity: Number(e.target.value) || undefined })}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none" />
               </div>
               {/* Min ROE */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Min ROE (%)</label>
+                <label className="block text-sm font-medium text-foreground mb-2">Min ROE (%)</label>
                 <input type="number" placeholder="e.g. 15" value={filters.min_roe || ''}
                   onChange={(e) => setFilters({ ...filters, min_roe: Number(e.target.value) || undefined })}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none" />
               </div>
               {/* 52W Proximity */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">52-Week Proximity</label>
+                <label className="block text-sm font-medium text-foreground mb-2">52-Week Proximity</label>
                 <div className="flex gap-3">
-                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                  <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
                     <input type="checkbox" checked={!!filters.near_52w_high}
                       onChange={(e) => setFilters({ ...filters, near_52w_high: e.target.checked || undefined })}
                       className="w-4 h-4" />
                     Near High
                   </label>
-                  <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                  <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
                     <input type="checkbox" checked={!!filters.near_52w_low}
                       onChange={(e) => setFilters({ ...filters, near_52w_low: e.target.checked || undefined })}
                       className="w-4 h-4" />
@@ -558,7 +558,7 @@ const Screener: React.FC = () => {
             </button>
             <button
               onClick={resetFilters}
-              className="flex items-center gap-2 px-6 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white transition-colors"
+              className="flex items-center gap-2 px-6 py-2 bg-muted hover:bg-accent border border-border rounded-lg text-foreground transition-colors"
             >
               <RefreshCcw size={18} />
               Reset
@@ -587,7 +587,7 @@ const Screener: React.FC = () => {
                 value={savePresetName}
                 onChange={(e) => setSavePresetName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && saveCurrentPreset()}
-                className="flex-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-purple-500 focus:outline-none"
               />
               <button onClick={saveCurrentPreset} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-white transition-colors">
                 Save
@@ -606,16 +606,16 @@ const Screener: React.FC = () => {
 
       {/* Results Stats */}
       {results.length > 0 && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4 mb-6">
+        <div className="bg-card border border-border rounded-xl p-4 mb-6">
           <div className="flex items-center justify-between flex-wrap gap-3">
-            <div className="text-white">
+            <div className="text-foreground">
               <span className="text-2xl font-bold">{results.length}</span>
-              <span className="text-slate-400 ml-2">
+              <span className="text-muted-foreground ml-2">
                 stocks matched out of {totalScanned} scanned
               </span>
             </div>
             <div className="flex items-center gap-3">
-              <div className="text-slate-400 text-sm">
+              <div className="text-muted-foreground text-sm">
                 Last updated: {new Date().toLocaleTimeString()}
               </div>
               {/* Tier 2: Screener → AutoTrader pipeline button */}
@@ -635,90 +635,52 @@ const Screener: React.FC = () => {
 
       {/* Results Table */}
       {results.length > 0 && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl overflow-hidden">
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-900/50">
+              <thead className="bg-muted/60">
                 <tr>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">
-                    Symbol
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
-                    LTP
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
-                    Change %
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
-                    Volume (L)
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
-                    RSI
-                  </th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">
-                    Sector
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
-                    Mkt Cap (Cr)
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
-                    P/E
-                  </th>
-                  <th className="px-4 py-3 text-right text-sm font-semibold text-slate-300">
-                    ROE%
-                  </th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-muted-foreground">Symbol</th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">LTP</th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">Change %</th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">Volume (L)</th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">RSI</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-muted-foreground">Sector</th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">Mkt Cap (Cr)</th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">P/E</th>
+                  <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">ROE%</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700">
-                {results.map((stock, index) => (
-                  <tr
-                    key={stock.symbol}
-                    className="hover:bg-slate-700/30 transition-colors"
-                  >
+              <tbody className="divide-y divide-border">
+                {results.map((stock) => (
+                  <tr key={stock.symbol} className="hover:bg-accent/40 transition-colors">
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-white font-medium">{stock.symbol}</span>
-                      </div>
+                      <span className="text-foreground font-medium">{stock.symbol}</span>
                     </td>
-                    <td className="px-4 py-3 text-right text-white font-medium">
+                    <td className="px-4 py-3 text-right text-foreground font-medium">
                       ₹{stock.ltp.toFixed(2)}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <span
-                        className={`font-medium ${
-                          stock.change_percent >= 0 ? 'text-green-400' : 'text-red-400'
-                        }`}
-                      >
-                        {stock.change_percent >= 0 ? '+' : ''}
-                        {stock.change_percent.toFixed(2)}%
+                      <span className={`font-medium ${
+                        stock.change_percent >= 0 ? 'text-emerald-500' : 'text-red-500'
+                      }`}>
+                        {stock.change_percent >= 0 ? '+' : ''}{stock.change_percent.toFixed(2)}%
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-300">
+                    <td className="px-4 py-3 text-right text-muted-foreground">
                       {stock.volume_lakhs.toFixed(2)}L
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <span
-                        className={`font-medium ${
-                          stock.rsi > 70
-                            ? 'text-red-400'
-                            : stock.rsi < 30
-                            ? 'text-green-400'
-                            : 'text-slate-300'
-                        }`}
-                      >
+                      <span className={`font-medium ${
+                        stock.rsi > 70 ? 'text-red-500' : stock.rsi < 30 ? 'text-emerald-500' : 'text-muted-foreground'
+                      }`}>
                         {stock.rsi.toFixed(1)}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-slate-300">{stock.sector}</td>
-                    <td className="px-4 py-3 text-right text-slate-300">
-                      ₹{stock.market_cap_cr.toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 text-right text-slate-300">
-                      {(stock as any).pe_ratio?.toFixed(1) ?? '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right text-slate-300">
-                      {(stock as any).roe?.toFixed(1) ?? '—'}%
-                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{stock.sector}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">₹{stock.market_cap_cr.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{(stock as any).pe_ratio?.toFixed(1) ?? '—'}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{(stock as any).roe?.toFixed(1) ?? '—'}%</td>
                   </tr>
                 ))}
               </tbody>
@@ -729,10 +691,10 @@ const Screener: React.FC = () => {
 
       {/* Empty State */}
       {results.length === 0 && !loading && !error && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-12 text-center">
-          <Search size={48} className="mx-auto mb-4 text-slate-600" />
-          <h3 className="text-xl font-semibold text-white mb-2">No Results Yet</h3>
-          <p className="text-slate-400 mb-6">
+        <div className="bg-card border border-border rounded-xl p-12 text-center">
+          <Search size={48} className="mx-auto mb-4 text-muted-foreground" />
+          <h3 className="text-xl font-semibold text-foreground mb-2">No Results Yet</h3>
+          <p className="text-muted-foreground mb-6">
             Set your filters and click "Run Screener" to find matching stocks
           </p>
           <button

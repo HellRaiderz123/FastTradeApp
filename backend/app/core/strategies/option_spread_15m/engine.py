@@ -193,9 +193,9 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # Fallback to standard lot sizes
         lot_size_map = {
-            "NIFTY": 75,
+            "NIFTY": 65,
             "BANKNIFTY": 30,
-            "FINNIFTY": 65,
+            "FINNIFTY": 60,
         }
         lot_size = lot_size_map.get(underlying, 50)
         import logging
@@ -659,8 +659,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "SELL",
                     "strike": butterfly_middle,
                     "type": "CE",
-                    "qty": 2,
-                    "quantity": 2,
+                    "lots_multiplier": 2,
                     "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
@@ -683,7 +682,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     # ============================
-    # CALL RATIO BACKSPREAD
+    # CALL RATIO BACKSPREAD (Sell 1, Buy 2)
     # ============================
     elif strategy_mode == "CALL_RATIO_BACKSPREAD":
         ticket = {
@@ -691,12 +690,13 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
-            "expiry": str(expiry),  # Add expiry for strategy creation
+            "expiry": str(expiry),
             "legs": [
                 {
                     "side": "SELL",
                     "strike": ratio_short,
                     "type": "CE",
+                    "lots_multiplier": 1,
                     "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
@@ -708,6 +708,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_near,
                     "type": "CE",
+                    "lots_multiplier": 2,
                     "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
@@ -719,6 +720,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_far,
                     "type": "CE",
+                    "lots_multiplier": 2,
                     "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
@@ -730,7 +732,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     # ============================
-    # PUT RATIO BACKSPREAD
+    # PUT RATIO BACKSPREAD (Sell 1, Buy 2)
     # ============================
     elif strategy_mode == "PUT_RATIO_BACKSPREAD":
         ticket = {
@@ -738,12 +740,13 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
             "underlying": underlying,
             "lot_size": lot_size,
             "lots": lots,
-            "expiry": str(expiry),  # Add expiry for strategy creation
+            "expiry": str(expiry),
             "legs": [
                 {
                     "side": "SELL",
                     "strike": ratio_short,
                     "type": "PE",
+                    "lots_multiplier": 1,
                     "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
@@ -755,6 +758,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_near,
                     "type": "PE",
+                    "lots_multiplier": 2,
                     "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
@@ -766,6 +770,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
                     "side": "BUY",
                     "strike": ratio_long_far,
                     "type": "PE",
+                    "lots_multiplier": 2,
                     "symbol": build_option_symbol(
                         underlying=underlying,
                         expiry=expiry,
@@ -811,11 +816,50 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # =====================================================
-    # 8️⃣ FINAL RESPONSE
+    # 8️⃣ P&L + SL/TP CALCULATION
     # =====================================================
-    # Add expiry to context so intent creation can access it
     ctx["expiry"] = expiry
-    
+
+    # Build LTP lookup from chain: (strike, option_type) -> ltp
+    ltp_map: dict = {}
+    try:
+        for row in chain.itertuples():
+            ltp_map[(int(row.strike), row.option_type)] = float(row.ltp or 0)
+    except Exception:
+        pass
+
+    # Enrich each leg with ltp, qty, and leg_pnl_if_expired_worthless
+    net_premium = 0.0
+    for leg in ticket["legs"]:
+        m = leg.get("lots_multiplier", 1) or 1
+        leg_qty = lot_size * lots * m
+        ltp = ltp_map.get((leg["strike"], leg["type"]), 0.0)
+        leg["ltp"] = round(ltp, 2)
+        leg["qty"] = leg_qty
+        # leg_premium: positive = credit received, negative = debit paid
+        if leg["side"] == "SELL":
+            leg["leg_premium"] = round(ltp * leg_qty, 2)
+            net_premium += ltp * leg_qty
+        else:
+            leg["leg_premium"] = round(-ltp * leg_qty, 2)
+            net_premium -= ltp * leg_qty
+
+    net_premium = round(net_premium, 2)
+    ticket["total_qty"] = lot_size * lots  # base qty (1 lot = lot_size shares)
+
+    # max_loss from risk check (spread width * qty), max_profit = net credit collected
+    max_loss_inr = round(float(risk_metrics.get("max_loss", 0.0)), 2)
+    max_profit_inr = round(net_premium, 2) if net_premium > 0 else 0.0
+
+    # SL = 100% of net premium collected (double the credit = exit)
+    # TP = 50% of net premium collected (standard theta decay target)
+    sl_inr = round(net_premium * 1.0, 2) if net_premium > 0 else max_loss_inr
+    tp_inr = round(net_premium * 0.5, 2) if net_premium > 0 else 0.0
+
+    # Per-lot equivalents for display
+    sl_per_lot = round(sl_inr / lots, 2) if lots > 0 else sl_inr
+    tp_per_lot = round(tp_inr / lots, 2) if lots > 0 else tp_inr
+
     result = {
         "strategy": strategy_mode,
         "approved": True,
@@ -827,7 +871,16 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         "spot": spot,
         "atm": atm,
         "strike_meta": strikes["meta"],
-        "expiry": expiry,  # Include at top level for easy access
+        "expiry": expiry,
+        "lot_size": lot_size,
+        "lots": lots,
+        "net_premium": net_premium,
+        "max_profit_inr": max_profit_inr,
+        "max_loss_inr": max_loss_inr,
+        "sl_inr": sl_inr,
+        "tp_inr": tp_inr,
+        "sl_per_lot": sl_per_lot,
+        "tp_per_lot": tp_per_lot,
     }
 
     run_id = _log_strategy_run(result, payload["underlying"])

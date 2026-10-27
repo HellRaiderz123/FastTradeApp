@@ -68,27 +68,20 @@ def get_india_vix_from_yahoo() -> Optional[float]:
 
 def get_india_vix_from_nse_scrape() -> Optional[float]:
     """
-    Fallback: scrape India VIX from NSE website (best effort).
+    Fallback: fetch India VIX from NSE allIndices API via shared nse_client.
     """
     try:
-        url = "https://www.nseindia.com/live_market/movers/niftyVolatility.jsp"
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            import re
-            match = re.search(r"India VIX[^>]*>([0-9.]+)<", response.text)
-            if match:
-                vix = float(match.group(1))
-                logger.info(f"✅ India VIX scraped from NSE: {vix}")
-                return vix
-
+        from app.core.market.nse_client import nse_get
+        r = nse_get("https://www.nseindia.com/api/allIndices", timeout=8)
+        if r.status_code == 200:
+            for idx in r.json().get("data", []):
+                if "VIX" in str(idx.get("index", "")).upper():
+                    vix = float(idx.get("last", 0))
+                    if vix > 0:
+                        logger.info("VIX fetched from NSE allIndices: %s", vix)
+                        return vix
     except Exception as e:
-        logger.warning(f"⚠️ NSE scrape error: {e}")
-
+        logger.warning("NSE allIndices VIX fetch failed: %s", e)
     return None
 
 

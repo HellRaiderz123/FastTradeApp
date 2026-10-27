@@ -40,7 +40,9 @@ def get_execution_adapter(mode: str, broker: str | None = None):
         RuntimeError — if broker client cannot be initialised (token missing, etc.)
     """
     norm_mode = normalize_execution_mode(mode)
-    if is_paper_mode(norm_mode):
+    # PAPER_TRADING, BACKTEST, and DRY_RUN all use PaperExecutionAdapter —
+    # no real orders are placed, no broker security_id resolution needed.
+    if norm_mode in {"PAPER_TRADING", "BACKTEST", "DRY_RUN"}:
         return PaperExecutionAdapter()
 
     resolved_broker = normalize_broker_name(broker) if broker else get_active_broker()

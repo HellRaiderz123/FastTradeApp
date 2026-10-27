@@ -226,6 +226,16 @@ html.light-mode * {
 }
 
 /* ============================================================
+   SCREENER PAGE LIGHT MODE FIXES
+   ============================================================ */
+
+html.light-mode .screener-save-input {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+/* ============================================================
    SCANNER PAGE LIGHT MODE FIXES
    ============================================================ */
 

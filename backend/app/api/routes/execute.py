@@ -14,7 +14,6 @@ from app.core.broker.zerodha.client import get_kite_client
 from app.core.risk.risk_limits_config import get_risk_limits
 from app.core.execution.mode import get_execution_mode
 from app.db.models_intent import ExecutionIntent
-from app.db.models import DailyCapital
 from app.services.notifications import NotificationService
 from app.db.intent_repo import create_execution_intent
 
@@ -42,38 +41,65 @@ def get_db():
         db.close()
 
 
+# Constant paper capital — only used in PAPER_TRADING / DRY_RUN / BACKTEST
+_PAPER_CAPITAL = 20_000_000.0  # ₹2 Crore
+
+
 def _resolve_capital(db: Session) -> float:
     """
-    Fetch live capital from the active broker. Falls back to most recent
-    daily_capital record. Raises 503 if neither is available.
+    LIVE mode   : fetch real available balance from broker funds API (Zerodha or INDMoney).
+                  Raises 503 if broker API fails — real money, must not silently proceed.
+    DRY_RUN     : broker funds API if available, else ₹2Cr (no real money at risk).
+    PAPER/BACKTEST: ₹2Cr constant always.
     """
-    from app.core.broker.registry import get_active_broker, get_registry
+    from app.core.broker.registry import get_active_broker
+    from app.core.execution.mode import get_execution_mode, is_live_mode
 
+    mode = get_execution_mode()
     broker = get_active_broker()
-    if get_registry().supports(broker, "funds"):
-        try:
-            if broker == "ZERODHA":
-                kite = get_kite_client()
-                margins = kite.margins()
-                return float(margins["equity"]["available"]["live_balance"])
-        except Exception:
-            pass  # fall through to DB fallback
-    # For brokers without funds API (INDMONEY etc.), go straight to DB
-    last_record = (
-        db.query(DailyCapital)
-        .order_by(DailyCapital.trade_date.desc())
-        .first()
-    )
-    if last_record and last_record.closing_capital:
-        return float(last_record.closing_capital)
 
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            "Cannot determine capital — broker funds API unavailable and no historical "
-            "capital found. Record your capital via POST /account/daily-capital first."
-        ),
-    )
+    def _fetch_zerodha() -> float | None:
+        try:
+            kite = get_kite_client()
+            margins = kite.margins()
+            return float(margins["equity"]["available"]["live_balance"])
+        except Exception:
+            return None
+
+    def _fetch_indmoney() -> float | None:
+        try:
+            from app.core.broker.indmoney.client import get_indmoney_client
+            resp = get_indmoney_client().get_funds()
+            val = (
+                resp.get("available_balance")
+                or resp.get("net")
+                or resp.get("available")
+                or (resp.get("data") or {}).get("available_balance")
+                or (resp.get("data") or {}).get("net")
+            )
+            return float(val) if val is not None and float(val) > 0 else None
+        except Exception:
+            return None
+
+    if broker == "ZERODHA":
+        capital = _fetch_zerodha()
+    elif broker == "INDMONEY":
+        capital = _fetch_indmoney()
+    else:
+        capital = None
+
+    if capital is not None:
+        return capital
+
+    # Broker API failed or unsupported broker
+    if is_live_mode(mode):
+        raise HTTPException(
+            status_code=503,
+            detail=f"LIVE mode: cannot fetch capital from {broker} funds API. Check broker connection.",
+        )
+
+    # DRY_RUN / PAPER_TRADING / BACKTEST — safe to use paper constant
+    return _PAPER_CAPITAL
 
 
 @router.post("/paper/{intent_id}")

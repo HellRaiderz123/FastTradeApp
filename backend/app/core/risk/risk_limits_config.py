@@ -32,7 +32,7 @@ class RiskLimits:
 
     # Portfolio-level limits
     max_portfolio_loss_pct: float = 2.0  # Max % of capital that can be lost per trade
-    max_trades_per_day: int = 3  # Max number of trades per day
+    max_trades_per_day: int = 10  # Max number of trades per day
 
     # IV-regime specific limits
     iv_regime_limits: Dict[str, Dict[str, float]] = field(
@@ -74,7 +74,7 @@ class RiskProfile:
 
     BALANCED = RiskLimits(
         max_portfolio_loss_pct=3.0,
-        max_trades_per_day=3,
+        max_trades_per_day=10,
         iv_regime_limits=deepcopy(DEFAULT_IV_REGIME_LIMITS),
     )
 

@@ -49,47 +49,45 @@ const ChartPanel: React.FC<ChartPanelProps> = ({
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [priceChange, setPriceChange] = useState<number>(0);
 
-  // Map timeframe to API interval
-  const getInterval = (tf: string): string => {
-    const mapping: { [key: string]: string } = {
-      '1m': 'minute',
-      '5m': '5minute',
-      '15m': '15minute',
-      '30m': '30minute',
-      '1h': '60minute',
-      '1d': 'day',
+  // Map Terminal timeframe to DB timeframe key
+  const toDBTimeframe = (tf: string): '1m' | '5m' | '15m' | '1h' | 'daily' => {
+    const mapping: Record<string, '1m' | '5m' | '15m' | '1h' | 'daily'> = {
+      '1m': '1m', '5m': '5m', '15m': '15m', '30m': '15m', '1h': '1h', '1d': 'daily',
     };
-    return mapping[tf] || '15minute';
+    return mapping[tf] ?? '15m';
   };
 
-  // Fetch candle data
+  // Fetch candle data from DB (with live broker fallback when market is open)
   useEffect(() => {
     const fetchCandles = async () => {
       setLoading(true);
       setError(null);
 
       try {
-        // Fetch both candles and current quote in parallel
-        const interval = getInterval(timeframe);
+        const dbTf = toDBTimeframe(timeframe);
         const [candlesResponse, quoteResponse] = await Promise.all([
-          marketAPI.getCandles(symbol, interval),
-          marketAPI.getBulkQuotes([symbol])
+          marketAPI.getCandlesDB(symbol, dbTf, 300),
+          marketAPI.getBulkQuotes([symbol]).catch(() => null),
         ]);
-        
-        const candles: CandleData[] = candlesResponse.data.candles;
 
-        if (!candles || candles.length === 0) {
-          throw new Error('No candle data available');
+        const candles: CandleData[] = Array.isArray(candlesResponse.data?.candles)
+          ? candlesResponse.data.candles
+          : Array.isArray(candlesResponse.data)
+          ? candlesResponse.data
+          : [];
+
+        if (candles.length === 0) {
+          setError('No candle data — use Candle Backfill to load historical data');
+          setLoading(false);
+          return;
         }
 
-        // Transform data for Recharts
         const transformed: ChartDataPoint[] = candles.map((candle) => {
-          const date = new Date(candle.timestamp);
+          const date = new Date((candle as any).timestamp || (candle as any).date || 0);
           const timeStr =
             timeframe === '1d'
               ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               : date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-
           return {
             time: timeStr,
             price: candle.close,
@@ -103,16 +101,13 @@ const ChartPanel: React.FC<ChartPanelProps> = ({
 
         setChartData(transformed);
 
-        // Use real-time quote for header (matches watchlist exactly)
-        const quotes = quoteResponse.data.quotes;
-        if (quotes && quotes.length > 0) {
-          const quote = quotes[0];
-          setCurrentPrice(quote.ltp);
-          setPriceChange(quote.change);
+        const quotes = quoteResponse?.data?.quotes;
+        if (quotes?.length > 0) {
+          setCurrentPrice(quotes[0].ltp);
+          setPriceChange(quotes[0].change);
         } else {
-          // Fallback to last candle if quote fetch fails
-          const lastCandle = candles[candles.length - 1];
-          setCurrentPrice(lastCandle.close);
+          const last = candles[candles.length - 1];
+          setCurrentPrice(last.close);
           setPriceChange(0);
         }
 
@@ -124,9 +119,7 @@ const ChartPanel: React.FC<ChartPanelProps> = ({
       }
     };
 
-    if (symbol) {
-      fetchCandles();
-    }
+    if (symbol) fetchCandles();
   }, [symbol, timeframe]);
 
   return (
@@ -181,6 +174,7 @@ const ChartPanel: React.FC<ChartPanelProps> = ({
               >
                 Retry
               </button>
+              <p className="text-xs text-slate-500 mt-2">Go to Candle Backfill to load data</p>
             </div>
           </div>
         )}

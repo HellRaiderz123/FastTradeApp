@@ -268,12 +268,16 @@ const TradingChart: React.FC<TradingChartProps> = ({
       for (const tf of [...new Set(candidates)]) {
         const res = await marketAPI.getCandlesDB(symbol, tf, 300);
         console.log('loadData - Tarun', symbol, tf, res);
-        const data = Array.isArray(res.data) ? res.data : [];
+        const data: RawCandle[] = Array.isArray(res.data?.candles)
+          ? res.data.candles
+          : Array.isArray(res.data)
+          ? res.data
+          : [];
         if (data.length > 0) { raw = data; break; }
       }
 
       if (raw.length === 0) {
-        setError('No candle data — click Refresh to load from Zerodha');
+        setError('No candle data — click Refresh to backfill from broker');
         setLoading(false);
         return;
       }
@@ -369,7 +373,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
             <button
               onClick={handleRefresh}
               disabled={refreshing || loading}
-              title="Refresh candles from Zerodha"
+              title="Refresh candles"
               className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition disabled:opacity-40"
             >
               <RefreshCw className={cn('h-3.5 w-3.5', (refreshing || loading) && 'animate-spin')} />
@@ -435,7 +439,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition disabled:opacity-50"
               >
                 <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
-                {refreshing ? 'Loading from Zerodha…' : 'Load candles from Zerodha'}
+                {refreshing ? 'Loading candles…' : 'Load candles'}
               </button>
             </div>
           </div>

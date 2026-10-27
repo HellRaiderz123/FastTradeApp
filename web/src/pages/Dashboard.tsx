@@ -154,7 +154,7 @@ const Dashboard: React.FC = () => {
           icon={Wallet}
           label="Portfolio Value"
           value={`₹${fmt(displayCapital)}`}
-          sub={accountProfile ? 'From broker' : 'Loading…'}
+          sub={accountProfile?.broker ? `From ${accountProfile.broker}` : 'From broker'}
           accent="blue"
         />
         <KpiCard
@@ -205,15 +205,19 @@ const Dashboard: React.FC = () => {
 
         {/* Account info */}
         <Panel className="lg:col-span-5">
-          <PanelHeader title="Account" sub="Broker snapshot" />
+          <PanelHeader title="Account" sub={accountProfile?.broker ? `${accountProfile.broker} snapshot` : 'Broker snapshot'} />
           <div className="px-4 pb-4 space-y-1">
             {accountProfile ? (
               <>
                 <AccountRow label="User ID" value={accountProfile.user_id || '—'} />
+                <AccountRow label="Broker" value={accountProfile.broker || '—'} mono={false} />
                 <AccountRow label="Email" value={accountProfile.email || '—'} mono={false} />
                 <AccountRow label="Equity" value={`₹${fmt(accountProfile.equity || 0)}`} />
                 <AccountRow label="Net Worth" value={`₹${fmt(accountProfile.net_worth || 0)}`} />
                 <AccountRow label="Available Margin" value={`₹${fmt(accountProfile.margins_available || 0)}`} highlight />
+                {accountProfile.note && (
+                  <p className="text-[10px] text-amber-500 pt-1">{accountProfile.note}</p>
+                )}
               </>
             ) : (
               <EmptyState text="Loading account…" height={160} />

@@ -31,6 +31,8 @@ export interface AccountProfile {
   margins_utilised: number;
   equity: number;
   net_worth: number;
+  broker?: string;
+  note?: string;
 }
 
 interface TradeStore {

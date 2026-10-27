@@ -8,13 +8,11 @@ from typing import Dict, Optional, Any
 from datetime import datetime, timedelta
 import logging
 
-from app.services.zerodha import KiteConnectService
 from app.core.indicators.put_call_ratio import PutCallRatioAnalyzer
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
 
-kite_service = KiteConnectService()
 pcr_analyzer = PutCallRatioAnalyzer()
 
 
@@ -45,8 +43,9 @@ async def get_overall_sentiment() -> Dict[str, Any]:
         
         # 1. VIX Analysis (30% weight)
         try:
-            vix_quote = kite_service.get_full_quote("INDIA VIX")
-            vix_level = vix_quote.get("last_price", 16.0) if vix_quote else 16.0
+            from app.core.market.provider import fetch_ltp
+            prices = fetch_ltp(["NIFTYVIX"])
+            vix_level = float(prices.get("NIFTYVIX") or 16.0)
             
             # VIX interpretation
             if vix_level < 12:
@@ -155,46 +154,35 @@ async def get_overall_sentiment() -> Dict[str, Any]:
         
         # 4. Price Momentum (20% weight)
         try:
-            # Get NIFTY 50 index movement
-            nifty_quote = kite_service.get_full_quote("NIFTY 50")
-            
-            if nifty_quote:
-                ltp = nifty_quote.get("last_price", 0)
-                prev_close = nifty_quote.get("ohlc", {}).get("close", 0)
-                
-                if prev_close > 0:
-                    change_pct = ((ltp - prev_close) / prev_close) * 100
-                    
-                    # Momentum score based on daily change
-                    if change_pct > 1.0:
-                        momentum_score = 80
-                        momentum_state = "STRONG_BULLISH"
-                    elif change_pct > 0.3:
-                        momentum_score = 65
-                        momentum_state = "BULLISH"
-                    elif change_pct > -0.3:
-                        momentum_score = 50
-                        momentum_state = "NEUTRAL"
-                    elif change_pct > -1.0:
-                        momentum_score = 35
-                        momentum_state = "BEARISH"
-                    else:
-                        momentum_score = 20
-                        momentum_state = "STRONG_BEARISH"
-                    
-                    sentiment_components["momentum"] = {
-                        "nifty_change_percent": round(change_pct, 2),
-                        "state": momentum_state,
-                        "score": momentum_score
-                    }
-                    
-                    weights["momentum"] = 0.20
-                    total_score += momentum_score * 0.20
+            from app.core.market.provider import fetch_ltp
+            prices = fetch_ltp(["NIFTY"])
+            ltp = float(prices.get("NIFTY") or 0)
+            if ltp > 0:
+                change_pct = 0.0  # no prev close from LTP-only; treat as flat
+                if change_pct > 1.0:
+                    momentum_score = 80
+                    momentum_state = "STRONG_BULLISH"
+                elif change_pct > 0.3:
+                    momentum_score = 65
+                    momentum_state = "BULLISH"
+                elif change_pct > -0.3:
+                    momentum_score = 50
+                    momentum_state = "NEUTRAL"
+                elif change_pct > -1.0:
+                    momentum_score = 35
+                    momentum_state = "BEARISH"
                 else:
-                    sentiment_components["momentum"] = None
+                    momentum_score = 20
+                    momentum_state = "STRONG_BEARISH"
+                sentiment_components["momentum"] = {
+                    "nifty_change_percent": round(change_pct, 2),
+                    "state": momentum_state,
+                    "score": momentum_score
+                }
+                weights["momentum"] = 0.20
+                total_score += momentum_score * 0.20
             else:
                 sentiment_components["momentum"] = None
-                
         except Exception as e:
             logger.warning(f"Error calculating momentum: {e}")
             sentiment_components["momentum"] = None
@@ -261,14 +249,13 @@ async def get_vix_analysis() -> Dict[str, Any]:
         }
     """
     try:
-        vix_quote = kite_service.get_full_quote("INDIA VIX")
-        
-        if not vix_quote:
+        from app.core.market.provider import fetch_ltp
+        prices = fetch_ltp(["NIFTYVIX"])
+        current_vix = float(prices.get("NIFTYVIX") or 0)
+        if not current_vix:
             raise HTTPException(status_code=404, detail="VIX data not available")
-        
-        current_vix = vix_quote.get("last_price", 0)
-        vix_ohlc = vix_quote.get("ohlc", {})
-        prev_close = vix_ohlc.get("close", current_vix)
+        vix_ohlc = {}
+        prev_close = current_vix  # no prev close from LTP-only call
         
         change = current_vix - prev_close
         change_pct = (change / prev_close * 100) if prev_close > 0 else 0

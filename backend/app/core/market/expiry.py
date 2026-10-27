@@ -27,53 +27,52 @@ def get_next_valid_expiry(instruments: pd.DataFrame, underlying: str):
 
 def get_next_weekly_expiry_from_kite(underlying: str = "NIFTY", skip_monthly: bool = True) -> date:
     """
-    Get the next valid expiry from Kite instruments data.
-    This is the CORRECT way — uses actual Zerodha instrument list 
-    which accounts for holidays and exchange-adjusted expiry dates.
-
-    Falls back to naive weekday calculation if Kite data is unavailable.
+    Get the next valid expiry from broker instruments data.
+    Tries Zerodha instruments first, then falls back to naive weekday calculation.
     """
     try:
-        from app.core.broker.zerodha.instruments import load_instruments
-        instruments = load_instruments("NFO")
-        today = date.today()
+        from app.core.broker.registry import get_active_broker
+        broker = get_active_broker()
 
-        expiries = (
-            instruments[
-                (instruments["name"] == underlying)
-                & (instruments["segment"] == "NFO-OPT")
-            ]["expiry"]
-            .dropna()
-            .drop_duplicates()
-            .sort_values()
-        )
-        expiries = pd.to_datetime(expiries).dt.date
-        future_expiries = sorted(e for e in expiries if e >= today)
+        instruments = None
+        if broker == "ZERODHA":
+            from app.core.broker.zerodha.instruments import load_instruments
+            instruments = load_instruments("NFO")
+        # INDMoney and others: fall through to naive calc below
 
-        if not future_expiries:
-            logger.warning("No future expiries found from Kite for %s, falling back to naive calc", underlying)
-            return get_current_weekly_expiry(underlying)
+        if instruments is not None and not instruments.empty:
+            today = date.today()
+            expiries = (
+                instruments[
+                    (instruments["name"] == underlying)
+                    & (instruments["segment"] == "NFO-OPT")
+                ]["expiry"]
+                .dropna()
+                .drop_duplicates()
+                .sort_values()
+            )
+            expiries = pd.to_datetime(expiries).dt.date
+            future_expiries = sorted(e for e in expiries if e >= today)
 
-        if skip_monthly and len(future_expiries) >= 2:
-            # Skip the nearest if it's today (already expiring)
-            first = future_expiries[0]
-            if first == today:
-                first = future_expiries[1] if len(future_expiries) > 1 else first
-
-            # If nearest expiry is monthly (last weekday of month), use the next one
-            if _is_last_weekday_of_month(first) and len(future_expiries) > 1:
-                second = future_expiries[1]
-                if second != first:
-                    logger.info("Skipping monthly expiry %s, using weekly %s", first, second)
-                    return second
-
-            return first
-
-        return future_expiries[0]
+            if future_expiries:
+                first = future_expiries[0]
+                if first == today:
+                    from datetime import datetime
+                    try:
+                        from zoneinfo import ZoneInfo
+                        now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+                    except Exception:
+                        from datetime import timezone
+                        now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+                    market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+                    if now_ist >= market_close and len(future_expiries) > 1:
+                        first = future_expiries[1]
+                return first
 
     except Exception as e:
-        logger.warning("Failed to load Kite expiries for %s: %s — using naive calc", underlying, e)
-        return get_current_weekly_expiry(underlying)
+        logger.warning("Failed to load broker expiries for %s: %s — using naive calc", underlying, e)
+
+    return get_current_weekly_expiry(underlying)
 
 def get_next_weekly_expiry(today: date | None = None) -> date:
     """
@@ -166,13 +165,6 @@ def get_current_weekly_expiry(underlying: str) -> date:
         # else: days_ahead stays 0, meaning today is still valid
     
     expiry = today + timedelta(days=days_ahead)
-    
-    # If the calculated expiry is monthly (last occurrence of weekday in month),
-    # check if we can skip to the next weekly expiry
-    if _is_last_weekday_of_month(expiry) and days_ahead > 0:
-        # Only skip monthly if it's not today's expiry
-        expiry = expiry + timedelta(days=7)
-    
     return expiry
 
 

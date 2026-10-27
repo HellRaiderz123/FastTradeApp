@@ -7,73 +7,47 @@ This file MUST NOT contain strategy logic.
 
 from typing import List, Dict
 import pandas as pd
-import random
-import time
 import logging
 
-from app.core.broker.zerodha.instruments import get_index_token, load_instruments
-from app.core.broker.zerodha.client import get_kite_client
 from app.core.market.expiry import get_next_valid_expiry, get_next_weekly_expiry
-from app.services.zerodha import KiteConnectService
+from app.core.market.provider import fetch_ltp, fetch_spot as _provider_fetch_spot, get_bulk_quotes
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.db.models_candles import Candle15m
 
 logger = logging.getLogger(__name__)
-_kite_service = KiteConnectService()
 
 # ============================
 # SPOT PRICE
 # ============================
 
-def get_spot(underlying: str) -> float: # type: ignore
+def get_spot(underlying: str) -> float:
     """
-    Fetch live spot price from Zerodha.
+    Fetch live spot price via the configured broker.
     Falls back to latest candle close if API unavailable.
     """
-    try:
-        kite = get_kite_client()
-        token = get_index_token(underlying)
-        
-        # Zerodha LTP returns data with integer token as key
-        data = kite.ltp([token])
-        
-        # Check if token is in response (as integer or string)
-        if token not in data and str(token) not in data:
-            raise KeyError(f"Token {token} not in price response: {list(data.keys())}")
-        
-        # Get the data for this token
-        price_data = data.get(token) or data.get(str(token))
-        if not price_data:
-            raise ValueError(f"No price data for token {token}")
-        
-        spot = price_data.get("last_price")
-        if spot is None or spot <= 0:
-            raise ValueError(f"Invalid spot price: {spot}")
-        
-        logger.info(f"✅ Got live spot from Zerodha: {underlying} = {spot}")
+    # 1. Try broker-agnostic provider
+    spot = _provider_fetch_spot(underlying)
+    if spot and spot > 0:
+        logger.info("✅ Got live spot: %s = %s", underlying, spot)
         return spot
-        
-    except Exception as e:
-        logger.warning(f"⚠️  Zerodha API failed ({e}), falling back to latest candle")
-        # Fallback: use latest candle close price
-        db = SessionLocal()
-        try:
-            latest = (
-                db.query(Candle15m)
-                .filter(Candle15m.symbol == underlying.upper())
-                .order_by(Candle15m.timestamp.desc())
-                .first()
-            )
-            
-            if latest:
-                logger.info(f"✅ Using latest candle close as spot: {underlying} = {latest.close}")
-                return latest.close
-            else:
-                logger.error(f"❌ No candle data found for {underlying}")
-                raise RuntimeError(f"No spot data available for {underlying}")
-        finally:
-            db.close()
+
+    # 2. Fallback: latest candle close
+    logger.warning("⚠️ Live spot unavailable for %s, falling back to latest candle", underlying)
+    db = SessionLocal()
+    try:
+        latest = (
+            db.query(Candle15m)
+            .filter(Candle15m.symbol == underlying.upper())
+            .order_by(Candle15m.timestamp.desc())
+            .first()
+        )
+        if latest:
+            logger.info("✅ Using latest candle close as spot: %s = %s", underlying, latest.close)
+            return latest.close
+        raise RuntimeError(f"No spot data available for {underlying}")
+    finally:
+        db.close()
 
 # ============================
 # ATM STRIKE
@@ -89,6 +63,8 @@ def pick_atm_strike(underlying: str, spot: float) -> int:
 # ============================
 
 def get_option_chain(underlying: str) -> pd.DataFrame:
+    # Options/F&O instrument loading is Zerodha-specific (NFO segment)
+    from app.core.broker.zerodha.instruments import load_instruments
     instruments = load_instruments()
 
     if instruments.empty:
@@ -97,7 +73,7 @@ def get_option_chain(underlying: str) -> pd.DataFrame:
 
     expiry = get_next_valid_expiry(instruments, underlying)
     if not expiry:
-        logger.warning(f"⚠️ No valid expiry found for {underlying}")
+        logger.warning("⚠️ No valid expiry found for %s", underlying)
         return pd.DataFrame(columns=["strike", "instrument_type", "tradingsymbol", "lot_size"])
 
     df = instruments[
@@ -107,13 +83,11 @@ def get_option_chain(underlying: str) -> pd.DataFrame:
     ].copy()
 
     if df.empty:
-        logger.warning(f"⚠️ Option chain empty for {underlying} expiry {expiry}")
+        logger.warning("⚠️ Option chain empty for %s expiry %s", underlying, expiry)
         return pd.DataFrame(columns=["strike", "instrument_type", "tradingsymbol", "lot_size"])
 
     df["strike"] = df["strike"].astype(float)
-
     return df[["strike", "instrument_type", "tradingsymbol", "lot_size"]]
-
 
 
 # ============================
@@ -122,23 +96,22 @@ def get_option_chain(underlying: str) -> pd.DataFrame:
 
 def get_option_ltp(symbols: List[str]) -> Dict[str, float]:
     """
-    Fetch REAL option LTP from Zerodha.
-    Falls back to 0 if API unavailable.
+    Fetch option LTP. Options are NFO-segment instruments — currently
+    only Zerodha supports F&O LTP directly. Falls back to 0 if unavailable.
     """
     try:
+        from app.core.broker.zerodha.client import get_kite_client
         kite = get_kite_client()
         symbols_nfo = [f"NFO:{sym}" for sym in symbols]
         data = kite.ltp(symbols_nfo)
-        logger.info(f"✅ Got LTP for {len(data)} option symbols from Zerodha")
+        logger.info("✅ Got LTP for %d option symbols", len(data))
         return {
             sym.split(":")[1]: info["last_price"]
             for sym, info in data.items()
         }
     except Exception as e:
-        logger.warning(f"⚠️  Could not fetch option LTP ({e}), using 0 as fallback")
-        # Fallback: return 0 for all symbols
+        logger.warning("⚠️ Could not fetch option LTP (%s), using 0 as fallback", e)
         return {sym: 0.0 for sym in symbols}
-
 
 
 # ============================
@@ -147,23 +120,15 @@ def get_option_ltp(symbols: List[str]) -> Dict[str, float]:
 
 def enrich_chain_with_live_oi(chain_df: pd.DataFrame, *_) -> pd.DataFrame:
     """
-    Enrich option chain with live quote fields from Zerodha.
-
+    Enrich option chain with live quote fields via the configured broker.
     Populates LTP, OI, volume, and best bid/ask metadata when available.
-    Falls back gracefully if live data cannot be fetched.
     """
     if chain_df is None:
         return pd.DataFrame()
 
-    # Always add these columns
     for col, default in {
-        "ltp": 0.0,
-        "oi": 0.0,
-        "volume": 0.0,
-        "bid": 0.0,
-        "ask": 0.0,
-        "bid_qty": 0.0,
-        "ask_qty": 0.0,
+        "ltp": 0.0, "oi": 0.0, "volume": 0.0,
+        "bid": 0.0, "ask": 0.0, "bid_qty": 0.0, "ask_qty": 0.0,
     }.items():
         if col not in chain_df.columns:
             chain_df[col] = default
@@ -174,7 +139,7 @@ def enrich_chain_with_live_oi(chain_df: pd.DataFrame, *_) -> pd.DataFrame:
     try:
         symbols = [str(sym).strip() for sym in chain_df["tradingsymbol"].tolist() if str(sym).strip()]
         nfo_symbols = [sym if sym.startswith("NFO:") else f"NFO:{sym}" for sym in symbols]
-        quotes = _kite_service.get_bulk_quotes(nfo_symbols) or {}
+        quotes = get_bulk_quotes(nfo_symbols) or {}
 
         if not quotes:
             logger.warning("⚠️ Could not fetch live option quotes; leaving chain enrichment at defaults")
@@ -188,18 +153,18 @@ def enrich_chain_with_live_oi(chain_df: pd.DataFrame, *_) -> pd.DataFrame:
                 return float((raw.get("depth") or {}).get("sell", [{}])[0].get("price", default) or default)
             return float(raw.get(field, default) or default)
 
-        chain_df["ltp"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "last_price", 0.0))
-        chain_df["oi"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "oi", 0.0))
-        chain_df["volume"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "volume", 0.0))
-        chain_df["bid"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "bid", 0.0))
-        chain_df["ask"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "ask", 0.0))
+        chain_df["ltp"]     = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "last_price", 0.0))
+        chain_df["oi"]      = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "oi", 0.0))
+        chain_df["volume"]  = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "volume", 0.0))
+        chain_df["bid"]     = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "bid", 0.0))
+        chain_df["ask"]     = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "ask", 0.0))
         chain_df["bid_qty"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "buy_quantity", 0.0))
         chain_df["ask_qty"] = chain_df["tradingsymbol"].map(lambda ts: _quote_value(ts, "sell_quantity", 0.0))
 
-        logger.info("✅ Enriched option chain with %d live quotes including OI/volume", len(quotes))
+        logger.info("✅ Enriched option chain with %d live quotes", len(quotes))
 
     except Exception as e:
-        logger.warning(f"⚠️  Could not enrich chain ({e}), using 0/default values")
+        logger.warning("⚠️ Could not enrich chain (%s), using defaults", e)
 
     return chain_df
 

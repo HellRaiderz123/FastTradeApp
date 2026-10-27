@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import logging
+import math
 import pandas as pd
 
 from app.services.zerodha import KiteConnectService
@@ -15,6 +16,69 @@ from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/options/real", tags=["options_real"])
+
+
+def _bs_price(spot: float, strike: float, t: float, vol: float, r: float, opt_type: str) -> float:
+    """Black-Scholes option price."""
+    if t <= 0 or vol <= 0:
+        return max(spot - strike, 0) if opt_type == "CE" else max(strike - spot, 0)
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (r + 0.5 * vol ** 2) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+    N = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
+    if opt_type == "CE":
+        return spot * N(d1) - strike * math.exp(-r * t) * N(d2)
+    return strike * math.exp(-r * t) * N(-d2) - spot * N(-d1)
+
+
+def _calc_iv(ltp: float, spot: float, strike: float, t: float, r: float, opt_type: str) -> float:
+    """Newton-Raphson IV solver. Returns IV as percentage (e.g. 18.5)."""
+    if ltp <= 0 or t <= 0:
+        return 0.0
+    intrinsic = max(spot - strike, 0) if opt_type == "CE" else max(strike - spot, 0)
+    if ltp <= intrinsic:
+        return 0.0
+    vol = 0.3  # initial guess
+    sqrt_t = math.sqrt(t)
+    N_pdf = lambda x: math.exp(-0.5 * x ** 2) / math.sqrt(2 * math.pi)
+    for _ in range(50):
+        price = _bs_price(spot, strike, t, vol, r, opt_type)
+        d1 = (math.log(spot / strike) + (r + 0.5 * vol ** 2) * t) / (vol * sqrt_t)
+        vega = spot * N_pdf(d1) * sqrt_t
+        diff = price - ltp
+        if abs(diff) < 0.001:
+            break
+        if vega < 1e-10:
+            break
+        vol -= diff / vega
+        vol = max(0.001, min(vol, 5.0))
+    return round(vol * 100, 2)
+
+
+def _calc_greeks(spot: float, strike: float, t: float, vol_pct: float, r: float, opt_type: str) -> dict:
+    """Black-Scholes Greeks. vol_pct is IV as percentage."""
+    try:
+        vol = vol_pct / 100.0
+        if t <= 0 or vol <= 0:
+            return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
+        sqrt_t = math.sqrt(t)
+        d1 = (math.log(spot / strike) + (r + 0.5 * vol ** 2) * t) / (vol * sqrt_t)
+        d2 = d1 - vol * sqrt_t
+        N = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
+        N_pdf = lambda x: math.exp(-0.5 * x ** 2) / math.sqrt(2 * math.pi)
+        gamma = round(N_pdf(d1) / (spot * vol * sqrt_t), 6)
+        vega = round(spot * N_pdf(d1) * sqrt_t / 100, 4)
+        if opt_type == "CE":
+            delta = round(N(d1), 4)
+            theta = round((-spot * N_pdf(d1) * vol / (2 * sqrt_t) - r * strike * math.exp(-r * t) * N(d2)) / 365, 4)
+            rho = round(strike * t * math.exp(-r * t) * N(d2) / 100, 4)
+        else:
+            delta = round(-N(-d1), 4)
+            theta = round((-spot * N_pdf(d1) * vol / (2 * sqrt_t) + r * strike * math.exp(-r * t) * N(-d2)) / 365, 4)
+            rho = round(-strike * t * math.exp(-r * t) * N(-d2) / 100, 4)
+        return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "rho": rho}
+    except Exception:
+        return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
 
 kite_service = KiteConnectService()
 
@@ -203,6 +267,8 @@ async def get_real_option_chain(
             )
         
         # 7. Build option chain from real data
+        today = datetime.now().date()
+        days_to_expiry = (expiry_date - today).days
         chain_data = {}
         
         for tradingsymbol, quote_data in quotes.items():
@@ -215,22 +281,38 @@ async def get_real_option_chain(
                 chain_data[strike] = {"strike": strike, "call": None, "put": None}
             
             # Extract real market data
+            ltp = float(quote_data.get("last_price", 0))
+            ohlc = quote_data.get("ohlc") or {}
+            close = float(ohlc.get("close", 0))
+            change = ltp - close
+            change_percent = round((change / close * 100), 2) if close > 0 else 0.0
+
+            # Greeks & IV from real LTP
+            t = max(days_to_expiry / 365, 0.001)
+            r = 0.07
+            iv = _calc_iv(ltp, spot, strike, t, r, opt_type)
+            greeks = _calc_greeks(spot, strike, t, iv, r, opt_type)
+
             option_data = {
-                "ltp": float(quote_data.get("last_price", 0)),
-                "change": float(quote_data.get("net_change", 0)),
-                "change_percent": float(quote_data.get("change_percent", 0)),
+                "ltp": ltp,
+                "change": round(change, 2),
+                "change_percent": change_percent,
                 "volume": int(quote_data.get("volume", 0)),
                 "oi": int(quote_data.get("oi", 0)),
-                "bid": float(quote_data.get("buy_price", 0)),
-                "ask": float(quote_data.get("sell_price", 0)),
-                "bid_qty": int(quote_data.get("buy_quantity", 0)),
-                "ask_qty": int(quote_data.get("sell_quantity", 0)),
-                "high": float(quote_data.get("ohlc", {}).get("high", 0)),
-                "low": float(quote_data.get("ohlc", {}).get("low", 0)),
-                "open": float(quote_data.get("ohlc", {}).get("open", 0)),
-                "close": float(quote_data.get("ohlc", {}).get("close", 0)),
+                "iv": iv,
+                "delta": greeks["delta"],
+                "gamma": greeks["gamma"],
+                "theta": greeks["theta"],
+                "vega": greeks["vega"],
+                "rho": greeks["rho"],
+                "bid": float((quote_data.get("depth") or {}).get("buy", [{}])[0].get("price", 0) if quote_data.get("depth") else 0),
+                "ask": float((quote_data.get("depth") or {}).get("sell", [{}])[0].get("price", 0) if quote_data.get("depth") else 0),
+                "high": float(ohlc.get("high", 0)),
+                "low": float(ohlc.get("low", 0)),
+                "open": float(ohlc.get("open", 0)),
+                "close": close,
             }
-            
+
             # Calculate intrinsic value
             if opt_type == "CE":
                 option_data["intrinsic"] = max(spot - strike, 0)
@@ -238,17 +320,12 @@ async def get_real_option_chain(
             else:
                 option_data["intrinsic"] = max(strike - spot, 0)
                 chain_data[strike]["put"] = option_data
-            
-            # Calculate time value
-            option_data["time_value"] = option_data["ltp"] - option_data["intrinsic"]
+
+            option_data["time_value"] = max(ltp - option_data["intrinsic"], 0)
         
         # 8. Sort strikes and convert to list
         sorted_strikes = sorted(chain_data.keys())
         strikes_list = [chain_data[s] for s in sorted_strikes]
-        
-        # 9. Calculate days to expiry
-        today = datetime.now().date()
-        days_to_expiry = (expiry_date - today).days
         
         response_payload = {
             "symbol": symbol,

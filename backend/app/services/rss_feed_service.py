@@ -19,11 +19,20 @@ class NSERSSFeedService:
     
     # Real RSS Feed URLs from Indian Financial News Sites
     NSE_FEEDS = {
+        # MoneyControl
         "moneycontrol": "https://www.moneycontrol.com/rss/MCtopnews.xml",
         "moneycontrol_market": "https://www.moneycontrol.com/rss/marketreports.xml",
+        # Economic Times
         "economic_times": "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
-        "business_standard": "https://www.business-standard.com/rss/home_page_top_stories.rss",
-        "business_standard_market": "https://www.business-standard.com/rss/markets-106.rss",
+        # Business Standard — 8 working feeds
+        "bs_top": "https://www.business-standard.com/rss/home_page_top_stories.rss",
+        "bs_markets": "https://www.business-standard.com/rss/markets-106.rss",
+        "bs_finance": "https://www.business-standard.com/rss/finance-103.rss",
+        "bs_companies": "https://www.business-standard.com/rss/companies-101.rss",
+        "bs_technology": "https://www.business-standard.com/rss/technology-108.rss",
+        "bs_investment": "https://www.business-standard.com/rss/finance/investment-10315.rss",
+        "bs_finance_news": "https://www.business-standard.com/rss/finance/news-10301.rss",
+        "bs_latest": "https://www.business-standard.com/rss/latest.rss",
     }
     
     # User agent to mimic browser
@@ -73,6 +82,20 @@ class NSERSSFeedService:
                 "moneycontrol": "MoneyControl",
                 "moneycontrol_market": "MoneyControl Markets",
                 "economic_times": "Economic Times",
+                "bs_top": "Business Standard",
+                "bs_markets": "BS Markets",
+                "bs_finance": "BS Finance",
+                "bs_economy": "BS Economy",
+                "bs_companies": "BS Companies",
+                "bs_banking": "BS Banking",
+                "bs_technology": "BS Technology",
+                "bs_personal_finance": "BS Personal Finance",
+                "bs_international": "BS International",
+                "bs_current_affairs": "BS Current Affairs",
+                "bs_investment": "BS Investment",
+                "bs_finance_news": "BS Finance News",
+                "bs_latest": "BS Latest",
+                # legacy keys (backward compat)
                 "business_standard": "Business Standard",
                 "business_standard_market": "BS Markets",
             }
@@ -147,7 +170,7 @@ class NSERSSFeedService:
             if cat in self.NSE_FEEDS
         }
 
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as executor:
             futures = {
                 executor.submit(self.fetch_feed, url, cat): cat
                 for cat, url in tasks.items()
@@ -159,8 +182,16 @@ class NSERSSFeedService:
                     logger.warning("Feed fetch error: %s", e)
 
         all_items.sort(key=lambda x: x['published'], reverse=True)
-        NSERSSFeedService._cache = (all_items, time.monotonic())
-        return all_items
+        # Deduplicate by title (multiple BS feeds may carry the same headline)
+        seen_titles: set = set()
+        deduped: list = []
+        for item in all_items:
+            title_key = (item.get('title') or '').strip().lower()[:80]
+            if title_key and title_key not in seen_titles:
+                seen_titles.add(title_key)
+                deduped.append(item)
+        NSERSSFeedService._cache = (deduped, time.monotonic())
+        return deduped
     
     def _categorize_news(self, title: str, description: str) -> str:
         """

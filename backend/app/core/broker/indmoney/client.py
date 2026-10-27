@@ -128,6 +128,19 @@ class INDMoneyClient:
             "response": body,
         }
 
+    def get_funds(self) -> Dict[str, Any]:
+        """Fetch available funds/balance from INDstocks.
+        Endpoint configurable via INDMONEY_FUNDS_PATH (default: /funds).
+        Response keys tried: available_balance, net, available, data.available_balance
+        """
+        funds_path = os.getenv("INDMONEY_FUNDS_PATH", "/funds")
+        return self._request_json("GET", funds_path)
+
+    def get_margin_basket(self, orders: list) -> dict:
+        """Fetch basket margin from INDstocks margin API."""
+        margin_path = os.getenv("INDMONEY_MARGIN_PATH", "/margin/basket")
+        return self._request_json("POST", margin_path, {"orders": orders})
+
     def get_instruments_csv(self, source: str) -> str:
         """Fetch instruments CSV from INDstocks by source (fno/equity/index)."""
         if not self.access_token:

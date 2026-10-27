@@ -44,6 +44,8 @@ const CandleBackfill = lazy(() => import('./pages/CandleBackfill'));
 const ScheduledJobs = lazy(() => import('./pages/ScheduledJobs'));
 const ScalpTrading = lazy(() => import('./pages/ScalpTrading'));
 const QuantBot = lazy(() => import('./pages/QuantBot'));
+const FiiDii = lazy(() => import('./pages/FiiDii'));
+const StockResearch = lazy(() => import('./pages/StockResearch'));
 const Login = lazy(() => import('./pages/Login'));
 
 // Page loader fallback
@@ -176,6 +178,8 @@ function AppInner() {
                       <Route path="/signal-reconciliation" element={<SignalReconciliation />} />
                       <Route path="/quant-bot" element={<QuantBot />} />
                       <Route path="/scheduled-jobs" element={<ScheduledJobs />} />
+                      <Route path="/fii-dii" element={<FiiDii />} />
+                      <Route path="/stock-research" element={<StockResearch />} />
                     </Routes>
                   </Suspense>
                 </main>

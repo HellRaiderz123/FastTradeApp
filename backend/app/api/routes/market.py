@@ -4,14 +4,10 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
 import logging
 
-from app.services.zerodha import KiteConnectService
-from app.core.broker.zerodha.instruments import load_instruments
 from app.services.market_data import get_option_ltp
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/market", tags=["market"])
-
-kite_service = KiteConnectService()
 
 
 @router.get("/quotes/bulk")
@@ -42,6 +38,7 @@ async def get_bulk_quotes_rest(symbols: str = ""):
 def _find_option_tradingsymbol(*, underlying: str, expiry: str, strike: int, option_type: str) -> str | None:
     """Find NFO tradingsymbol for an option contract via instruments list."""
     try:
+        from app.core.broker.zerodha.instruments import load_instruments
         df = load_instruments()
         if df.empty:
             return None
@@ -93,14 +90,14 @@ async def get_ltp(symbol: str = "NIFTY"):
         }
     """
     try:
-        # Get LTP from Zerodha
-        data = kite_service.get_quote(symbol)
-        
-        if data and "last_price" in data and data["last_price"] is not None:
+        from app.core.market.provider import fetch_ltp
+        prices = fetch_ltp([symbol])
+        ltp = prices.get(symbol)
+        if ltp and float(ltp) > 0:
             return {
                 "symbol": symbol,
-                "ltp": data.get("last_price"),
-                "iv": data.get("iv"),
+                "ltp": float(ltp),
+                "iv": None,
                 "timestamp": datetime.now().isoformat()
             }
         
@@ -331,9 +328,11 @@ async def get_option_premium(
         # Include spot (best-effort)
         spot = None
         try:
-            spot_data = kite_service.get_quote(underlying)
-            if spot_data and spot_data.get("last_price"):
-                spot = float(spot_data.get("last_price"))
+            from app.core.market.provider import fetch_ltp
+            prices = fetch_ltp([underlying])
+            spot_val = prices.get(underlying)
+            if spot_val and float(spot_val) > 0:
+                spot = float(spot_val)
         except Exception:
             spot = None
 
@@ -415,8 +414,16 @@ async def get_option_chain(symbol: str = "NIFTY", expiry: str = None):
             expiry = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
         # Get spot price
-        spot_data = kite_service.get_quote(symbol)
-        spot = spot_data.get("last_price", 26150) if spot_data else 26150
+        spot = None
+        try:
+            from app.core.market.provider import fetch_ltp
+            prices = fetch_ltp([symbol])
+            spot_val = prices.get(symbol)
+            if spot_val and float(spot_val) > 0:
+                spot = float(spot_val)
+        except Exception:
+            pass
+        spot = spot or 26150
         
         underlying = symbol.upper().strip()
 
@@ -612,25 +619,25 @@ async def get_bulk_quotes(symbols: str):
         
         for symbol in symbol_list:
             try:
-                # Try to get live data from Zerodha
-                data = kite_service.get_full_quote(symbol)
+                from app.core.market.provider import fetch_ltp
+                prices = fetch_ltp([symbol])
+                ltp_val = prices.get(symbol)
                 
-                if data and "last_price" in data and data["last_price"] is not None:
-                    ltp = float(data["last_price"])
-                    ohlc = data.get("ohlc", {})
-                    prev_close = ohlc.get("close", ltp)
-                    change = ltp - prev_close
-                    change_percent = (change / prev_close * 100) if prev_close else 0
+                if ltp_val and float(ltp_val) > 0:
+                    ltp = float(ltp_val)
+                    prev_close = ltp  # no prev close from LTP-only
+                    change = 0.0
+                    change_percent = 0.0
                     
                     quotes.append({
                         "symbol": symbol,
                         "ltp": round(ltp, 2),
                         "change": round(change, 2),
                         "change_percent": round(change_percent, 2),
-                        "volume": data.get("volume", 0),
-                        "open": ohlc.get("open", ltp),
-                        "high": ohlc.get("high", ltp),
-                        "low": ohlc.get("low", ltp),
+                        "volume": 0,
+                        "open": ltp,
+                        "high": ltp,
+                        "low": ltp,
                         "prev_close": prev_close,
                         "timestamp": datetime.now().isoformat(),
                         "live": True
@@ -739,23 +746,16 @@ async def get_candles(
         else:
             from_dt = datetime.strptime(from_date, "%Y-%m-%d")
         
-        # Try to fetch from Zerodha
+        # Try to get current price
+        base_price = 2875.0
         try:
-            # Get current price first to use as base for synthetic data
-            quote_data = kite_service.get_full_quote(symbol)
-            if quote_data and "last_price" in quote_data:
-                base_price = float(quote_data["last_price"])
-            else:
-                base_price = 2875.0  # Fallback
-                
-            # TODO: Implement proper historical data from Zerodha
-            # For now, Zerodha historical API requires instrument tokens
-            # which need complex mapping. Using current price + synthetic history
-            logger.info(f"Using current price {base_price} for {symbol} candles")
-            
+            from app.core.market.provider import fetch_ltp
+            prices = fetch_ltp([symbol])
+            ltp_val = prices.get(symbol)
+            if ltp_val and float(ltp_val) > 0:
+                base_price = float(ltp_val)
         except Exception as e:
             logger.warning(f"Failed to get current price for {symbol}: {e}")
-            base_price = 2875.0  # Default fallback
         
         # Generate synthetic candles based on current price
         candles = []

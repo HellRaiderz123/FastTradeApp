@@ -258,21 +258,19 @@ def cleanup_expired_jobs() -> int:
 
 def _get_price_at_decision(symbol: str, result: dict) -> Optional[float]:
     """
-    Try to get the real-time price via Zerodha quote.
+    Try to get the real-time price via the configured broker.
     Falls back to last candle close from data_summary.
     """
-    # 1. Try Zerodha live quote
+    # 1. Try live LTP via broker-agnostic provider
     try:
-        from app.services.zerodha import KiteConnectService
-        kite = KiteConnectService()
-        q = kite.get_full_quote(symbol)
-        if q:
-            price = float(q.get("last_price") or 0)
-            if price > 0:
-                logger.debug("trading_agents: live price %.2f for %s from Zerodha", price, symbol)
-                return price
+        from app.core.market.provider import fetch_ltp
+        prices = fetch_ltp([symbol])
+        price = prices.get(symbol)
+        if price and float(price) > 0:
+            logger.debug("trading_agents: live price %.2f for %s", price, symbol)
+            return float(price)
     except Exception as e:
-        logger.debug("trading_agents: Zerodha price fetch failed for %s: %s", symbol, e)
+        logger.debug("trading_agents: live price fetch failed for %s: %s", symbol, e)
     # 2. Fall back to last candle close
     price = result.get("data_summary", {}).get("current_price")
     if price:
@@ -569,7 +567,7 @@ def _get_candle_data(
             try:
                 fetch_fn, days = fetcher
                 logger.info(
-                    "trading_agents: insufficient %s candles for %s (%d/%d). Backfilling from Zerodha.",
+                    "trading_agents: insufficient %s candles for %s (%d/%d). Backfilling from market data provider.",
                     timeframe,
                     symbol,
                     len(payload),
@@ -579,7 +577,7 @@ def _get_candle_data(
                 payload = _query_rows(db)
                 if len(payload) >= min_required:
                     logger.info(
-                        "trading_agents: Zerodha backfill succeeded for %s %s (%d rows)",
+                        "trading_agents: backfill succeeded for %s %s (%d rows)",
                         symbol,
                         timeframe,
                         len(payload),
@@ -600,26 +598,68 @@ def _get_candle_data(
         return []
 
 
-def _get_news_items(limit: int = 15) -> list[dict]:
-    """Fetch recent news from RSS feeds (already in FastTradeApp)."""
+def _get_news_items(symbol: str = "", limit: int = 15) -> list[dict]:
+    """Fetch recent news, deduplicate by title, date-filter to 7 days, score relevance to symbol."""
     try:
         from app.services.rss_feed_service import get_rss_service
         svc = get_rss_service()
         items = svc.fetch_all_feeds()
-        return items[:limit]
     except Exception as e:
         logger.warning("trading_agents: news fetch failed: %s", e)
         return []
 
+    cutoff = datetime.utcnow() - timedelta(days=7)
+    sym_lower = symbol.lower()
+    # Company name hints from symbol (e.g. BHEL -> bhel, bharatelec)
+    sym_tokens = [sym_lower] if sym_lower else []
+
+    seen_titles: set[str] = set()
+    scored: list[tuple[int, dict]] = []
+    for item in items:
+        title = (item.get("title") or "").strip()
+        if not title:
+            continue
+        # Deduplicate: normalise title to first 60 chars lowercase
+        key = title.lower()[:60]
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+
+        # Date filter — keep only last 7 days if date is parseable
+        pub = item.get("published") or item.get("pub_date") or ""
+        if pub:
+            try:
+                from email.utils import parsedate_to_datetime
+                pub_dt = parsedate_to_datetime(pub).replace(tzinfo=None)
+                if pub_dt < cutoff:
+                    continue
+            except Exception:
+                pass  # unparseable date — keep the item
+
+        # Relevance score: 2 pts if symbol in title, 1 pt if in description
+        score = 0
+        title_lower = title.lower()
+        desc_lower = (item.get("description") or item.get("summary") or "").lower()
+        for tok in sym_tokens:
+            if tok in title_lower:
+                score += 2
+            elif tok in desc_lower:
+                score += 1
+        scored.append((score, {**item, "relevance_score": score, "title": title}))
+
+    # Sort: symbol-relevant first, then by original order
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item for _, item in scored[:limit]]
+
 
 def _get_vix() -> Optional[float]:
-    """Fetch India VIX last price from Zerodha."""
+    """Fetch India VIX last price via the configured broker."""
     try:
-        from app.services.zerodha import KiteConnectService
-        kite = KiteConnectService()
-        quote = kite.get_full_quote("INDIA VIX")
-        if quote:
-            return float(quote.get("last_price", 16.0))
+        from app.core.market.provider import fetch_ltp
+        prices = fetch_ltp(["NIFTYVIX"])
+        vix = prices.get("NIFTYVIX")
+        if vix and float(vix) > 0:
+            return float(vix)
     except Exception as e:
         logger.warning("trading_agents: VIX fetch failed: %s", e)
     return None
@@ -798,9 +838,44 @@ def _compute_indicators(candles: list[dict], timeframe: str = "15m") -> dict:
         trend = "UPTREND" if bias == "BULLISH" else ("DOWNTREND" if bias == "BEARISH" else "SIDEWAYS")
 
         vols = [float(c.get("volume") or 0) for c in candles]
-        avg_vol  = sum(vols[-10:]) / 10 if len(vols) >= 10 else (sum(vols) / len(vols) if vols else 0)
+        avg_vol_20 = sum(vols[-20:]) / 20 if len(vols) >= 20 else (sum(vols) / len(vols) if vols else 0)
         last_vol = vols[-1] if vols else 0
-        vol_signal = "HIGH" if last_vol > avg_vol * 1.5 else ("LOW" if last_vol < avg_vol * 0.5 else "NORMAL")
+        vol_ratio = round(last_vol / avg_vol_20, 2) if avg_vol_20 > 0 else 1.0
+        vol_signal = "HIGH" if vol_ratio > 1.5 else ("LOW" if vol_ratio < 0.5 else "NORMAL")
+
+        # ATR (14-period)
+        atr = None
+        try:
+            if len(candles) >= 15:
+                trs = []
+                for i in range(1, min(15, len(candles))):
+                    h = float(candles[-i].get("high") or 0)
+                    l = float(candles[-i].get("low") or 0)
+                    pc = float(candles[-i-1].get("close") or 0)
+                    trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+                atr = round(sum(trs) / len(trs), 2)
+        except Exception:
+            pass
+
+        # +DI / -DI from ADX indicator or approximate from candles
+        plus_di = ind.get("plus_di") or ind.get("+di")
+        minus_di = ind.get("minus_di") or ind.get("-di")
+
+        # Swing highs/lows (last 20 bars, 3-bar pivot)
+        swing_high = swing_low = None
+        try:
+            if len(highs) >= 5:
+                for i in range(len(highs) - 2, 1, -1):
+                    if highs[i] > highs[i-1] and highs[i] > highs[i+1] if i+1 < len(highs) else True:
+                        swing_high = round(highs[i], 2)
+                        break
+            if len(lows) >= 5:
+                for i in range(len(lows) - 2, 1, -1):
+                    if lows[i] < lows[i-1] and lows[i] < lows[i+1] if i+1 < len(lows) else True:
+                        swing_low = round(lows[i], 2)
+                        break
+        except Exception:
+            pass
 
         return {
             "available": True,
@@ -810,7 +885,12 @@ def _compute_indicators(candles: list[dict], timeframe: str = "15m") -> dict:
             "rsi14": ind.get("rsi"),
             "macd_line": ind.get("macd_hist"),
             "adx": ind.get("adx"),
+            "plus_di": plus_di,
+            "minus_di": minus_di,
+            "atr": atr,
             "stoch_k": ind.get("stoch_k"),
+            "swing_high": swing_high,
+            "swing_low": swing_low,
             "trend": trend,
             "bias": bias,
             "signal": sig.get("signal"),
@@ -818,13 +898,16 @@ def _compute_indicators(candles: list[dict], timeframe: str = "15m") -> dict:
             "support": support,
             "resistance": resistance,
             "volume_signal": vol_signal,
+            "volume_ratio_vs_20bar": vol_ratio,
             "bars_analysed": len(closes),
             "quality_score": sig.get("quality_score", 0),
             "trade_readiness_score": sig.get("trade_readiness_score", 0),
             "summary": (
                 f"Price {current_price:.2f} | {trend} | Bias {bias} | "
-                f"RSI {ind.get('rsi', '?')} | ADX {ind.get('adx', '?')} | "
-                f"S {support} R {resistance} | Vol {vol_signal} | "
+                f"RSI {ind.get('rsi', '?')} | ADX {ind.get('adx', '?')} "
+                f"+DI {plus_di} -DI {minus_di} | ATR {atr} | "
+                f"S {support} R {resistance} | SwingH {swing_high} SwingL {swing_low} | "
+                f"Vol {vol_signal} ({vol_ratio}x 20-bar avg) | "
                 f"Signal {sig.get('signal')} ({sig.get('confidence', 0):.0f}%)"
             ),
         }
@@ -859,6 +942,7 @@ def _llm_agent(
         max_tokens=max_tokens,
         temperature=0.15,
         timeout=60.0,
+        caller=agent_name,
     )
     if not raw:
         logger.warning("%s: LLM returned empty response", agent_name)
@@ -885,7 +969,10 @@ def _run_technical_agent(symbol: str, indicators: dict, multi_tf: Optional[dict]
     system = (
         "You are a senior technical analyst for Indian equity markets (NSE/BSE). "
         "Analyse the provided multi-timeframe price data and indicator values. "
-        "Keep rationale and explanations concise (under 2-3 sentences max). Always respond with a single valid JSON object and nothing else."
+        "ADX measures trend strength — use +DI vs -DI to determine direction (not just ADX value). "
+        "ATR gives absolute volatility for stop placement. Volume ratio vs 20-bar avg confirms breakouts. "
+        "Swing highs/lows are key invalidation levels. "
+        "Keep rationale concise (2-3 sentences max). Always respond with a single valid JSON object and nothing else."
     )
     tf_section = ""
     if multi_tf:
@@ -895,7 +982,9 @@ def _run_technical_agent(symbol: str, indicators: dict, multi_tf: Optional[dict]
                 tf: {
                     k: v for k, v in d.items()
                     if k in ("current_price", "trend", "rsi14", "ema20", "ema50",
-                             "macd_line", "support", "resistance", "volume_signal")
+                             "macd_line", "support", "resistance", "volume_signal",
+                             "adx", "plus_di", "minus_di", "atr", "swing_high", "swing_low",
+                             "volume_ratio_vs_20bar")
                 }
                 for tf, d in available.items()
             }
@@ -908,37 +997,51 @@ def _run_technical_agent(symbol: str, indicators: dict, multi_tf: Optional[dict]
         '{"trend": "BULLISH|BEARISH|SIDEWAYS", '
         '"rsi_interpretation": "OVERBOUGHT|NEUTRAL|OVERSOLD", '
         '"momentum": "STRONG|MODERATE|WEAK", '
+        '"adx_interpretation": "TRENDING|RANGING (use +DI vs -DI for direction)", '
+        '"volume_confirmation": "CONFIRMED|UNCONFIRMED|WEAK (vs 20-bar avg)", '
         '"key_support": <number>, '
         '"key_resistance": <number>, '
+        '"swing_high": <number or null>, '
+        '"swing_low": <number or null>, '
+        '"atr": <number or null>, '
         '"signals": ["..."], '
         '"mtf_alignment": "ALIGNED_BULL|ALIGNED_BEAR|MIXED|UNAVAILABLE", '
-        '"summary": "2-3 sentence technical outlook including multi-timeframe view"}'
+        '"summary": "2-3 sentence technical outlook including ADX direction, volume confirmation, and swing levels"}'
     )
-    return _llm_agent("TechnicalAnalyst", system, user, max_tokens=800)
+    return _llm_agent("TechnicalAnalyst", system, user, max_tokens=1200)
 
 
 def _run_news_agent(symbol: str, news_items: list[dict]) -> dict:
-    # Summarise news to avoid huge prompts
     headlines = [
-        {"title": n.get("title", "")[:120], "sentiment": n.get("sentiment", "neutral")}
+        {
+            "title": n.get("title", "")[:120],
+            "date": n.get("published") or n.get("pub_date") or "unknown",
+            "sentiment": n.get("sentiment", "neutral"),
+            "relevance": n.get("relevance_score", 0),
+        }
         for n in news_items[:12]
     ]
+    symbol_relevant = [h for h in headlines if h["relevance"] > 0]
     system = (
         "You are a senior news analyst specialising in Indian financial markets. "
-        "Evaluate how recent news headlines may impact trading sentiment. "
+        "Headlines are pre-scored for relevance to the symbol (score > 0 = directly relevant). "
+        "Prioritise symbol-relevant, recent headlines. Ignore stale or irrelevant macro noise. "
         "Always respond with a single valid JSON object and nothing else."
     )
     user = (
         f"Symbol being analysed: {symbol}\n"
-        f"Recent Market Headlines (max 12):\n{json.dumps(headlines, indent=2)}\n\n"
+        f"Symbol-relevant headlines ({len(symbol_relevant)} found):\n"
+        f"{json.dumps(symbol_relevant, indent=2)}\n"
+        f"General market headlines:\n{json.dumps([h for h in headlines if h['relevance'] == 0], indent=2)}\n\n"
         "Respond with exactly this JSON structure:\n"
         '{"macro_tone": "RISK_ON|RISK_OFF|NEUTRAL", '
         '"stock_relevance": "HIGH|MEDIUM|LOW", '
         '"key_themes": ["..."], '
         '"news_impact": "POSITIVE|NEGATIVE|NEUTRAL", '
-        '"summary": "2-3 sentence news outlook for this symbol"}'
+        '"direct_news_count": <integer>, '
+        '"summary": "2-3 sentence news outlook — lead with symbol-specific news if any, else macro context"}'
     )
-    return _llm_agent("NewsAnalyst", system, user, max_tokens=800)
+    return _llm_agent("NewsAnalyst", system, user, max_tokens=1200)
 
 
 def _run_sentiment_agent(symbol: str, vix: Optional[float], twitter: Optional[dict]) -> dict:
@@ -1048,127 +1151,122 @@ def _run_bear_researcher(
 
 def _get_fundamental_data(symbol: str) -> dict:
     """
-    Fetch fundamental metrics for a symbol using Yahoo Finance public endpoints.
-    Falls back to a stable baseline payload if remote data is unavailable.
+    Fetch fundamental metrics for a symbol.
+    Priority:
+      1. yashsarawgi.me Indian Stocks Fundamentals API (cached 90 days) — PE, PB, ROE, ROCE, peers
+      2. INDstocks full quote (authenticated) — live price, 52w range, volume
+      3. Null fallback
     """
     def _to_float(v: Any) -> Optional[float]:
         try:
-            if v is None:
-                return None
-            return float(v)
+            return float(v) if v is not None else None
         except Exception:
             return None
 
-    def _round(v: Optional[float], digits: int = 2) -> Optional[float]:
-        return round(v, digits) if isinstance(v, (int, float)) else None
+    # ── 1. yashsarawgi.me Fundamentals API (primary — cached 90 days) ────────
+    fund: dict = {}
+    try:
+        from app.api.routes.fundamentals import get_fundamentals_data
+        fund = get_fundamentals_data(symbol)
+        if fund:
+            logger.debug("trading_agents: fundamentals API OK for %s (PE=%s)", symbol, fund.get("pe_ratio"))
+    except Exception as e:
+        logger.debug("trading_agents: fundamentals API failed for %s: %s", symbol, e)
 
-    # NSE symbols on Yahoo are commonly represented as SYMBOL.NS.
-    # We first try NSE suffix, then plain symbol fallback.
-    candidates = [f"{symbol}.NS", symbol]
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
+    # ── 2. INDstocks full quote (live price / 52w / volume) ──────────────────
+    indstocks_data: dict = {}
+    try:
+        from app.core.broker.indstocks.market_data import _headers, get_scrip_code, BASE_URL
+        import requests as _req
+        scrip = get_scrip_code(symbol)
+        r = _req.get(
+            f"{BASE_URL}/market/quotes/full",
+            params={"scrip-codes": scrip},
+            headers=_headers(),
+            timeout=8,
         )
-    }
-
-    for candidate in candidates:
-        try:
-            # Endpoint 1: Quote snapshot (fast path for PE/PB/dividend)
-            q_url = (
-                "https://query1.finance.yahoo.com/v7/finance/quote?symbols="
-                + quote(candidate)
-            )
-            q_req = Request(q_url, headers=headers)
-            with urlopen(q_req, timeout=8) as res:
-                quote_json = json.loads(res.read().decode("utf-8"))
-
-            quote_rows = (
-                quote_json.get("quoteResponse", {}).get("result", [])
-                if isinstance(quote_json, dict)
-                else []
-            )
-            q = quote_rows[0] if quote_rows else {}
-
-            # Endpoint 2: Fundamentals modules (best-effort for ROE/debt/growth)
-            f_url = (
-                "https://query1.finance.yahoo.com/v10/finance/quoteSummary/"
-                + quote(candidate)
-                + "?modules=financialData,defaultKeyStatistics,summaryDetail"
-            )
-            f_req = Request(f_url, headers=headers)
-            with urlopen(f_req, timeout=8) as res:
-                fund_json = json.loads(res.read().decode("utf-8"))
-
-            summary_rows = (
-                fund_json.get("quoteSummary", {}).get("result", [])
-                if isinstance(fund_json, dict)
-                else []
-            )
-            s = summary_rows[0] if summary_rows else {}
-            fd = s.get("financialData", {}) if isinstance(s, dict) else {}
-            ks = s.get("defaultKeyStatistics", {}) if isinstance(s, dict) else {}
-            sd = s.get("summaryDetail", {}) if isinstance(s, dict) else {}
-
-            # Yahoo fields may be raw objects or scalars, normalize both.
-            def _raw(obj: Any) -> Any:
-                if isinstance(obj, dict) and "raw" in obj:
-                    return obj.get("raw")
-                return obj
-
-            pe_ratio = _to_float(q.get("trailingPE") or _raw(ks.get("trailingPE")))
-            pb_ratio = _to_float(q.get("priceToBook") or _raw(ks.get("priceToBook")))
-            roe = _to_float(_raw(fd.get("returnOnEquity")))
-            debt_to_equity = _to_float(_raw(fd.get("debtToEquity")))
-            rev_growth = _to_float(_raw(fd.get("revenueGrowth")))
-            earn_growth = _to_float(_raw(fd.get("earningsGrowth")))
-            div_yield = _to_float(q.get("dividendYield") or _raw(sd.get("dividendYield")))
-            fcf = _to_float(_raw(fd.get("freeCashflow")))
-            total_rev = _to_float(_raw(fd.get("totalRevenue")))
-            book_value = _to_float(q.get("bookValue") or _raw(ks.get("bookValue")))
-
-            fundamentals = {
-                "pe_ratio": _round(pe_ratio, 2),
-                "pb_ratio": _round(pb_ratio, 2),
-                "roe_pct": _round(roe * 100, 2) if roe is not None else None,
-                "debt_to_equity": _round(debt_to_equity / 100.0, 3) if debt_to_equity is not None else None,
-                "revenue_growth_yoy_pct": _round(rev_growth * 100, 2) if rev_growth is not None else None,
-                "earnings_growth_yoy_pct": _round(earn_growth * 100, 2) if earn_growth is not None else None,
-                "dividend_yield_pct": _round(div_yield * 100, 2) if div_yield is not None else None,
-                "fcf_margin_pct": (
-                    _round((fcf / total_rev) * 100, 2)
-                    if fcf is not None and total_rev not in (None, 0)
-                    else None
-                ),
-                "book_value_per_share": _round(book_value, 2),
+        if r.status_code == 200:
+            info = (r.json().get("data") or {}).get(scrip) or {}
+            indstocks_data = {
+                "ltp":         _to_float(info.get("live_price")),
+                "prev_close":  _to_float(info.get("prev_close")),
+                "week52_high": _to_float(info.get("52week_high")),
+                "week52_low":  _to_float(info.get("52week_low")),
+                "day_high":    _to_float(info.get("day_high")),
+                "day_low":     _to_float(info.get("day_low")),
+                "volume":      _to_float(info.get("volume")),
             }
+    except Exception as e:
+        logger.debug("trading_agents: INDstocks full quote failed for %s: %s", symbol, e)
 
-            return {
-                "symbol": symbol,
-                "provider_symbol": candidate,
-                "fundamentals": fundamentals,
-                "source": "yahoo_finance",
-            }
-        except Exception as e:
-            logger.debug("trading_agents: fundamentals fetch failed for %s: %s", candidate, e)
+    has_any_data = bool(fund or indstocks_data.get("ltp"))
+    if not has_any_data:
+        logger.warning("trading_agents: all fundamentals sources failed for %s", symbol)
+        return {
+            "symbol": symbol,
+            "fundamentals": {
+                "pe_ratio": None, "pb_ratio": None, "roe_pct": None, "roce_pct": None,
+                "dividend_yield_pct": None, "book_value_per_share": None,
+                "market_cap": None, "ltp": None, "week52_high": None, "week52_low": None,
+                "volume": None,
+            },
+            "source": "unavailable_fallback",
+        }
 
-    # Stable fallback (deterministic, non-random)
+    # Prefer INDstocks live price over cached API price
+    ltp = indstocks_data.get("ltp") or fund.get("current_price")
+    w52h = indstocks_data.get("week52_high") or fund.get("week52_high")
+    w52l = indstocks_data.get("week52_low") or fund.get("week52_low")
+
+    source_parts = []
+    if fund:
+        source_parts.append("yashsarawgi")
+    if indstocks_data.get("ltp"):
+        source_parts.append("indstocks")
+
+    # Extract margins / earnings growth from peer_comparison rows for the symbol itself
+    peers = fund.get("peer_comparison") or []
+    own_row: dict = {}
+    if peers and isinstance(peers, list):
+        sym_up = symbol.upper()
+        for p in peers:
+            name = str(p.get("name") or p.get("symbol") or "").upper()
+            if sym_up in name or name in sym_up:
+                own_row = p
+                break
+        if not own_row:
+            own_row = peers[0]  # fallback: first row is usually the subject company
+
     return {
         "symbol": symbol,
-        "provider_symbol": None,
+        "company_name": fund.get("company_name"),
         "fundamentals": {
-            "pe_ratio": None,
-            "pb_ratio": None,
-            "roe_pct": None,
-            "debt_to_equity": None,
-            "revenue_growth_yoy_pct": None,
-            "earnings_growth_yoy_pct": None,
-            "dividend_yield_pct": None,
-            "fcf_margin_pct": None,
-            "book_value_per_share": None,
+            "pe_ratio":             fund.get("pe_ratio"),
+            "pb_ratio":             fund.get("pb_ratio"),
+            "roe_pct":              fund.get("roe"),
+            "roce_pct":             fund.get("roce"),
+            "dividend_yield_pct":   fund.get("dividend_yield"),
+            "book_value_per_share": fund.get("book_value"),
+            "market_cap":           fund.get("market_cap"),
+            "industry":             fund.get("industry"),
+            "sector":               fund.get("sector"),
+            # Margins & growth from peer table
+            "net_profit_margin_pct": own_row.get("npm") or own_row.get("net_profit_margin"),
+            "operating_margin_pct":  own_row.get("opm") or own_row.get("operating_margin"),
+            "sales_growth_pct":      own_row.get("sales_growth") or own_row.get("revenue_growth"),
+            "profit_growth_pct":     own_row.get("profit_growth") or own_row.get("earnings_growth"),
+            "debt_to_equity":        own_row.get("d_e") or own_row.get("debt_to_equity"),
+            # Live price context from INDstocks
+            "ltp":                  ltp,
+            "prev_close":           indstocks_data.get("prev_close"),
+            "week52_high":          w52h,
+            "week52_low":           w52l,
+            "volume":               indstocks_data.get("volume"),
+            "day_high":             indstocks_data.get("day_high"),
+            "day_low":              indstocks_data.get("day_low"),
         },
-        "source": "unavailable_fallback",
+        "peer_comparison": peers,
+        "source": "+".join(source_parts) or "unavailable_fallback",
     }
 
 
@@ -1177,13 +1275,10 @@ def _run_fundamentals_analyst(
     fundamentals: dict,
     tech: dict,
 ) -> dict:
-    """
-    Analyse valuation, growth, and financial health.
-    Takes fundamentals data + technical analysis context.
-    """
     context = {
         "symbol": symbol,
         "fundamentals": fundamentals.get("fundamentals", {}),
+        "peer_comparison": (fundamentals.get("peer_comparison") or [])[:5],
         "technical_context": {
             "trend": tech.get("trend"),
             "support": tech.get("key_support"),
@@ -1192,9 +1287,12 @@ def _run_fundamentals_analyst(
     }
     system = (
         "You are a fundamental equity analyst specialising in Indian markets. "
-        "Analyse valuation metrics, growth prospects, and financial health. "
-        "Compare multiples to market averages. Assess whether the stock is cheap or expensive. "
-        "Be balanced and critical. "
+        "Analyse valuation, margins, earnings growth, and financial health. "
+        "Data sourced from Screener.in via yashsarawgi API. "
+        "Key fields: pe_ratio, roce_pct, roe_pct, net_profit_margin_pct, operating_margin_pct, "
+        "sales_growth_pct, profit_growth_pct, debt_to_equity, dividend_yield_pct. "
+        "Compare multiples to peers when peer_comparison is provided. "
+        "Flag if PE > 40 with ROCE < 15% as stretched valuation. "
         "Always respond with a single valid JSON object and nothing else."
     )
     user = (
@@ -1204,10 +1302,12 @@ def _run_fundamentals_analyst(
         '{"valuation_assessment": "UNDERVALUED|FAIRLY_VALUED|OVERVALUED", '
         '"growth_outlook": "HIGH|MODERATE|LOW", '
         '"financial_health": "STRONG|AVERAGE|WEAK", '
+        '"margin_quality": "EXPANDING|STABLE|CONTRACTING|UNKNOWN", '
+        '"earnings_growth_trend": "ACCELERATING|STABLE|DECELERATING|UNKNOWN", '
         '"key_metrics": ["..."], '
         '"risks": ["..."], '
         '"fundamentals_signal": "BULLISH|NEUTRAL|BEARISH", '
-        '"summary": "2-3 sentence fundamental outlook"}'
+        '"summary": "2-3 sentence fundamental outlook covering valuation, margins, and growth"}'
     )
     return _llm_agent("FundamentalsAnalyst", system, user, max_tokens=2000)
 
@@ -1233,34 +1333,56 @@ def _run_trader_decision(
     }
     if fundamentals:
         all_reports["fundamentals_analyst_report"] = fundamentals
+
+    # Confidence calibration: compute historical accuracy for this symbol
+    outcome_accuracy: Optional[float] = None
     history_block = ""
     if history:
+        evaluated = [h for h in history if h.get("outcome_correct") is not None]
+        if evaluated:
+            outcome_accuracy = round(sum(h["outcome_correct"] for h in evaluated) / len(evaluated), 2)
         history_block = (
-            f"\nPast Decisions for {symbol} (most recent first — use for learning):\n"
+            f"\nPast Decisions for {symbol} (most recent first):\n"
             + json.dumps(history, indent=2)
             + "\n"
         )
+        if outcome_accuracy is not None:
+            history_block += f"Historical accuracy for {symbol}: {outcome_accuracy*100:.0f}% ({len(evaluated)} evaluated calls)\n"
+
+    current_price = indicators.get("current_price") or 0
+    atr = indicators.get("atr")
+    swing_low = indicators.get("swing_low")
+    swing_high = indicators.get("swing_high")
+
     system = (
         "You are a professional trader at an Indian equity fund. "
         "You receive research from analysts and two opposing researchers (bull/bear). "
-        "You also receive a memory of past decisions and their outcomes for this symbol. "
-        "Learn from past mistakes and successes. "
+        "You also receive a memory of past decisions and their outcomes for this symbol — "
+        "use historical accuracy to calibrate your confidence (if accuracy is low, reduce confidence). "
         "Your job is to make the final trading decision by weighing all evidence. "
+        "ALWAYS provide explicit stop_price and target_price based on ATR and swing levels. "
+        "Calculate reward_to_risk = (target_price - entry) / (entry - stop_price) for BUY. "
+        "Only recommend BUY/SELL if reward_to_risk >= 1.5. "
         "Be decisive. This is NOT financial advice — it is a research simulation. "
         "Always respond with a single valid JSON object and nothing else."
     )
     user = (
-        f"Symbol: {symbol}\n"
+        f"Symbol: {symbol} | Current Price: {current_price} | ATR: {atr} | "
+        f"Swing High: {swing_high} | Swing Low: {swing_low}\n"
         f"{history_block}"
         f"All Research Reports:\n{json.dumps(all_reports, indent=2)}\n\n"
         "Respond with exactly this JSON structure:\n"
         '{"action": "BUY|SELL|HOLD", '
-        '"confidence": <0.0-1.0>, '
+        '"confidence": <0.0-1.0 calibrated by historical accuracy>, '
         '"conviction": "HIGH|MEDIUM|LOW", '
         '"rationale": "3-4 sentence final reasoning", '
         '"key_factors": ["..."], '
         '"time_horizon": "INTRADAY|SWING|POSITIONAL", '
         '"risk_level": "LOW|MEDIUM|HIGH", '
+        '"stop_price": <number — invalidation level based on swing low/ATR>, '
+        '"target_price": <number — based on swing high/resistance>, '
+        '"reward_to_risk": <number — (target-entry)/(entry-stop)>, '
+        '"position_size_pct": <number 1-10 — % of capital, smaller if high risk>, '
         '"suggested_stop_loss_pct": <number or null>, '
         '"suggested_target_pct": <number or null>}'
     )
@@ -1282,7 +1404,12 @@ def _run_risk_manager(
     context = {
         "symbol": symbol,
         "trader_decision": decision,
-        "technical_indicators": indicators,
+        "technical_indicators": {
+            k: indicators.get(k)
+            for k in ("current_price", "atr", "swing_high", "swing_low",
+                      "adx", "plus_di", "minus_di", "volume_ratio_vs_20bar",
+                      "support", "resistance", "trend")
+        },
         "reports": {
             "technical": tech,
             "news": news,
@@ -1296,6 +1423,8 @@ def _run_risk_manager(
     system = (
         "You are a risk manager at a professional trading desk. "
         "Enforce risk controls for volatility, liquidity, event risk and daily drawdown. "
+        "Validate the trader's stop_price and target_price against ATR and swing levels. "
+        "Reject trades where reward_to_risk < 1.5 or stop is wider than 2x ATR. "
         "You can override the trader recommendation when risk is excessive. "
         "Always respond with a single valid JSON object and nothing else."
     )
@@ -1305,12 +1434,15 @@ def _run_risk_manager(
         '{"volatility_regime": "LOW|NORMAL|ELEVATED|HIGH", '
         '"liquidity_risk": "LOW|MEDIUM|HIGH", '
         '"event_risk": "LOW|MEDIUM|HIGH", '
+        '"invalidation_level": <number — price that proves the trade wrong>, '
+        '"reward_to_risk": <number — validate or recalculate from trader inputs>, '
+        '"position_size_pct": <number 0-10 — risk-adjusted % of capital>, '
         '"max_position_size_pct": <number 0-100>, '
         '"risk_budget_pct": <number 0-100>, '
         '"allowed_action": "BUY|SELL|HOLD", '
         '"approval": <true|false>, '
         '"hard_limits": ["..."], '
-        '"summary": "2-3 sentence risk verdict"}'
+        '"summary": "2-3 sentence risk verdict including stop validity and R:R assessment"}'
     )
     return _llm_agent("RiskManager", system, user, max_tokens=2000)
 
@@ -1454,19 +1586,19 @@ def run_analysis_pipeline(job_id: str, symbol: str, exchange: str, debate_rounds
             ])
         )
         if need_data_collection:
-            candles_1h = _get_candle_data(symbol, "1h", limit=60, min_required=15)
-            candles_daily = _get_candle_data(symbol, "daily", limit=60, min_required=15)
-            candles_5m = _get_candle_data(symbol, "5m", limit=60, min_required=15)
-            candles_15m = _get_candle_data(symbol, "15m", limit=60, min_required=15)
-            candles = candles_1h if len(candles_1h) >= 15 else candles_daily
-            indicators = _compute_indicators(candles, timeframe="1h" if len(candles_1h) >= 15 else "daily")
+            candles_1h = _get_candle_data(symbol, "1h", limit=150, min_required=100)
+            candles_daily = _get_candle_data(symbol, "daily", limit=150, min_required=100)
+            candles_5m = _get_candle_data(symbol, "5m", limit=150, min_required=100)
+            candles_15m = _get_candle_data(symbol, "15m", limit=150, min_required=100)
+            candles = candles_1h if len(candles_1h) >= 100 else candles_daily
+            indicators = _compute_indicators(candles, timeframe="1h" if len(candles_1h) >= 100 else "daily")
             multi_tf = {
-                "5m": _compute_indicators(candles_5m, timeframe="15m") if len(candles_5m) >= 15 else {"available": False},
-                "15m": _compute_indicators(candles_15m, timeframe="15m") if len(candles_15m) >= 15 else {"available": False},
+                "5m": _compute_indicators(candles_5m, timeframe="15m") if len(candles_5m) >= 100 else {"available": False},
+                "15m": _compute_indicators(candles_15m, timeframe="15m") if len(candles_15m) >= 100 else {"available": False},
                 "1h": indicators,
-                "daily": _compute_indicators(candles_daily, timeframe="daily") if len(candles_daily) >= 15 else {"available": False},
+                "daily": _compute_indicators(candles_daily, timeframe="daily") if len(candles_daily) >= 100 else {"available": False},
             }
-            news_items = _get_news_items(limit=15)
+            news_items = _get_news_items(symbol=symbol, limit=15)
             vix = _get_vix()
             twitter = _get_twitter_sentiment(symbol)
             history = _load_decision_history(symbol, limit=5)
@@ -1993,18 +2125,22 @@ def run_nifty100_reconciliation(exchange: str = "NSE", debate_rounds: int = 2) -
 
 
 def run_holdings_reconciliation(exchange: str = "NSE", debate_rounds: int = 2) -> int:
-    """Queue background AI analysis jobs for current Zerodha holdings."""
+    """Queue background AI analysis jobs for current broker holdings."""
     try:
+        from app.core.broker.registry import get_active_broker
         from app.core.broker.zerodha.client import get_kite_client
 
-        kite = get_kite_client()
-        holdings = kite.holdings() or []
-        symbols = []
-        for row in holdings:
-            sym = str(row.get("tradingsymbol") or row.get("symbol") or "").strip().upper()
-            if sym:
-                symbols.append(sym)
-        symbols = sorted(set(symbols))
+        broker = get_active_broker()
+        holdings = []
+        if broker == "ZERODHA":
+            kite = get_kite_client()
+            holdings = kite.holdings() or []
+        # Add other broker holdings fetchers here as they are implemented
+        symbols = sorted({
+            str(row.get("tradingsymbol") or row.get("symbol") or "").strip().upper()
+            for row in holdings
+            if (row.get("tradingsymbol") or row.get("symbol"))
+        })
     except Exception as e:
         logger.warning("holdings reconciliation: failed to load holdings: %s", e)
         symbols = []
@@ -2159,8 +2295,12 @@ def get_reconciliation_desk_snapshot(limit: int = 40) -> dict[str, Any]:
 
             holdings = []
             try:
-                kite = get_kite_client()
-                holdings = kite.holdings() or []
+                from app.core.broker.registry import get_active_broker
+                broker = get_active_broker()
+                if broker == "ZERODHA":
+                    from app.core.broker.zerodha.client import get_kite_client
+                    kite = get_kite_client()
+                    holdings = kite.holdings() or []
             except Exception as e:
                 logger.warning("get_reconciliation_desk_snapshot: holdings load failed: %s", e)
 

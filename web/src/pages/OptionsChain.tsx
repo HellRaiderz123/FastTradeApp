@@ -142,15 +142,15 @@ const OptionsChain: React.FC = () => {
   };
 
   const getDeltaColor = (delta: number): string => {
-    if (delta > 0.7) return 'text-green-400';
-    if (delta > 0.3) return 'text-yellow-400';
-    return 'text-red-400';
+    if (delta > 0.7) return 'text-emerald-500';
+    if (delta > 0.3) return 'text-yellow-500';
+    return 'text-red-500';
   };
 
   const getSignalClasses = (tone: OptionSignal['tone']) => {
-    if (tone === 'bullish') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
-    if (tone === 'bearish') return 'border-red-500/30 bg-red-500/10 text-red-300';
-    return 'border-slate-600 bg-slate-800/70 text-slate-300';
+    if (tone === 'bullish') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300';
+    if (tone === 'bearish') return 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-300';
+    return 'border-border bg-muted text-foreground';
   };
 
   const analytics = useMemo<OptionAnalytics | null>(() => {
@@ -244,7 +244,7 @@ const OptionsChain: React.FC = () => {
       (pcr < 1 ? Math.min((1 - pcr) * 12, 8) : 0);
 
     let biasLabel = 'Balanced Setup';
-    let biasTone = 'text-slate-200';
+    let biasTone = 'text-foreground';
     let biasNote = `PCR ${pcr.toFixed(2)} with support near ${supportStrike ?? '—'} and resistance near ${resistanceStrike ?? '—'}.`;
 
     if (bullishScore - bearishScore > 4) {
@@ -282,20 +282,20 @@ const OptionsChain: React.FC = () => {
   }, [chainData]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
+    <div className="min-h-screen bg-background p-6">
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Options Chain</h1>
-            <p className="text-slate-400">
+            <h1 className="text-3xl font-bold text-foreground mb-2">Options Chain</h1>
+            <p className="text-muted-foreground">
               Real-time options data with Greeks and implied volatility
             </p>
           </div>
           <button
             onClick={fetchChain}
             disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 rounded-lg text-white transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-muted rounded-lg text-white transition-colors"
           >
             <RefreshCcw size={18} className={loading ? 'animate-spin' : ''} />
             Refresh
@@ -306,11 +306,11 @@ const OptionsChain: React.FC = () => {
         <div className="flex flex-wrap gap-4 items-center">
           {/* Symbol Selector */}
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Symbol</label>
+            <label className="block text-sm text-muted-foreground mb-1">Symbol</label>
             <select
               value={symbol}
               onChange={(e) => setSymbol(e.target.value)}
-              className="px-4 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="px-4 py-2 bg-card border border-border rounded-lg text-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
             >
               <option value="NIFTY">NIFTY</option>
               <option value="BANKNIFTY">BANKNIFTY</option>
@@ -320,11 +320,11 @@ const OptionsChain: React.FC = () => {
 
           {/* Expiry Selector */}
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Expiry</label>
+            <label className="block text-sm text-muted-foreground mb-1">Expiry</label>
             <select
               value={expiry}
               onChange={(e) => setExpiry(e.target.value)}
-              className="px-4 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="px-4 py-2 bg-card border border-border rounded-lg text-foreground focus:ring-2 focus:ring-blue-500 focus:outline-none"
             >
               {expiries.map((exp) => (
                 <option key={exp} value={exp}>
@@ -340,7 +340,7 @@ const OptionsChain: React.FC = () => {
 
           {/* Greeks Toggle */}
           <div className="ml-auto">
-            <label className="flex items-center gap-2 text-white cursor-pointer">
+            <label className="flex items-center gap-2 text-foreground cursor-pointer">
               <input
                 type="checkbox"
                 checked={showGreeks}
@@ -355,23 +355,23 @@ const OptionsChain: React.FC = () => {
 
       {/* Spot Info */}
       {chainData && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4 mb-6">
+        <div className="bg-card border border-border rounded-xl p-4 mb-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <div className="text-slate-400 text-sm mb-1">Spot Price</div>
-              <div className="text-white text-2xl font-bold">₹{chainData.spot.toFixed(2)}</div>
+              <div className="text-muted-foreground text-sm mb-1">Spot Price</div>
+              <div className="text-foreground text-2xl font-bold">₹{chainData.spot.toFixed(2)}</div>
             </div>
             <div>
-              <div className="text-slate-400 text-sm mb-1">ATM Strike</div>
-              <div className="text-white text-2xl font-bold">{chainData.atm_strike}</div>
+              <div className="text-muted-foreground text-sm mb-1">ATM Strike</div>
+              <div className="text-foreground text-2xl font-bold">{chainData.atm_strike}</div>
             </div>
             <div>
-              <div className="text-slate-400 text-sm mb-1">Days to Expiry</div>
-              <div className="text-white text-2xl font-bold">{chainData.days_to_expiry}</div>
+              <div className="text-muted-foreground text-sm mb-1">Days to Expiry</div>
+              <div className="text-foreground text-2xl font-bold">{chainData.days_to_expiry}</div>
             </div>
             <div>
-              <div className="text-slate-400 text-sm mb-1">Total Strikes</div>
-              <div className="text-white text-2xl font-bold">{chainData.strikes.length}</div>
+              <div className="text-muted-foreground text-sm mb-1">Total Strikes</div>
+              <div className="text-foreground text-2xl font-bold">{chainData.strikes.length}</div>
             </div>
           </div>
         </div>
@@ -380,62 +380,62 @@ const OptionsChain: React.FC = () => {
       {/* Snapshot Analytics */}
       {analytics && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
-          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4">
+          <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
               <Activity size={18} className="text-blue-400" />
-              <h3 className="text-white font-semibold">Chain Snapshot</h3>
+              <h3 className="text-foreground font-semibold">Chain Snapshot</h3>
             </div>
             <div className={`text-xl font-bold ${analytics.biasTone}`}>{analytics.biasLabel}</div>
-            <p className="text-sm text-slate-400 mt-1">{analytics.biasNote}</p>
+            <p className="text-sm text-muted-foreground mt-1">{analytics.biasNote}</p>
             <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
-              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <div className="text-slate-400 text-xs">PCR</div>
-                <div className="text-white font-semibold mt-1">{analytics.pcr.toFixed(2)}</div>
+              <div className="rounded-lg bg-muted p-3 border border-border">
+                <div className="text-muted-foreground text-xs">PCR</div>
+                <div className="text-foreground font-semibold mt-1">{analytics.pcr.toFixed(2)}</div>
               </div>
-              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <div className="text-slate-400 text-xs">Max Pain</div>
-                <div className="text-white font-semibold mt-1">{analytics.maxPain ?? '—'}</div>
+              <div className="rounded-lg bg-muted p-3 border border-border">
+                <div className="text-muted-foreground text-xs">Max Pain</div>
+                <div className="text-foreground font-semibold mt-1">{analytics.maxPain ?? '—'}</div>
               </div>
-              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <div className="text-slate-400 text-xs">Support</div>
-                <div className="text-emerald-300 font-semibold mt-1">{analytics.supportStrike ?? '—'}</div>
+              <div className="rounded-lg bg-muted p-3 border border-border">
+                <div className="text-muted-foreground text-xs">Support</div>
+                <div className="text-emerald-500 font-semibold mt-1">{analytics.supportStrike ?? '—'}</div>
               </div>
-              <div className="rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <div className="text-slate-400 text-xs">Resistance</div>
-                <div className="text-red-300 font-semibold mt-1">{analytics.resistanceStrike ?? '—'}</div>
+              <div className="rounded-lg bg-muted p-3 border border-border">
+                <div className="text-muted-foreground text-xs">Resistance</div>
+                <div className="text-red-500 font-semibold mt-1">{analytics.resistanceStrike ?? '—'}</div>
               </div>
             </div>
           </div>
 
-          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4">
+          <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
-              <TrendingUp size={18} className="text-emerald-400" />
-              <h3 className="text-white font-semibold">OI & Volume Breadth</h3>
+              <TrendingUp size={18} className="text-emerald-500" />
+              <h3 className="text-foreground font-semibold">OI &amp; Volume Breadth</h3>
             </div>
             <div className="space-y-3 text-sm">
-              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <span className="text-slate-400">Total Call OI</span>
-                <span className="text-white font-semibold">{formatNumber(analytics.totalCallOi)}</span>
+              <div className="flex items-center justify-between rounded-lg bg-muted p-3 border border-border">
+                <span className="text-muted-foreground">Total Call OI</span>
+                <span className="text-foreground font-semibold">{formatNumber(analytics.totalCallOi)}</span>
               </div>
-              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <span className="text-slate-400">Total Put OI</span>
-                <span className="text-white font-semibold">{formatNumber(analytics.totalPutOi)}</span>
+              <div className="flex items-center justify-between rounded-lg bg-muted p-3 border border-border">
+                <span className="text-muted-foreground">Total Put OI</span>
+                <span className="text-foreground font-semibold">{formatNumber(analytics.totalPutOi)}</span>
               </div>
-              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <span className="text-slate-400">Call Volume</span>
-                <span className="text-white font-semibold">{formatNumber(analytics.totalCallVolume)}</span>
+              <div className="flex items-center justify-between rounded-lg bg-muted p-3 border border-border">
+                <span className="text-muted-foreground">Call Volume</span>
+                <span className="text-foreground font-semibold">{formatNumber(analytics.totalCallVolume)}</span>
               </div>
-              <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-3 border border-slate-700">
-                <span className="text-slate-400">Put Volume</span>
-                <span className="text-white font-semibold">{formatNumber(analytics.totalPutVolume)}</span>
+              <div className="flex items-center justify-between rounded-lg bg-muted p-3 border border-border">
+                <span className="text-muted-foreground">Put Volume</span>
+                <span className="text-foreground font-semibold">{formatNumber(analytics.totalPutVolume)}</span>
               </div>
             </div>
           </div>
 
-          <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-4">
+          <div className="bg-card border border-border rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
               <Info size={18} className="text-violet-400" />
-              <h3 className="text-white font-semibold">Buildup Signals</h3>
+              <h3 className="text-foreground font-semibold">Buildup Signals</h3>
             </div>
             <div className="space-y-2">
               {analytics.signals.length > 0 ? (
@@ -454,10 +454,10 @@ const OptionsChain: React.FC = () => {
                   </div>
                 ))
               ) : (
-                <p className="text-sm text-slate-400">No strong buildup signal around ATM right now.</p>
+                <p className="text-sm text-muted-foreground">No strong buildup signal around ATM right now.</p>
               )}
             </div>
-            <p className="text-[11px] text-slate-500 mt-3">
+            <p className="text-[11px] text-muted-foreground mt-3">
               Snapshot heuristics use premium move + relative OI concentration near ATM.
             </p>
           </div>
@@ -473,10 +473,10 @@ const OptionsChain: React.FC = () => {
 
       {/* Options Chain Table */}
       {chainData && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl overflow-hidden">
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-900/50">
+              <thead className="bg-muted">
                 <tr>
                   {/* CALL Headers */}
                   <th className="px-2 py-3 text-center text-xs font-semibold text-green-400">OI</th>
@@ -496,7 +496,7 @@ const OptionsChain: React.FC = () => {
                   <th className="px-2 py-3 text-center text-xs font-semibold text-green-400">Chg%</th>
 
                   {/* Strike */}
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-white bg-slate-800">
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-foreground bg-muted/80">
                     STRIKE
                   </th>
 
@@ -518,7 +518,7 @@ const OptionsChain: React.FC = () => {
                   <th className="px-2 py-3 text-center text-xs font-semibold text-red-400">OI</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700">
+              <tbody className="divide-y divide-border">
                 {chainData.strikes.map((strike) => {
                   const isATM = strike.strike === chainData.atm_strike;
                   const isITMCall = strike.strike < chainData.spot;
@@ -527,53 +527,49 @@ const OptionsChain: React.FC = () => {
                   return (
                     <tr
                       key={strike.strike}
-                      className={`hover:bg-slate-700/30 transition-colors ${
-                        isATM ? 'bg-blue-900/20' : ''
+                      className={`hover:bg-accent/40 transition-colors ${
+                        isATM ? 'bg-blue-500/10' : ''
                       }`}
                     >
                       {/* CALL Data */}
-                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">
+                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-emerald-500/5' : ''}`}>
+                        <span className="text-muted-foreground text-xs">
                           {formatNumber(strike.call?.oi)}
                         </span>
                       </td>
-                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">
+                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-emerald-500/5' : ''}`}>
+                        <span className="text-muted-foreground text-xs">
                           {formatNumber(strike.call?.volume)}
                         </span>
                       </td>
-                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">{formatPercent(strike.call?.iv, 1)}</span>
+                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-emerald-500/5' : ''}`}>
+                        <span className="text-muted-foreground text-xs">{formatPercent(strike.call?.iv, 1)}</span>
                       </td>
                       {showGreeks && (
                         <>
-                          <td
-                            className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}
-                          >
+                          <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-emerald-500/5' : ''}`}>
                             <span className={`text-xs font-medium ${getDeltaColor(strike.call?.delta || 0)}`}>
                               {formatDecimal(strike.call?.delta, 2)}
                             </span>
                           </td>
-                          <td
-                            className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}
-                          >
-                            <span className="text-slate-300 text-xs">
+                          <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-emerald-500/5' : ''}`}>
+                            <span className="text-muted-foreground text-xs">
                               {formatDecimal(strike.call?.theta, 2)}
                             </span>
                           </td>
                         </>
                       )}
-                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
-                        <span className="text-white font-medium">
+                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-emerald-500/5' : ''}`}>
+                        <span className="text-foreground font-medium">
                           {formatDecimal(strike.call?.ltp, 2)}
                         </span>
                       </td>
-                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-green-900/10' : ''}`}>
+                      <td className={`px-2 py-2 text-center ${isITMCall ? 'bg-emerald-500/5' : ''}`}>
                         <span
                           className={`text-xs font-medium ${
                             (strike.call?.change_percent || 0) >= 0
-                              ? 'text-green-400'
-                              : 'text-red-400'
+                              ? 'text-emerald-500'
+                              : 'text-red-500'
                           }`}
                         >
                           {formatPercent(strike.call?.change_percent, 1, true)}
@@ -581,58 +577,54 @@ const OptionsChain: React.FC = () => {
                       </td>
 
                       {/* STRIKE */}
-                      <td className="px-4 py-2 text-center text-white font-bold bg-slate-800">
+                      <td className="px-4 py-2 text-center text-foreground font-bold bg-muted/60">
                         {strike.strike}
                         {isATM && (
-                          <span className="ml-2 text-xs text-blue-400 font-normal">ATM</span>
+                          <span className="ml-2 text-xs text-blue-500 font-normal">ATM</span>
                         )}
                       </td>
 
                       {/* PUT Data */}
-                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
+                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-500/5' : ''}`}>
                         <span
                           className={`text-xs font-medium ${
                             (strike.put?.change_percent || 0) >= 0
-                              ? 'text-green-400'
-                              : 'text-red-400'
+                              ? 'text-emerald-500'
+                              : 'text-red-500'
                           }`}
                         >
                           {formatPercent(strike.put?.change_percent, 1, true)}
                         </span>
                       </td>
-                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
-                        <span className="text-white font-medium">
+                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-500/5' : ''}`}>
+                        <span className="text-foreground font-medium">
                           {formatDecimal(strike.put?.ltp, 2)}
                         </span>
                       </td>
                       {showGreeks && (
                         <>
-                          <td
-                            className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}
-                          >
+                          <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-500/5' : ''}`}>
                             <span className={`text-xs font-medium ${getDeltaColor(Math.abs(strike.put?.delta || 0))}`}>
                               {formatDecimal(strike.put?.delta, 2)}
                             </span>
                           </td>
-                          <td
-                            className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}
-                          >
-                            <span className="text-slate-300 text-xs">
+                          <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-500/5' : ''}`}>
+                            <span className="text-muted-foreground text-xs">
                               {formatDecimal(strike.put?.theta, 2)}
                             </span>
                           </td>
                         </>
                       )}
-                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">{formatPercent(strike.put?.iv, 1)}</span>
+                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-500/5' : ''}`}>
+                        <span className="text-muted-foreground text-xs">{formatPercent(strike.put?.iv, 1)}</span>
                       </td>
-                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">
+                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-500/5' : ''}`}>
+                        <span className="text-muted-foreground text-xs">
                           {formatNumber(strike.put?.volume)}
                         </span>
                       </td>
-                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-900/10' : ''}`}>
-                        <span className="text-slate-300 text-xs">
+                      <td className={`px-2 py-2 text-center ${isITMPut ? 'bg-red-500/5' : ''}`}>
+                        <span className="text-muted-foreground text-xs">
                           {formatNumber(strike.put?.oi)}
                         </span>
                       </td>
@@ -647,26 +639,26 @@ const OptionsChain: React.FC = () => {
 
       {/* Loading State */}
       {loading && !chainData && (
-        <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-12 text-center">
-          <RefreshCcw size={48} className="mx-auto mb-4 text-slate-600 animate-spin" />
-          <h3 className="text-xl font-semibold text-white mb-2">Loading Options Chain...</h3>
-          <p className="text-slate-400">Fetching data from market</p>
+        <div className="bg-card border border-border rounded-xl p-12 text-center">
+          <RefreshCcw size={48} className="mx-auto mb-4 text-muted-foreground animate-spin" />
+          <h3 className="text-xl font-semibold text-foreground mb-2">Loading Options Chain...</h3>
+          <p className="text-muted-foreground">Fetching data from market</p>
         </div>
       )}
 
       {/* Legend */}
-      <div className="mt-6 bg-slate-800/30 border border-slate-700 rounded-lg p-4">
-        <div className="flex flex-wrap gap-6 text-sm text-slate-400">
+      <div className="mt-6 bg-card border border-border rounded-lg p-4">
+        <div className="flex flex-wrap gap-6 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-green-900/20 border border-green-900/50 rounded"></div>
+            <div className="w-4 h-4 bg-emerald-500/10 border border-emerald-500/30 rounded"></div>
             <span>ITM (In The Money)</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-blue-900/20 border border-blue-900/50 rounded"></div>
+            <div className="w-4 h-4 bg-blue-500/10 border border-blue-500/30 rounded"></div>
             <span>ATM (At The Money)</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-red-900/20 border border-red-900/50 rounded"></div>
+            <div className="w-4 h-4 bg-red-500/10 border border-red-500/30 rounded"></div>
             <span>ITM Put</span>
           </div>
           <div className="ml-auto text-xs">

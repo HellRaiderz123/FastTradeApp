@@ -22,16 +22,13 @@ import random
 import math
 import hashlib
 
-from app.services.zerodha import KiteConnectService
 from app.core.indicators.technical import TechnicalIndicators
-from app.config.market_config import get_symbols, get_scanner_strategies
+from app.config.market_config import get_symbols
 from app.db.session import SessionLocal
 from app.db.models_candles import CandleDaily
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/swing-scanner", tags=["swing-scanner"])
-
-kite_service = KiteConnectService()
 
 MIN_CANDLES_FOR_ANALYSIS = 50  # Need at least 50 daily bars for reliable indicators
 
@@ -206,7 +203,8 @@ async def scan_for_opportunities(
         
         # ── Current quotes ──────────────────────────────────────────
         logger.info(f"Fetching quotes for {len(symbols)} symbols")
-        quotes_data = kite_service.get_bulk_quotes(symbols)
+        from app.core.market.provider import get_bulk_quotes as _provider_bulk_quotes
+        quotes_data = _provider_bulk_quotes(symbols)
         
         if not quotes_data:
             logger.warning("Zerodha unavailable — using simulated quotes for swing scanner")

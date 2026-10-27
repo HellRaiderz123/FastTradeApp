@@ -1,8 +1,15 @@
 import axios from 'axios';
+import { authTokenStore } from '../lib/api';
 
 const DEPTH_API = axios.create({
   baseURL:(import.meta as any).env?.VITE_API_BASE ? `${(import.meta as any).env?.VITE_API_BASE}/market-depth` : '/api/market-depth',
   timeout: 15000,
+});
+
+DEPTH_API.interceptors.request.use((config) => {
+  const token = authTokenStore.get();
+  if (token) config.headers['Authorization'] = `Bearer ${token}`;
+  return config;
 });
 
 export interface DepthLevel {
@@ -29,6 +36,7 @@ export interface MarketDepth {
   imbalance: number;
   imbalance_direction: 'bullish' | 'bearish' | 'neutral';
   data_source?: 'live' | 'simulated';
+  simulated_reason?: string;
 }
 
 export interface DepthSnapshot {

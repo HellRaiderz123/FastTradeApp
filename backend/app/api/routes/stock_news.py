@@ -16,7 +16,7 @@ router = APIRouter()
 
 # newsdata.io API configuration
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY", "")
-NEWSDATA_BASE_URL = "https://newsdata.io/api/1/market"  # Using /market endpoint which supports symbol parameter
+NEWSDATA_BASE_URL = "https://newsdata.io/api/1/news"
 
 # In-memory cache for news articles (to save API credits)
 # Format: {symbol: {"articles": [...], "timestamp": datetime, "total": int}}
@@ -130,13 +130,13 @@ async def fetch_newsdata_io(symbol: str, limit: int = 10) -> List[dict]:
             # Use /news endpoint with symbol parameter (specifically designed for stock tickers)
             params = {
                 "apikey": NEWSDATA_API_KEY,
-                "symbol": symbol,  # Use symbol parameter for stock-specific news
-                "country": "in",  # India
+                "q": COMPANY_NAMES.get(symbol, symbol),
+                "country": "in",
                 "language": "en",
-
+                "category": "business",
             }
             
-            logger.info(f"📡 Calling newsdata.io /market API with symbol: {symbol}")
+            logger.info(f"📡 Calling newsdata.io /news API with q={COMPANY_NAMES.get(symbol, symbol)}")
             response = await client.get(NEWSDATA_BASE_URL, params=params)
             logger.info(f"📊 API Response Status: {response.status_code}")
             response.raise_for_status()
@@ -160,19 +160,10 @@ async def fetch_newsdata_io(symbol: str, limit: int = 10) -> List[dict]:
                 desc = (result.get("description") or "").lower()
                 content = title + " " + desc
                 
-                # Skip if completely empty
+                # With q= company name search, results are already relevant
+                # Just skip completely empty articles
                 if not content.strip():
                     logger.debug(f"⏭️ Skipping empty article #{idx}")
-                    continue
-                
-                # Since we're using symbol parameter, most results should be relevant
-                # But do basic filtering to remove completely unrelated articles
-                has_company = symbol.lower() in content
-                has_stock_keywords = any(word in content for word in ["stock", "share", "price", "market", "trading", "dividend", "listing"])
-                
-                # Accept if mentions company/symbol OR has stock-related keywords
-                if not (has_company or has_stock_keywords):
-                    logger.debug(f"⏭️ Filtering out non-stock article: {title[:50]}")
                     continue
                 
                 # Simple sentiment analysis based on keywords

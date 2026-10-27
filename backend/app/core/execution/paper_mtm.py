@@ -113,22 +113,31 @@ def update_paper_mtm(db: Session):
             symbol = leg.get("symbol") or leg.get("tradingsymbol")
             if not symbol:
                 continue
-            entry_price = leg.get("price") or leg.get("premium")  # fallback to premium
+            entry_price = leg.get("price") or leg.get("premium")
             current_price = ltp_map.get(symbol)
 
             if entry_price is None or current_price is None or float(current_price) <= 0:
                 continue
 
+            # Respect lots_multiplier (butterfly middle = 2x, ratio backspread long = 2x)
+            m = int(leg.get("lots_multiplier", 1) or 1)
+            leg_qty = quantity * m
+
             side = (leg.get("side") or leg.get("action") or "").upper()
             if side == "SELL":
-                leg_pnl = (float(entry_price) - float(current_price)) * quantity
+                leg_pnl = (float(entry_price) - float(current_price)) * leg_qty
             else:  # BUY
-                leg_pnl = (float(current_price) - float(entry_price)) * quantity
+                leg_pnl = (float(current_price) - float(entry_price)) * leg_qty
 
+            # Write per-leg P&L back into ticket so UI can read it
+            leg["ltp"] = round(float(current_price), 2)
+            leg["leg_pnl"] = round(leg_pnl, 2)
             pnl += leg_pnl
 
         # ---- PERSIST ----
         intent.pnl = round(pnl, 2)
         intent.last_mtm_at = now_ist()
+        # Persist updated leg ltps/pnls back into ticket JSON
+        intent.ticket = ticket
 
     db.commit()
