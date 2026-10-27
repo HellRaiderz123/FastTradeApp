@@ -37,7 +37,7 @@ def get_pnl_analytics(
     cutoff = datetime.utcnow() - timedelta(days=days)
 
     q = db.query(ExecutionIntent).filter(
-        ExecutionIntent.status == "CLOSED",
+        ExecutionIntent.closed_at.isnot(None),
         ExecutionIntent.closed_at >= cutoff,
         ExecutionIntent.pnl.isnot(None),
     )
@@ -140,10 +140,10 @@ def get_pnl_analytics(
 
     # Distinct strategy/underlying lists for filter dropdowns
     all_strategies = sorted({t.strategy for t in db.query(ExecutionIntent.strategy)
-                              .filter(ExecutionIntent.status == "CLOSED").distinct()
+                              .filter(ExecutionIntent.closed_at.isnot(None)).distinct()
                               if t.strategy})
     all_underlyings = sorted({t.underlying for t in db.query(ExecutionIntent.underlying)
-                               .filter(ExecutionIntent.status == "CLOSED").distinct()
+                               .filter(ExecutionIntent.closed_at.isnot(None)).distinct()
                                if t.underlying})
 
     return {

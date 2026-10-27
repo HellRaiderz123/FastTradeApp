@@ -138,3 +138,6 @@ backups/fasttrade_20260327_100926.sql
 mobile/android/*
 web/test*
 web/playwright-report/*
+backend/docker_backup_20261027_180926/*
+backend/docker_backup_20261027_184047/*
+backend/neon_backup_20261027_183825/*
