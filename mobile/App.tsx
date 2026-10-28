@@ -44,7 +44,7 @@ export default function App() {
 
   useEffect(() => {
     checkSystemStatus();
-    const interval = setInterval(checkSystemStatus, 30000);
+    const interval = setInterval(checkSystemStatus, 90000);
     return () => clearInterval(interval);
   }, []);
 

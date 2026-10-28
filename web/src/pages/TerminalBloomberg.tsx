@@ -1,24 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  Search,
-  Activity,
-  TrendingUp,
-  TrendingDown,
-  BarChart3,
-  Eye,
-  Zap,
-  ArrowUpRight,
-  ArrowDownRight,
-  Clock,
-  Target,
-  AlertTriangle,
-  Calendar,
-  Building2,
-  Info,
-  Bell,
-  List,
-  SlidersHorizontal,
-  MessageSquare,
+  Search, Activity, TrendingUp, TrendingDown, BarChart3, Eye,
+  Zap, ArrowUpRight, ArrowDownRight, Clock, Target, Calendar,
+  Building2, Info, Bell, List, SlidersHorizontal, MessageSquare,
+  ChevronRight, ArrowUpDown, Brain, Bot, Filter, Briefcase,
+  RefreshCw, BookOpen, LineChart, Gauge, Newspaper, ExternalLink,
+  AlertCircle,
 } from 'lucide-react';
 import CandleChart from '../components/CandleChart';
 import NewsFeed from '../components/NewsFeed';
@@ -30,7 +18,7 @@ import AlertList from '../components/AlertList';
 import ComparisonChart from '../components/ComparisonChart';
 import MarketDepthViewer from '../components/MarketDepthViewer';
 import { useRealtimeQuotes } from '../hooks/useRealtimeQuotes';
-import { alertsAPI, mlAPI } from '../lib/api';
+import { alertsAPI, mlAPI, paperAPI, authTokenStore } from '../lib/api';
 import { 
   marketDashboardAPI,
   swingScannerAPI,
@@ -42,7 +30,40 @@ import {
 } from '../lib/marketDashboardAPI';
 import { getTodayEvents, type CalendarEvent } from '../api/calendarAPI';
 
+function getMarketSession(): { label: string; color: string } {
+  const ist = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const mins = ist.getHours() * 60 + ist.getMinutes();
+  if (mins >= 540 && mins < 555) return { label: 'Pre-Market', color: 'text-yellow-400' };
+  if (mins >= 555 && mins < 930) return { label: 'Market Open', color: 'text-emerald-400' };
+  if (mins >= 930 && mins < 960) return { label: 'Post-Market', color: 'text-orange-400' };
+  return { label: 'Market Closed', color: 'text-slate-400' };
+}
+
+function formatRelTime(dateStr: string): string {
+  const d = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000);
+  if (d < 1) return 'Just now';
+  if (d < 60) return `${d}m ago`;
+  if (d < 1440) return `${Math.floor(d / 60)}h ago`;
+  return `${Math.floor(d / 1440)}d ago`;
+}
+
+const QUICK_LINKS = [
+  { label: 'Positions',   path: '/positions',        icon: Briefcase,   color: 'text-blue-400'   },
+  { label: 'Options',     path: '/options',           icon: Target,      color: 'text-purple-400' },
+  { label: 'AI Analysis', path: '/ai-analysis',       icon: Brain,       color: 'text-emerald-400'},
+  { label: 'Scanner',     path: '/scanner-execution', icon: Filter,      color: 'text-orange-400' },
+  { label: 'Strategies',  path: '/strategies',        icon: Zap,         color: 'text-yellow-400' },
+  { label: 'Backtest',    path: '/backtest',          icon: LineChart,   color: 'text-cyan-400'   },
+  { label: 'FII / DII',   path: '/fii-dii',           icon: ArrowUpDown, color: 'text-pink-400'   },
+  { label: 'Scalp',       path: '/scalp-trading',     icon: Gauge,       color: 'text-red-400'    },
+  { label: 'Journal',     path: '/journal',           icon: BookOpen,    color: 'text-indigo-400' },
+  { label: 'AI Chat',     path: '/ai-assistant',      icon: Bot,         color: 'text-teal-400'   },
+  { label: 'Reconcile',   path: '/reconciliation',    icon: RefreshCw,   color: 'text-slate-400'  },
+  { label: 'Quant Bot',   path: '/quant-bot',         icon: Activity,    color: 'text-violet-400' },
+];
+
 const Terminal: React.FC = () => {
+  const navigate = useNavigate();
   const [selectedSymbol, setSelectedSymbol] = useState('RELIANCE');
   const [searchInput, setSearchInput] = useState('');
   const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '30m' | '1h' | '1d'>('15m');
@@ -71,7 +92,21 @@ const Terminal: React.FC = () => {
   const [showAlertList, setShowAlertList] = useState(false);
   const [alertRefreshTrigger, setAlertRefreshTrigger] = useState(0);
   const [showChat, setShowChat] = useState(false);
-  
+  const [session, setSession] = useState(getMarketSession());
+  const [indices, setIndices] = useState<{symbol:string;ltp:number;change:number;change_percent:number}[]>([]);
+  const [positions, setPositions] = useState({ open: 0, pnl: 0 });
+  const [fiiDii, setFiiDii] = useState<{fii_net:number;dii_net:number} | null>(null);
+  const [nseFilings, setNseFilings] = useState<any[]>([]);
+  const [nseLoading, setNseLoading] = useState(false);
+  const [newsTab, setNewsTab] = useState<'rss'|'nse'|'deals'|'insider'>('rss');
+  const [vix, setVix] = useState<{current:number;regime:string;implications:string} | null>(null);
+  const [atmSnapshot, setAtmSnapshot] = useState<{spot:number;atm:number;ce_ltp:number;pe_ltp:number;ce_iv:number;pe_iv:number;expiry:string} | null>(null);
+  const [stockTechnicals, setStockTechnicals] = useState<{rsi:number|null;trend:string;recommendation:string;signal:string} | null>(null);
+  const [earningsWeek, setEarningsWeek] = useState<any[]>([]);
+  const [blockDeals, setBlockDeals] = useState<{block_deals:any[];bulk_deals:any[]}>({block_deals:[],bulk_deals:[]});
+  const [foBan, setFoBan] = useState<string[]>([]);
+  const [insiderTrades, setInsiderTrades] = useState<any[]>([]);
+
   // ML Predictions
   const [mlPredictions, setMlPredictions] = useState<Record<string, {
     signal: string; confidence: number; bias: string; reason: string; model_type?: string;
@@ -119,7 +154,12 @@ const Terminal: React.FC = () => {
     return allSymbols.filter((s) => s.includes(input)).slice(0, 10);
   }, [allSymbols, commandInput]);
 
-  const { quotes, loading: quotesLoading, connected: quotesConnected } = useRealtimeQuotes(watchlistSymbols, true);
+  // Include index symbols in the same WS stream so change% comes from Zerodha OHLC
+  const allStreamSymbols = useMemo(
+    () => [...new Set([...watchlistSymbols, 'NIFTY', 'BANKNIFTY', 'SENSEX'])],
+    [watchlistSymbols]
+  );
+  const { quotes, loading: quotesLoading, connected: quotesConnected } = useRealtimeQuotes(allStreamSymbols, true);
 
   // Fetch market data
   useEffect(() => {
@@ -201,9 +241,164 @@ const Terminal: React.FC = () => {
 
     fetchMarketData();
     const interval = setInterval(fetchMarketData, 60000);
-
     return () => clearInterval(interval);
   }, [showAdvancedPanels, universe, watchlistSymbols]);
+
+  // Session clock
+  useEffect(() => { const t = setInterval(() => setSession(getMarketSession()), 60000); return () => clearInterval(t); }, []);
+
+  // Index quotes — read from the shared WS stream (has real change% from Zerodha OHLC)
+  useEffect(() => {
+    const idxSymbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
+    const updated = idxSymbols
+      .map(sym => {
+        const q = quotes[sym];
+        if (!q || !q.ltp) return null;
+        return { symbol: sym, ltp: q.ltp, change: q.change, change_percent: q.change_percent };
+      })
+      .filter(Boolean) as {symbol:string;ltp:number;change:number;change_percent:number}[];
+    if (updated.length > 0) setIndices(updated);
+  }, [quotes]);
+
+  // Positions summary
+  useEffect(() => {
+    const token = authTokenStore.get();
+    fetch('/api/paper/positions', token ? { headers: { Authorization: `Bearer ${token}` } } : {})
+      .then(r => r.ok ? r.json() : null)
+      .then((d: any) => {
+        if (d) setPositions({ open: d.open_count ?? 0, pnl: d.total_pnl ?? 0 });
+      })
+      .catch(() => {});
+  }, []);
+
+  // FII/DII
+  useEffect(() => {
+    const token = authTokenStore.get();
+    fetch('/api/fii-dii/latest', token ? { headers: { Authorization: `Bearer ${token}` } } : {})
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && (d.fii_net != null || d.dii_net != null)) setFiiDii(d); })
+      .catch(() => {});
+  }, []);
+
+  // NSE filings
+  useEffect(() => {
+    const load = async () => {
+      setNseLoading(true);
+      try {
+        const token = authTokenStore.get();
+        const headers = token ? { Authorization: `Bearer ${token}` } : {} as any;
+        const r = await fetch('/api/news/nse/live?high_impact_only=false', { headers });
+        if (r.ok) { const d = await r.json(); setNseFilings(d.data || []); }
+      } catch {}
+      finally { setNseLoading(false); }
+    };
+    load(); const t = setInterval(load, 300000); return () => clearInterval(t);
+  }, []);
+
+  // Batched slow-data poller: VIX, ATM snapshot, earnings, block deals, F&O ban, insider trades
+  // All staggered with small delays to avoid simultaneous backend hits
+  useEffect(() => {
+    const token = authTokenStore.get();
+    const h = token ? { Authorization: `Bearer ${token}` } : {} as any;
+
+    const loadVix = async () => {
+      try {
+        const r = await fetch('/api/nse/vix', { headers: h });
+        if (r.ok) { const d = await r.json(); setVix({ current: d.current, regime: d.regime, implications: d.implications }); }
+      } catch {}
+    };
+
+    const loadAtm = async () => {
+      try {
+        const expR = await fetch('/api/market/expiries/NIFTY', { headers: h });
+        if (!expR.ok) return;
+        const expD = await expR.json();
+        const expiry = expD.expiries?.[0];
+        if (!expiry) return;
+        const chainR = await fetch(`/api/options/real/chain/NIFTY?expiry=${expiry}`, { headers: h });
+        if (!chainR.ok) return;
+        const chainD = await chainR.json();
+        const atmRow = (chainD.strikes || []).find((s: any) => s.strike === chainD.atm_strike);
+        if (!atmRow) return;
+        setAtmSnapshot({ spot: chainD.spot, atm: chainD.atm_strike, ce_ltp: atmRow.call?.ltp ?? 0, pe_ltp: atmRow.put?.ltp ?? 0, ce_iv: atmRow.call?.iv ?? 0, pe_iv: atmRow.put?.iv ?? 0, expiry });
+      } catch {}
+    };
+
+    const loadEarnings = async () => {
+      try {
+        const r = await fetch('/api/calendar/earnings?days_ahead=7&days_back=0', { headers: h });
+        if (r.ok) { const d = await r.json(); setEarningsWeek((d.earnings || []).filter((e: any) => e.impact === 'high').slice(0, 4)); }
+      } catch {}
+    };
+
+    const loadDeals = async () => {
+      try {
+        const r = await fetch('/api/nse/block-deals', { headers: h });
+        if (r.ok) { const d = await r.json(); setBlockDeals({ block_deals: d.block_deals || [], bulk_deals: d.bulk_deals || [] }); }
+      } catch {}
+    };
+
+    const loadFoBan = async () => {
+      try {
+        const r = await fetch('/api/nse/fo-ban', { headers: h });
+        if (r.ok) { const d = await r.json(); setFoBan(d.banned_symbols || []); }
+      } catch {}
+    };
+
+    const loadInsider = async () => {
+      try {
+        const r = await fetch('/api/nse/insider-trading', { headers: h });
+        if (r.ok) { const d = await r.json(); setInsiderTrades(d.data || []); }
+      } catch {}
+    };
+
+    // Initial load: stagger by 1s each to avoid simultaneous hits
+    loadVix();
+    const t1 = setTimeout(loadAtm, 1000);
+    const t2 = setTimeout(loadEarnings, 2000);
+    const t3 = setTimeout(loadDeals, 3000);
+    const t4 = setTimeout(loadFoBan, 4000);
+    const t5 = setTimeout(loadInsider, 5000);
+
+    // Refresh intervals: all slow data on 5-min cycle, F&O ban on 10-min
+    const ivx = setInterval(loadVix, 300000);
+    const iatm = setInterval(loadAtm, 300000);
+    const ideals = setInterval(loadDeals, 300000);
+    const iinsider = setInterval(loadInsider, 300000);
+    const ifoban = setInterval(loadFoBan, 600000);
+
+    return () => {
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); clearTimeout(t5);
+      clearInterval(ivx); clearInterval(iatm); clearInterval(ideals); clearInterval(iinsider); clearInterval(ifoban);
+    };
+  }, []);
+
+  // Earnings: one-shot on mount (no interval needed — changes daily)
+  useEffect(() => {
+    const token = authTokenStore.get();
+    const h = token ? { Authorization: `Bearer ${token}` } : {} as any;
+    fetch('/api/calendar/earnings?days_ahead=7&days_back=0', { headers: h })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setEarningsWeek((d.earnings || []).filter((e: any) => e.impact === 'high').slice(0, 4)); })
+      .catch(() => {});
+  }, []);
+
+  // Stock technicals for selected symbol
+  useEffect(() => {
+    setStockTechnicals(null);
+    const load = async () => {
+      try {
+        const token = authTokenStore.get();
+        const r = await fetch(`/api/market-dashboard/stock-technicals/${selectedSymbol}`,
+          token ? { headers: { Authorization: `Bearer ${token}` } } : {});
+        if (r.ok) {
+          const d = await r.json();
+          setStockTechnicals({ rsi: d.indicators?.rsi ?? null, trend: d.trend, recommendation: d.recommendation, signal: d.signal });
+        }
+      } catch {}
+    };
+    load();
+  }, [selectedSymbol]);
 
   // Keyboard shortcuts handler
   useEffect(() => {
@@ -267,8 +462,61 @@ const Terminal: React.FC = () => {
   const candleTimeframe: '1m' | '5m' | '15m' | '1h' | 'daily' =
     timeframe === '1d' ? 'daily' : timeframe === '30m' ? '15m' : timeframe;
   
+  const highImpactCount = nseFilings.filter((f:any) => f.is_high_impact).length;
+
   return (
     <div className="h-full flex flex-col gap-4 terminal-pattern overflow-y-auto pb-6">
+
+      {/* Index Bar */}
+      {(indices.length > 0 || vix || atmSnapshot) && (
+        <div className="terminal-panel rounded-xl px-4 py-2 flex flex-wrap items-center gap-6">
+          {indices.map(idx => (
+            <div key={idx.symbol} className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-400 uppercase">{idx.symbol}</span>
+              <span className="text-sm font-bold text-white">₹{idx.ltp?.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+              <span className={`text-xs font-medium ${idx.change>=0?'text-emerald-400':'text-red-400'}`}>
+                {idx.change>=0?'+':''}{idx.change?.toFixed(2)} ({idx.change_percent?.toFixed(2)}%)
+              </span>
+            </div>
+          ))}
+          {vix && (
+            <div className="flex items-center gap-1.5 border-l border-slate-700/50 pl-4">
+              <span className="text-xs font-semibold text-slate-400">VIX</span>
+              <span className={`text-sm font-bold ${
+                vix.current < 15 ? 'text-emerald-400' : vix.current < 20 ? 'text-yellow-400' : 'text-red-400'
+              }`}>{vix.current?.toFixed(2)}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                vix.regime === 'CALM' || vix.regime === 'VERY_CALM' ? 'bg-emerald-500/20 text-emerald-300' :
+                vix.regime === 'NORMAL' ? 'bg-yellow-500/20 text-yellow-300' : 'bg-red-500/20 text-red-300'
+              }`}>{vix.regime?.replace('_',' ')}</span>
+            </div>
+          )}
+          {atmSnapshot && (
+            <div className="flex items-center gap-2 border-l border-slate-700/50 pl-4">
+              <span className="text-xs font-semibold text-slate-400">NIFTY ATM {atmSnapshot.atm}</span>
+              <span className="text-xs text-emerald-400">CE ₹{atmSnapshot.ce_ltp?.toFixed(0)} <span className="text-slate-500">IV {atmSnapshot.ce_iv?.toFixed(1)}%</span></span>
+              <span className="text-xs text-slate-500">|</span>
+              <span className="text-xs text-red-400">PE ₹{atmSnapshot.pe_ltp?.toFixed(0)} <span className="text-slate-500">IV {atmSnapshot.pe_iv?.toFixed(1)}%</span></span>
+              <button onClick={()=>navigate('/options')} className="text-[10px] text-slate-500 hover:text-purple-400 transition">Chain →</button>
+            </div>
+          )}
+          <div className="ml-auto flex items-center gap-3 text-xs">
+            <button onClick={()=>navigate('/positions')} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:border-blue-500/50 transition">
+              <Briefcase size={12} className="text-blue-400" />
+              <span className="text-slate-300">{positions.open} open</span>
+              <span className={positions.pnl>=0?'text-emerald-400':'text-red-400'}>{positions.pnl>=0?'+':''}₹{Math.abs(positions.pnl).toFixed(0)}</span>
+            </button>
+            {fiiDii && (fiiDii.fii_net != null || fiiDii.dii_net != null) && (
+              <button onClick={()=>navigate('/fii-dii')} className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:border-pink-500/50 transition">
+                <ArrowUpDown size={12} className="text-pink-400" />
+                {fiiDii.fii_net != null && <span className={fiiDii.fii_net>=0?'text-emerald-400':'text-red-400'}>FII {fiiDii.fii_net>=0?'+':''}₹{Math.abs(fiiDii.fii_net).toFixed(0)}Cr</span>}
+                {fiiDii.dii_net != null && <span className={fiiDii.dii_net>=0?'text-emerald-400':'text-red-400'}>DII {fiiDii.dii_net>=0?'+':''}₹{Math.abs(fiiDii.dii_net).toFixed(0)}Cr</span>}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Command Palette Overlay */}
       {showCommandPalette && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-start justify-center pt-20">
@@ -364,8 +612,8 @@ const Terminal: React.FC = () => {
             
             {/* Session */}
             <div className="flex items-center gap-2 px-3 py-2 rounded-full bg-slate-900/70 border border-slate-700/50">
-              <Clock size={14} className="text-orange-300" />
-              <span className="text-xs text-slate-300">Asia Session</span>
+              <Clock size={14} className={session.color} />
+              <span className={`text-xs ${session.color}`}>{session.label}</span>
             </div>
             
             {/* Market Sentiment */}
@@ -418,6 +666,18 @@ const Terminal: React.FC = () => {
               AI Chat
             </button>
           </div>
+        </div>
+
+        {/* Quick Links */}
+        <div className="flex flex-wrap gap-2">
+          {QUICK_LINKS.map(ql => (
+            <button key={ql.path} onClick={()=>navigate(ql.path)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900/60 border border-slate-700/40 hover:border-slate-500/60 text-xs text-slate-300 hover:text-white transition group">
+              <ql.icon size={12} className={ql.color} />
+              {ql.label}
+              <ChevronRight size={10} className="text-slate-600 group-hover:text-slate-400 transition" />
+            </button>
+          ))}
         </div>
 
         {/* Search and Timeframe */}
@@ -500,6 +760,20 @@ const Terminal: React.FC = () => {
         </div>
       )}
 
+      {/* Earnings This Week */}
+      {earningsWeek.length > 0 && (
+        <div className="terminal-panel rounded-xl px-4 py-2 flex flex-wrap items-center gap-4">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1"><Calendar size={12}/> Earnings</span>
+          {earningsWeek.map((e: any, i: number) => (
+            <button key={i} onClick={()=>navigate(`/stock-research?symbol=${e.symbol}`)} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 hover:border-emerald-500/50 transition">
+              <span className="text-xs font-bold text-white">{e.symbol}</span>
+              <span className="text-[10px] text-slate-400">{e.countdown}</span>
+              {e.impact === 'high' && <span className="w-1.5 h-1.5 rounded-full bg-orange-400"/>}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Main Content Grid */}
       <section className="grid grid-cols-1 xl:grid-cols-[1fr_0.8fr] gap-4">
         {/* Left Column - Chart and Swing Opportunities */}
@@ -517,6 +791,28 @@ const Terminal: React.FC = () => {
                   {(mlPredictions[selectedSymbol] as any).model_type === 'ensemble' ? '🧠 Ensemble' : '🤖 ML'}: {mlPredictions[selectedSymbol].signal} ({mlPredictions[selectedSymbol].confidence}%)
                 </span>
                 <span className="text-xs text-slate-500">{mlPredictions[selectedSymbol].reason}</span>
+              </div>
+            )}
+            {/* Stock Technicals Badge */}
+            {stockTechnicals && (
+              <div className="mb-2 flex items-center gap-2 flex-wrap">
+                {stockTechnicals.rsi != null && (
+                  <span className={`text-xs px-2.5 py-1 rounded-lg border font-medium ${
+                    stockTechnicals.rsi > 70 ? 'bg-red-500/20 text-red-300 border-red-500/30' :
+                    stockTechnicals.rsi < 30 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
+                    'bg-slate-700/50 text-slate-300 border-slate-600/50'
+                  }`}>RSI {stockTechnicals.rsi.toFixed(1)}</span>
+                )}
+                <span className={`text-xs px-2.5 py-1 rounded-lg border font-medium ${
+                  stockTechnicals.trend === 'UPTREND' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
+                  stockTechnicals.trend === 'DOWNTREND' ? 'bg-red-500/20 text-red-300 border-red-500/30' :
+                  'bg-slate-700/50 text-slate-300 border-slate-600/50'
+                }`}>{stockTechnicals.trend?.replace('_',' ')}</span>
+                <span className={`text-xs px-2.5 py-1 rounded-lg border font-bold ${
+                  stockTechnicals.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40' :
+                  stockTechnicals.recommendation === 'SELL' ? 'bg-red-500/20 text-red-200 border-red-500/40' :
+                  'bg-slate-700/50 text-slate-300 border-slate-600/50'
+                }`}>{stockTechnicals.recommendation}</span>
               </div>
             )}
             <ErrorBoundary>
@@ -645,7 +941,9 @@ const Terminal: React.FC = () => {
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Top Movers</p>
                   <h2 className="terminal-title text-xl text-white">Market Leaders</h2>
                 </div>
-                <BarChart3 size={18} className="text-emerald-300" />
+                <button onClick={()=>navigate('/screener')} className="flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-400 transition">
+                  <BarChart3 size={13}/> Screener <ChevronRight size={11}/>
+                </button>
               </div>
 
               <div className="grid grid-cols-3 gap-4">
@@ -858,7 +1156,12 @@ const Terminal: React.FC = () => {
                           onClick={() => setSelectedSymbol(symbol)}
                           className="flex-1 cursor-pointer"
                         >
-                          <div className="text-sm font-semibold text-white">{symbol}</div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-sm font-semibold text-white">{symbol}</div>
+                            {foBan.includes(symbol) && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/30 text-red-300 border border-red-500/40 font-bold">F&O BAN</span>
+                            )}
+                          </div>
                           <div className={`text-xs flex items-center gap-1 ${
                             quote.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'
                           }`}>
@@ -955,6 +1258,9 @@ const Terminal: React.FC = () => {
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-400">ML Engine</p>
                   <h2 className="terminal-title text-xl text-white">AI Signals</h2>
                 </div>
+                <button onClick={()=>navigate('/ml')} className="flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-400 transition">
+                  <Brain size={13}/> ML Center <ChevronRight size={11}/>
+                </button>
                 <div className="flex items-center gap-3">
                   {mlModelType === 'ensemble' && (
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">ENSEMBLE</span>
@@ -1038,7 +1344,9 @@ const Terminal: React.FC = () => {
                   <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Sector Pulse</p>
                   <h2 className="terminal-title text-xl text-white">Industry Heat</h2>
                 </div>
-                <BarChart3 size={16} className="text-orange-300" />
+                <button onClick={()=>navigate('/heatmap')} className="flex items-center gap-1 text-xs text-slate-400 hover:text-orange-400 transition">
+                  <BarChart3 size={13} /> Heatmap <ChevronRight size={11} />
+                </button>
               </div>
 
               <div className="space-y-3">
@@ -1192,15 +1500,131 @@ const Terminal: React.FC = () => {
             />
           )}
 
-          {/* News Feed with Sentiment */}
-          <div className="terminal-panel rounded-2xl p-5">
-            <div className="flex items-center justify-between mb-4">
+          {/* News Feed with Sentiment + NSE Filings */}
+          <div className="terminal-panel rounded-2xl p-5 flex flex-col">
+            <div className="flex items-center justify-between mb-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Market News</p>
                 <h2 className="terminal-title text-xl text-white">Live Feed</h2>
               </div>
             </div>
-            <NewsFeed height={480} />
+            {/* Tabs */}
+            <div className="flex gap-1 mb-3 news-tab-bar rounded-lg p-1">
+              <button onClick={()=>setNewsTab('rss')} className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition ${
+                newsTab==='rss' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'text-slate-400 hover:text-slate-200'
+              }`}><Newspaper size={12}/> News</button>
+              <button onClick={()=>setNewsTab('nse')} className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition ${
+                newsTab==='nse' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-slate-400 hover:text-slate-200'
+              }`}>
+                <Building2 size={12}/> Filings
+                {highImpactCount>0 && <span className="bg-red-500/80 text-white text-[10px] px-1.5 py-0.5 rounded-full">{highImpactCount}</span>}
+              </button>
+              <button onClick={()=>setNewsTab('deals')} className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition ${
+                newsTab==='deals' ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30' : 'text-slate-400 hover:text-slate-200'
+              }`}>
+                <ArrowUpDown size={12}/> Deals
+                {(blockDeals.block_deals.length+blockDeals.bulk_deals.length)>0 && <span className="bg-orange-500/80 text-white text-[10px] px-1.5 py-0.5 rounded-full">{blockDeals.block_deals.length+blockDeals.bulk_deals.length}</span>}
+              </button>
+              <button onClick={()=>setNewsTab('insider')} className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium transition ${
+                newsTab==='insider' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'text-slate-400 hover:text-slate-200'
+              }`}>
+                <Eye size={12}/> Insider
+                {insiderTrades.length>0 && <span className="bg-purple-500/80 text-white text-[10px] px-1.5 py-0.5 rounded-full">{insiderTrades.length}</span>}
+              </button>
+            </div>
+            {newsTab==='rss' ? (
+              <NewsFeed height={480} />
+            ) : newsTab==='nse' ? (
+              <div className="overflow-y-auto" style={{height:'480px'}}>
+                <div className="space-y-3 pr-1">
+                  {nseLoading ? <p className="text-xs text-slate-500">Loading NSE filings...</p>
+                  : nseFilings.length>0 ? nseFilings.map((item:any,idx:number) => (
+                    <div key={idx} className={`news-item-divider pb-3 last:border-0 ${item.is_high_impact?'border-l-2 border-l-orange-500/60 pl-2':''}`}>
+                      <div className="flex items-start gap-1.5">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <button onClick={()=>navigate(`/stock-research?symbol=${item.symbol}`)} className="text-xs font-bold text-blue-400 hover:text-blue-300 transition">{item.symbol}</button>
+                            {item.is_high_impact && <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 font-semibold flex items-center gap-0.5"><AlertCircle size={9}/> HIGH</span>}
+                            <span className="text-[10px] text-slate-500">{item.category}</span>
+                          </div>
+                          <p className="text-sm text-slate-200 leading-relaxed">{item.headline}</p>
+                          <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
+                            <span>{item.company_name}</span><span>•</span><span>{formatRelTime(item.published_at)}</span>
+                          </div>
+                        </div>
+                        {item.pdf_url && <a href={item.pdf_url} target="_blank" rel="noopener noreferrer" className="text-slate-600 hover:text-blue-400 transition-colors flex-shrink-0 mt-1"><ExternalLink size={11}/></a>}
+                      </div>
+                    </div>
+                  )) : <p className="text-xs text-slate-500">No NSE filings available</p>}
+                </div>
+              </div>
+            ) : newsTab==='deals' ? (
+              <div className="overflow-y-auto" style={{height:'480px'}}>
+                <div className="space-y-4 pr-1">
+                  {blockDeals.block_deals.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold text-orange-400 uppercase tracking-wider mb-2">Block Deals ({blockDeals.block_deals.length})</p>
+                      {blockDeals.block_deals.map((d:any, i:number) => (
+                        <div key={i} className="flex items-center justify-between py-2 border-b border-slate-800/60 last:border-0">
+                          <div>
+                            <button onClick={()=>setSelectedSymbol(d.symbol)} className="text-xs font-bold text-blue-400 hover:text-blue-300">{d.symbol}</button>
+                            <p className="text-[10px] text-slate-400 mt-0.5">{d.client}</p>
+                          </div>
+                          <div className="text-right">
+                            <span className={`text-xs font-bold ${d.deal_type==='BUY'?'text-emerald-400':'text-red-400'}`}>{d.deal_type}</span>
+                            <p className="text-[10px] text-slate-400">{Number(d.quantity).toLocaleString('en-IN')} @ ₹{d.price}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {blockDeals.bulk_deals.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-semibold text-yellow-400 uppercase tracking-wider mb-2">Bulk Deals ({blockDeals.bulk_deals.length})</p>
+                      {blockDeals.bulk_deals.map((d:any, i:number) => (
+                        <div key={i} className="flex items-center justify-between py-2 border-b border-slate-800/60 last:border-0">
+                          <div>
+                            <button onClick={()=>setSelectedSymbol(d.symbol)} className="text-xs font-bold text-blue-400 hover:text-blue-300">{d.symbol}</button>
+                            <p className="text-[10px] text-slate-400 mt-0.5">{d.client}</p>
+                          </div>
+                          <div className="text-right">
+                            <span className={`text-xs font-bold ${d.deal_type==='BUY'?'text-emerald-400':'text-red-400'}`}>{d.deal_type}</span>
+                            <p className="text-[10px] text-slate-400">{Number(d.quantity).toLocaleString('en-IN')} @ ₹{d.price}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {blockDeals.block_deals.length===0 && blockDeals.bulk_deals.length===0 && (
+                    <p className="text-xs text-slate-500 text-center py-8">No block/bulk deals today</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-y-auto" style={{height:'480px'}}>
+                <div className="space-y-3 pr-1">
+                  {insiderTrades.length > 0 ? insiderTrades.map((item:any, idx:number) => (
+                    <div key={idx} className="pb-3 border-b border-slate-800/60 last:border-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <button onClick={()=>setSelectedSymbol(item.symbol)} className="text-xs font-bold text-blue-400 hover:text-blue-300">{item.symbol}</button>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                              item.direction==='BUY' ? 'bg-emerald-500/20 text-emerald-300' :
+                              item.direction==='SELL' ? 'bg-red-500/20 text-red-300' :
+                              'bg-slate-700/50 text-slate-400'
+                            }`}>{item.direction}</span>
+                          </div>
+                          <p className="text-xs text-slate-300 leading-relaxed">{item.headline}</p>
+                          <p className="text-[10px] text-slate-500 mt-1">{item.company} • {formatRelTime(item.published_at)}</p>
+                        </div>
+                        {item.pdf_url && <a href={item.pdf_url} target="_blank" rel="noopener noreferrer" className="text-slate-600 hover:text-purple-400 transition-colors flex-shrink-0"><ExternalLink size={11}/></a>}
+                      </div>
+                    </div>
+                  )) : <p className="text-xs text-slate-500 text-center py-8">No insider trading disclosures today</p>}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>

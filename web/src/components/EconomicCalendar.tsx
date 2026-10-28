@@ -199,6 +199,7 @@ const EconomicCalendar: React.FC<EconomicCalendarProps> = ({ height = 700, compa
               <option value="ipo">IPO</option>
               <option value="dividend">Dividend</option>
               <option value="corporate_action">Corporate Actions</option>
+              <option value="board_meeting">Board Meetings</option>
               <option value="global">Global</option>
             </select>
 

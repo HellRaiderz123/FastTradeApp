@@ -283,6 +283,8 @@ _INDEX_FALLBACK_SCRIP: Dict[str, str] = {
     "FINNIFTY":          "NSE_40000076",
     "INDIA VIX":         "NSE_40000107",
     "NIFTYVIX":          "NSE_40000107",
+    # ── Indices (BSE) ─────────────────────────────────────────────────────
+    "SENSEX":            "BSE_1",
     # ── NIFTY 50 / top weights ────────────────────────────────────────────
     "RELIANCE":    "NSE_2885",
     "TCS":         "NSE_11536",
@@ -617,6 +619,111 @@ def fetch_historical(
     logger.info("INDstocks fetch_historical complete: %s %s returned %d candles",
                 scrip_code, api_interval, len(all_candles))
     return all_candles
+
+
+# ── Full Quote (LTP + OHLC + prev_close) ─────────────────────────────────
+
+# In-process cache: scrip_code -> {ltp, open, high, low, close, prev_close, volume}
+_full_quote_cache: Dict[str, Dict] = {}
+_full_quote_cache_ts: float = 0.0
+_FULL_QUOTE_TTL = 15.0  # seconds — refresh at most every 15s
+
+
+def fetch_full_quotes(scrip_codes: List[str]) -> Dict[str, Dict]:
+    """
+    Fetch full quote (LTP + OHLC + prev_close + volume) for a list of scrip-codes.
+
+    Uses /market/quotes/full endpoint.
+    Response shape: {"data": {"NSE_2885": {"live_price": 1177, "open": 1180,
+                    "high": 1185, "low": 1170, "close": 1175,
+                    "prev_close": 1165, "volume": 1234567}}}
+
+    Falls back to LTP-only if the full endpoint fails.
+    Returns {scrip_code: {ltp, open, high, low, close, prev_close, volume}}.
+    """
+    if not scrip_codes:
+        return {}
+
+    result: Dict[str, Dict] = {}
+    for i in range(0, len(scrip_codes), 50):
+        batch = scrip_codes[i: i + 50]
+        _rate_limiter.wait()
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/market/quotes/full",
+                params={"scrip-codes": ",".join(batch)},
+                headers=_headers(),
+                timeout=10,
+            )
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", 2))
+                logger.warning("INDstocks full-quote rate limited, waiting %ds", retry_after)
+                time.sleep(retry_after)
+                _rate_limiter.wait()
+                resp = requests.get(
+                    f"{BASE_URL}/market/quotes/full",
+                    params={"scrip-codes": ",".join(batch)},
+                    headers=_headers(),
+                    timeout=10,
+                )
+            resp.raise_for_status()
+            body = resp.json()
+            data = body.get("data") or {}
+            for code, info in data.items():
+                ltp = info.get("live_price") or info.get("ltp") or 0.0
+                prev_close = (
+                    info.get("prev_close")
+                    or info.get("previous_close")
+                    or info.get("close")
+                    or ltp
+                )
+                result[code] = {
+                    "ltp":        float(ltp),
+                    "open":       float(info.get("open") or ltp),
+                    "high":       float(info.get("high") or ltp),
+                    "low":        float(info.get("low") or ltp),
+                    "close":      float(info.get("close") or ltp),
+                    "prev_close": float(prev_close),
+                    "volume":     int(info.get("volume") or info.get("vol") or 0),
+                }
+        except Exception as exc:
+            logger.warning("INDstocks full-quote fetch error (batch %s): %s", batch[:3], exc)
+            # Fall back to LTP-only for this batch
+            try:
+                ltp_map = fetch_ltp(batch)
+                for code, ltp in ltp_map.items():
+                    result[code] = {
+                        "ltp": ltp, "open": ltp, "high": ltp,
+                        "low": ltp, "close": ltp, "prev_close": ltp, "volume": 0,
+                    }
+            except Exception:
+                pass
+    return result
+
+
+def fetch_full_quotes_by_symbol(symbols: List[str]) -> Dict[str, Dict]:
+    """
+    Resolve symbols -> scrip-codes -> full quotes -> return keyed by original symbol.
+    Returns {symbol: {ltp, open, high, low, close, prev_close, volume}}.
+    """
+    sym_to_scrip: Dict[str, str] = {}
+    for sym in symbols:
+        try:
+            sym_to_scrip[sym] = get_scrip_code(sym)
+        except KeyError:
+            cache = _instruments_cache()
+            if sym.upper() in cache:
+                sym_to_scrip[sym] = cache[sym.upper()]
+
+    if not sym_to_scrip:
+        return {}
+
+    scrip_to_quote = fetch_full_quotes(list(sym_to_scrip.values()))
+    return {
+        sym: scrip_to_quote[scrip]
+        for sym, scrip in sym_to_scrip.items()
+        if scrip in scrip_to_quote
+    }
 
 
 # ── Live LTP ───────────────────────────────────────────────────────────────

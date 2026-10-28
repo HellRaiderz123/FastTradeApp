@@ -23,6 +23,34 @@ def get_db():
         db.close()
 
 
+@router.get("/positions")
+def get_positions(db: Session = Depends(get_db)):
+    """Return open positions summary for the terminal badge."""
+    intents = (
+        db.query(ExecutionIntent)
+        .filter(
+            ExecutionIntent.status == "EXECUTED",
+            ExecutionIntent.closed_at == None,  # noqa: E711
+        )
+        .all()
+    )
+    positions = [
+        {
+            "intent_id": i.intent_id,
+            "strategy": i.strategy,
+            "underlying": i.underlying,
+            "quantity": 1,
+            "pnl": float(i.pnl or 0),
+        }
+        for i in intents
+    ]
+    return {
+        "positions": positions,
+        "open_count": len(positions),
+        "total_pnl": round(sum(p["pnl"] for p in positions), 2),
+    }
+
+
 @router.post("/mtm/update")
 def update_mtm(db: Session = Depends(get_db)):
     execution_mode = get_execution_mode()

@@ -17,12 +17,14 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import datetime, timedelta
+from datetime import date as _date, datetime, timedelta
 from typing import Any, Optional
 
 import requests as _req
 from fastapi import APIRouter, Query
 from app.core.market.nse_client import nse_get
+from app.db.session import SessionLocal
+from app.db.models_fii_dii import FiiDiiDaily
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/fii-dii", tags=["fii-dii"])
@@ -283,6 +285,102 @@ def _fetch_github_fallback() -> list[dict]:
         return []
 
 
+# ── DB persistence helpers ───────────────────────────────────────────────────
+
+def _row_to_dict(rec: FiiDiiDaily) -> dict:
+    """Convert a DB row to the same dict shape used throughout this module."""
+    d = rec.date.strftime("%d-%b-%Y")  # e.g. "01-Jan-2025"
+    return {
+        "date": d,
+        "_parsed_date": rec.date.isoformat(),
+        "fii_buy":  rec.fii_buy,  "fii_sell": rec.fii_sell,  "fii_net": rec.fii_net,
+        "dii_buy":  rec.dii_buy,  "dii_sell": rec.dii_sell,  "dii_net": rec.dii_net,
+        "fii_idx_fut_long":   rec.fii_idx_fut_long,
+        "fii_idx_fut_short":  rec.fii_idx_fut_short,
+        "fii_idx_fut_net":    rec.fii_idx_fut_net,
+        "fii_stk_fut_long":   rec.fii_stk_fut_long,
+        "fii_stk_fut_short":  rec.fii_stk_fut_short,
+        "fii_stk_fut_net":    rec.fii_stk_fut_net,
+        "fii_idx_call_long":  rec.fii_idx_call_long,
+        "fii_idx_call_short": rec.fii_idx_call_short,
+        "fii_idx_call_net":   rec.fii_idx_call_net,
+        "fii_idx_put_long":   rec.fii_idx_put_long,
+        "fii_idx_put_short":  rec.fii_idx_put_short,
+        "fii_idx_put_net":    rec.fii_idx_put_net,
+        "dii_idx_fut_long":   rec.dii_idx_fut_long,
+        "dii_idx_fut_short":  rec.dii_idx_fut_short,
+        "dii_idx_fut_net":    rec.dii_idx_fut_net,
+        "pcr":             rec.pcr,
+        "sentiment_score": rec.sentiment_score,
+        "_fao_summary": None,
+    }
+
+
+def _upsert_row(db, row: dict) -> None:
+    """Insert or update a single FII/DII row in the DB."""
+    try:
+        trade_date = _date.fromisoformat(row["_parsed_date"])
+    except Exception:
+        return
+    rec = db.query(FiiDiiDaily).filter(FiiDiiDaily.date == trade_date).first()
+    fields = {
+        "fii_buy": row.get("fii_buy"),   "fii_sell": row.get("fii_sell"),  "fii_net": row.get("fii_net"),
+        "dii_buy": row.get("dii_buy"),   "dii_sell": row.get("dii_sell"),  "dii_net": row.get("dii_net"),
+        "fii_idx_fut_long":   row.get("fii_idx_fut_long"),
+        "fii_idx_fut_short":  row.get("fii_idx_fut_short"),
+        "fii_idx_fut_net":    row.get("fii_idx_fut_net"),
+        "fii_stk_fut_long":   row.get("fii_stk_fut_long"),
+        "fii_stk_fut_short":  row.get("fii_stk_fut_short"),
+        "fii_stk_fut_net":    row.get("fii_stk_fut_net"),
+        "fii_idx_call_long":  row.get("fii_idx_call_long"),
+        "fii_idx_call_short": row.get("fii_idx_call_short"),
+        "fii_idx_call_net":   row.get("fii_idx_call_net"),
+        "fii_idx_put_long":   row.get("fii_idx_put_long"),
+        "fii_idx_put_short":  row.get("fii_idx_put_short"),
+        "fii_idx_put_net":    row.get("fii_idx_put_net"),
+        "dii_idx_fut_long":   row.get("dii_idx_fut_long"),
+        "dii_idx_fut_short":  row.get("dii_idx_fut_short"),
+        "dii_idx_fut_net":    row.get("dii_idx_fut_net"),
+        "pcr":             row.get("pcr"),
+        "sentiment_score": row.get("sentiment_score"),
+    }
+    if rec:
+        for k, v in fields.items():
+            if v is not None:
+                setattr(rec, k, v)
+    else:
+        db.add(FiiDiiDaily(date=trade_date, **{k: v for k, v in fields.items() if v is not None}))
+
+
+def _load_from_db() -> list[dict]:
+    """Load all stored FII/DII rows from DB, sorted by date."""
+    try:
+        db = SessionLocal()
+        try:
+            rows = db.query(FiiDiiDaily).order_by(FiiDiiDaily.date).all()
+            return [_row_to_dict(r) for r in rows]
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("fii_dii: DB load failed: %s", e)
+        return []
+
+
+def _save_to_db(history: list[dict]) -> None:
+    """Upsert all rows in history into the DB."""
+    try:
+        db = SessionLocal()
+        try:
+            for row in history:
+                _upsert_row(db, row)
+            db.commit()
+            logger.info("fii_dii: saved %d rows to DB", len(history))
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("fii_dii: DB save failed: %s", e)
+
+
 # ── Main data loader ─────────────────────────────────────────────────────────
 
 def _get_data(force: bool = False) -> list[dict]:
@@ -295,34 +393,52 @@ def _get_data(force: bool = False) -> list[dict]:
     ):
         return _cache["data"]
 
-    # 1. Load history from GitHub (reliable, up to last commit)
-    history = _fetch_github_fallback()
+    # 1. Load history from DB (persistent store)
+    history_by_date: dict[str, dict] = {r["_parsed_date"]: r for r in _load_from_db()}
 
-    # 2. Fetch today's live row from NSE and merge/replace
+    # 2. If DB is empty, seed from GitHub fallback
+    if not history_by_date:
+        logger.info("fii_dii: DB empty, seeding from GitHub fallback")
+        github_rows = _fetch_github_fallback()
+        for r in github_rows:
+            history_by_date[r["_parsed_date"]] = r
+        if github_rows:
+            _save_to_db(github_rows)
+
+    # 3. Fetch today's live row from NSE and merge/replace
     raw_rows = _fetch_cash_nse()
     if raw_rows:
         today_row = _parse_cash_rows(raw_rows)
         if today_row and today_row["_parsed_date"]:
-            # Replace or append today's row
-            history = [r for r in history if r["_parsed_date"] != today_row["_parsed_date"]]
-            history.append(today_row)
-            history.sort(key=lambda x: x["_parsed_date"])
+            history_by_date[today_row["_parsed_date"]] = today_row
             logger.info("fii_dii: merged NSE live row for %s", today_row["date"])
+
+    history = sorted(history_by_date.values(), key=lambda x: x["_parsed_date"])
 
     if not history:
         logger.warning("fii_dii: no data from any source")
         return _cache["data"] or []
 
-    # 3. Fetch F&O CSV for the latest 5 rows that are missing it
+    # 4. Fetch F&O CSV for the latest 5 rows that are missing it
+    fao_updated: list[dict] = []
     for row in history[-5:]:
         if row.get("fii_idx_fut_long") not in (None, 0):
-            continue  # already have real F&O data
+            continue
         csv_text = _fetch_fao_csv(row["date"])
         if csv_text:
             fao = _parse_fao_csv(csv_text)
             if fao:
                 _apply_fao(row, fao)
+                fao_updated.append(row)
                 logger.info("fii_dii: F&O applied for %s", row["date"])
+
+    # 5. Persist today's row + any F&O-enriched rows to DB
+    rows_to_save = []
+    if raw_rows and history:
+        rows_to_save.append(history[-1])  # today
+    rows_to_save.extend(fao_updated)
+    if rows_to_save:
+        _save_to_db(rows_to_save)
 
     _cache["data"] = history
     _cache["fetched_at"] = now

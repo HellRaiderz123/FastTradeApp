@@ -29,17 +29,9 @@ class DisclosedNewsItem(BaseModel):
 class NSENewsService:
     NSE_BASE_URL = "https://www.nseindia.com"
     NSE_ANNOUNCEMENTS_ENDPOINT = "/api/corporate-announcements?index=equities"
-    
-    # Official BSE Announcements Live JSON API & Notices XML
+
     BSE_API_URL = "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w"
     BSE_NOTICES_XML = "https://www.bseindia.com/data/xml/notices.xml"
-
-    HEADERS_NSE = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/",
-    }
 
     HEADERS_BSE = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -65,9 +57,6 @@ class NSENewsService:
         r"trading\s*window\s*closure",
         r"newspaper\s*publication",
     ]
-
-    def __init__(self):
-        self._seen_event_hashes: Set[str] = set()
 
     def _calculate_materiality(self, text: str) -> tuple[float, bool]:
         text_lower = text.lower()
@@ -100,6 +89,8 @@ class NSENewsService:
     async def fetch_bse_announcements(self) -> List[DisclosedNewsItem]:
         """Fetches directly from BSE's live announcements JSON feed."""
         items: List[DisclosedNewsItem] = []
+        # Local seen set per call — avoids singleton deduplication bug
+        seen: Set[str] = set()
         today_str = datetime.now().strftime("%Y%m%d")
 
         params = {
@@ -123,14 +114,13 @@ class NSENewsService:
                         symbol = row.get("SCRIP_CD", "")
                         company_name = row.get("SLONGNAME", symbol)
                         headline = row.get("NEWSSUB", "") or row.get("HEADLINE", "")
-                        desc = row.get("NEWS_DT", "")
                         pdf_file = row.get("ATTACHMENTNAME", "")
                         pdf_url = f"https://www.bseindia.com/xml-data/corpfiling/AttachLive/{pdf_file}" if pdf_file else None
 
                         event_hash = f"BSE_{symbol}_{row.get('NEWSID', headline[:20])}"
-                        if event_hash in self._seen_event_hashes:
+                        if event_hash in seen:
                             continue
-                        self._seen_event_hashes.add(event_hash)
+                        seen.add(event_hash)
 
                         materiality, is_high_impact = self._calculate_materiality(f"{headline} {company_name}")
                         pdf_summary = await self._extract_text_from_pdf(pdf_url) if is_high_impact and pdf_url else None
@@ -155,15 +145,15 @@ class NSENewsService:
         except Exception as e:
             logger.warning(f"BSE JSON API fetch failed: {e}. Trying BSE XML notices fallback.")
 
-        # Second fallback: BSE Notices RSS/XML
+        # Fallback: BSE Notices RSS/XML
         try:
             feed = feedparser.parse(self.BSE_NOTICES_XML)
             for entry in feed.entries[:20]:
                 title = entry.get("title", "")
                 link = entry.get("link", "")
-                if link in self._seen_event_hashes:
+                if link in seen:
                     continue
-                self._seen_event_hashes.add(link)
+                seen.add(link)
 
                 materiality, is_high_impact = self._calculate_materiality(title)
                 items.append(
@@ -185,55 +175,94 @@ class NSENewsService:
 
         return items
 
-    async def fetch_nse_announcements(self) -> List[DisclosedNewsItem]:
-        """Fetches NSE corporate announcements directly with Mac UA (bypasses Akamai block)."""
-        MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    def _fetch_nse_rows_sync(self) -> list:
+        """Sync helper — runs in a thread executor so it doesn't block the event loop."""
+        import json as _json
+        import urllib.parse
+        import requests as _req
+
+        _HEADERS = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+        }
         url = f"{self.NSE_BASE_URL}{self.NSE_ANNOUNCEMENTS_ENDPOINT}"
+
+        # 1. Direct fetch
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(url, headers={
-                    "User-Agent": MAC_UA,
-                    "Accept": "application/json",
-                    "Referer": "https://www.nseindia.com/",
-                })
-                if resp.status_code != 200:
-                    logger.warning("NSE announcements returned %s", resp.status_code)
-                    return []
-
-                data = resp.json()
+            r = _req.get(url, headers=_HEADERS, timeout=20)
+            if r.status_code == 200:
+                data = r.json()
                 rows = data if isinstance(data, list) else data.get("data", [])
-
-                items: List[DisclosedNewsItem] = []
-                for row in rows:
-                    symbol = row.get("symbol", "").strip()
-                    desc = row.get("desc", "")
-                    headline = desc or row.get("attchmntText", "")
-                    att_url = row.get("attchmntFile")
-
-                    event_hash = f"NSE_{symbol}_{row.get('seq_id', headline[:20])}"
-                    if not symbol or event_hash in self._seen_event_hashes:
-                        continue
-                    self._seen_event_hashes.add(event_hash)
-
-                    materiality, is_high_impact = self._calculate_materiality(f"{headline} {desc}")
-                    pdf_summary = await self._extract_text_from_pdf(att_url) if is_high_impact and att_url else None
-
-                    items.append(
-                        DisclosedNewsItem(
-                            source="NSE_OFFICIAL",
-                            symbol=symbol,
-                            company_name=row.get("sm_name", symbol),
-                            headline=headline,
-                            description=row.get("attchmntText", desc),
-                            pdf_url=att_url,
-                            pdf_summary=pdf_summary,
-                            category=row.get("smIndustry") or "Corporate Filing",
-                            materiality_score=materiality,
-                            is_high_impact=is_high_impact,
-                            published_at=row.get("sort_date", datetime.now().isoformat()),
-                        )
-                    )
-                return items
+                if rows:
+                    logger.info("nse_news: direct fetch OK (%d rows)", len(rows))
+                    return rows
+            logger.warning("nse_news: direct fetch status %s", r.status_code)
         except Exception as e:
-            logger.warning("NSE announcements fetch failed: %s", e)
+            logger.warning("nse_news: direct fetch failed: %s", e)
+
+        # 2. allorigins proxy fallback
+        try:
+            proxy = f"https://api.allorigins.win/get?url={urllib.parse.quote(url, safe='')}"
+            r = _req.get(proxy, timeout=30)
+            if r.status_code == 200:
+                contents = r.json().get("contents") or "null"
+                data = _json.loads(contents)
+                if data:
+                    rows = data if isinstance(data, list) else data.get("data", [])
+                    if rows:
+                        logger.info("nse_news: allorigins proxy OK (%d rows)", len(rows))
+                        return rows
+        except Exception as e:
+            logger.warning("nse_news: allorigins proxy failed: %s", e)
+
+        logger.warning("nse_news: no data from any source")
+        return []
+
+    async def fetch_nse_announcements(self) -> List[DisclosedNewsItem]:
+        """Fetch NSE corporate announcements — Mac UA + correct Referer + allorigins fallback."""
+        loop = asyncio.get_event_loop()
+        rows = await loop.run_in_executor(None, self._fetch_nse_rows_sync)
+
+        # Local seen set per call — avoids singleton deduplication bug
+        seen: Set[str] = set()
+
+        if not rows:
             return []
+
+        items: List[DisclosedNewsItem] = []
+        for row in rows:
+            symbol = row.get("symbol", "").strip()
+            desc = row.get("desc", "")
+            headline = desc or row.get("attchmntText", "")
+            att_url = row.get("attchmntFile")
+
+            if not symbol or not headline:
+                continue
+
+            event_hash = f"NSE_{symbol}_{row.get('seq_id', headline[:20])}"
+            if event_hash in seen:
+                continue
+            seen.add(event_hash)
+
+            materiality, is_high_impact = self._calculate_materiality(f"{headline} {desc}")
+            pdf_summary = await self._extract_text_from_pdf(att_url) if is_high_impact and att_url else None
+
+            items.append(
+                DisclosedNewsItem(
+                    source="NSE_OFFICIAL",
+                    symbol=symbol,
+                    company_name=row.get("sm_name", symbol),
+                    headline=headline,
+                    description=row.get("attchmntText", desc),
+                    pdf_url=att_url,
+                    pdf_summary=pdf_summary,
+                    category=row.get("smIndustry") or "Corporate Filing",
+                    materiality_score=materiality,
+                    is_high_impact=is_high_impact,
+                    published_at=row.get("sort_date", datetime.now().isoformat()),
+                )
+            )
+        logger.info("nse_news: returning %d announcements", len(items))
+        return items

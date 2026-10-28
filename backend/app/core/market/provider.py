@@ -241,82 +241,26 @@ def _get_bulk_quotes_zerodha(symbols: List[str]) -> Dict[str, Dict]:
     return result
 
 
-# Scrip codes known to return 400 errors from INDstocks API
-# These should come from live instruments API instead of hardcoded values
-_INDSTOCKS_BAD_SCRIPS = {
-    "NSE_543320",  # ZOMATO/ETERNAL
-    "NSE_543940",  # JIOFIN
-    "NSE_881",     # DRREDDY (old ID)
-    "NSE_910",     # EICHERMOT (old ID)
-    "NSE_542830",  # IRCTC
-    "NSE_543396",  # PAYTM
-    "NSE_541154",  # HAL
-    "NSE_533273",  # OBEROIRLTY
-}
-
 
 def _get_bulk_quotes_indstocks(symbols: List[str]) -> Dict[str, Dict]:
-    from app.core.broker.indstocks.market_data import (
-        get_scrip_code, _headers, BASE_URL,
-    )
-    import requests
+    from app.core.broker.indstocks.market_data import fetch_full_quotes_by_symbol
 
-    sym_to_scrip: Dict[str, str] = {}
-    skipped: List[str] = []
-    for sym in symbols:
-        try:
-            scrip = get_scrip_code(sym)
-            # Filter out known bad scrip codes
-            if scrip in _INDSTOCKS_BAD_SCRIPS:
-                skipped.append(sym)
-                continue
-            sym_to_scrip[sym.upper()] = scrip
-        except KeyError:
-            skipped.append(sym)
-    
-    if skipped:
-        logger.debug("INDstocks bulk quotes: skipped %d symbols (no valid scrip-code)", len(skipped))
-
-    if not sym_to_scrip:
-        return {}
-
+    quotes = fetch_full_quotes_by_symbol(symbols)
     result: Dict[str, Dict] = {}
-    scrip_list = list(sym_to_scrip.values())
-    for i in range(0, len(scrip_list), 50):
-        batch_scrips = scrip_list[i: i + 50]
-        batch_syms = [s for s, sc in sym_to_scrip.items() if sc in batch_scrips]
-        try:
-            resp = requests.get(
-                f"{BASE_URL}/market/quotes/full",
-                params={"scrip-codes": ",".join(batch_scrips)},
-                headers=_headers(),
-                timeout=10,
-            )
-            resp.raise_for_status()
-            data = (resp.json().get("data") or {})
-            for sym_upper in batch_syms:
-                scrip = sym_to_scrip[sym_upper]
-                q = data.get(scrip) or {}
-                ltp = float(q.get("live_price") or 0)
-                prev_close = float(q.get("prev_close") or q.get("close") or 0)
-                result[f"NSE:{sym_upper}"] = {
-                    "last_price": ltp,
-                    "ohlc": {"close": prev_close, "open": float(q.get("open") or 0)},
-                    "volume": int(q.get("volume") or 0),
-                    "average_price": ltp,
-                }
-        except Exception as exc:
-            logger.warning("INDstocks full quote batch failed: %s", exc)
-            # Fallback to LTP-only shape
-            from app.core.broker.indstocks.market_data import fetch_ltp_by_symbol
-            ltps = fetch_ltp_by_symbol(batch_syms)
-            for sym_upper, price in ltps.items():
-                result[f"NSE:{sym_upper}"] = {
-                    "last_price": price,
-                    "ohlc": {"close": 0},
-                    "volume": 0,
-                    "average_price": price,
-                }
+    for sym, q in quotes.items():
+        ltp = q.get("ltp", 0)
+        prev_close = q.get("prev_close", 0)
+        result[f"NSE:{sym.upper()}"] = {
+            "last_price": ltp,
+            "ohlc": {
+                "open":  q.get("open", ltp),
+                "high":  q.get("high", ltp),
+                "low":   q.get("low", ltp),
+                "close": prev_close,
+            },
+            "volume": q.get("volume", 0),
+            "average_price": ltp,
+        }
     return result
 
 

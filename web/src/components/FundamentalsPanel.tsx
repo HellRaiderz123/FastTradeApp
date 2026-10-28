@@ -15,6 +15,9 @@ interface NewsArticle {
   publishedAt: string;
   sentiment?: 'positive' | 'negative' | 'neutral';
   imageUrl?: string;
+  isNSE?: boolean;
+  pdfUrl?: string;
+  category?: string;
 }
 
 type Tab = 'fundamentals' | 'news' | 'peers';
@@ -73,6 +76,7 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [news, setNews] = useState<NewsArticle[]>([]);
+  const [nseNews, setNseNews] = useState<NewsArticle[]>([]);
   const [newsLoading, setNewsLoading] = useState(false);
   const [aboutExpanded, setAboutExpanded] = useState(false);
   const [showAllQuarters, setShowAllQuarters] = useState(false);
@@ -97,13 +101,33 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
     setNewsLoading(true);
     try {
       const token = authTokenStore.get();
-      const res = await fetch(`/api/stock-news/${sym}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      const json = await res.json();
-      setNews(json.articles || []);
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+      const [newsRes, nseRes] = await Promise.allSettled([
+        fetch(`/api/stock-news/${sym}`, { headers }).then(r => r.json()),
+        fetch(`/api/nse/announcements?symbol=${sym}`, { headers }).then(r => r.json()),
+      ]);
+
+      setNews(newsRes.status === 'fulfilled' ? (newsRes.value.articles || []) : []);
+
+      if (nseRes.status === 'fulfilled') {
+        const items: NewsArticle[] = (nseRes.value.data || []).map((a: any) => ({
+          title: a.headline,
+          description: a.category || '',
+          source: 'NSE',
+          url: a.pdf_url || '',
+          publishedAt: a.published_at || '',
+          isNSE: true,
+          pdfUrl: a.pdf_url,
+          category: a.category,
+        }));
+        setNseNews(items);
+      } else {
+        setNseNews([]);
+      }
     } catch {
       setNews([]);
+      setNseNews([]);
     } finally {
       setNewsLoading(false);
     }
@@ -494,46 +518,90 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
 
               {/* ── News Tab ── */}
               {tab === 'news' && (
-                <div className="space-y-3">
+                <div className="space-y-5">
                   {newsLoading ? (
                     <div className="flex items-center justify-center py-10">
                       <Activity size={24} className="text-emerald-400 animate-pulse" />
                     </div>
-                  ) : news.length > 0 ? (
-                    news.map((article, idx) => (
-                      <div key={idx} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 hover:bg-slate-800/70 transition">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1">
-                            <div className="flex items-start gap-2 mb-1">
-                              <h4 className="text-white text-sm font-semibold leading-snug">{article.title}</h4>
-                              {article.sentiment && (
-                                <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full border ${sentimentColor(article.sentiment)}`}>
-                                  {article.sentiment}
-                                </span>
-                              )}
-                            </div>
-                            {article.description && (
-                              <p className="text-slate-400 text-xs mb-2 line-clamp-2">{article.description}</p>
-                            )}
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-slate-500">{article.source} · {new Date(article.publishedAt).toLocaleDateString()}</span>
-                              <a href={article.url} target="_blank" rel="noopener noreferrer"
-                                className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300">
-                                Read <ExternalLink size={11} />
-                              </a>
-                            </div>
-                          </div>
-                          {article.imageUrl && (
-                            <img src={article.imageUrl} alt="" className="w-16 h-16 object-cover rounded-lg shrink-0" />
-                          )}
-                        </div>
-                      </div>
-                    ))
                   ) : (
-                    <div className="text-center py-10">
-                      <Newspaper size={40} className="mx-auto text-slate-600 mb-2" />
-                      <p className="text-slate-400 text-sm">No news found for {activeSymbol}</p>
-                    </div>
+                    <>
+                      {/* NSE Announcements */}
+                      {nseNews.length > 0 && (
+                        <div>
+                          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                            <FileText size={12} className="text-blue-400" />
+                            NSE Filings & Announcements
+                          </h3>
+                          <div className="space-y-2">
+                            {nseNews.map((a, idx) => (
+                              <div key={idx} className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 flex items-start justify-between gap-3">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white text-xs font-medium leading-snug">{a.title}</p>
+                                  {a.category && <p className="text-slate-500 text-[11px] mt-0.5">{a.category}</p>}
+                                  <p className="text-slate-600 text-[11px] mt-1">
+                                    {a.publishedAt ? new Date(a.publishedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                                  </p>
+                                </div>
+                                {a.pdfUrl && (
+                                  <a href={a.pdfUrl} target="_blank" rel="noopener noreferrer"
+                                    className="shrink-0 text-blue-400 hover:text-blue-300">
+                                    <ExternalLink size={13} />
+                                  </a>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* newsdata.io articles */}
+                      {news.length > 0 && (
+                        <div>
+                          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                            <Newspaper size={12} className="text-emerald-400" />
+                            News Articles
+                          </h3>
+                          <div className="space-y-3">
+                            {news.map((article, idx) => (
+                              <div key={idx} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4 hover:bg-slate-800/70 transition">
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="flex-1">
+                                    <div className="flex items-start gap-2 mb-1">
+                                      <h4 className="text-white text-sm font-semibold leading-snug">{article.title}</h4>
+                                      {article.sentiment && (
+                                        <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full border ${sentimentColor(article.sentiment)}`}>
+                                          {article.sentiment}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {article.description && (
+                                      <p className="text-slate-400 text-xs mb-2 line-clamp-2">{article.description}</p>
+                                    )}
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs text-slate-500">{article.source} · {new Date(article.publishedAt).toLocaleDateString()}</span>
+                                      <a href={article.url} target="_blank" rel="noopener noreferrer"
+                                        className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300">
+                                        Read <ExternalLink size={11} />
+                                      </a>
+                                    </div>
+                                  </div>
+                                  {article.imageUrl && (
+                                    <img src={article.imageUrl} alt="" className="w-16 h-16 object-cover rounded-lg shrink-0" />
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {news.length === 0 && nseNews.length === 0 && (
+                        <div className="text-center py-10">
+                          <Newspaper size={40} className="mx-auto text-slate-600 mb-2" />
+                          <p className="text-slate-400 text-sm">No news found for {activeSymbol}</p>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}

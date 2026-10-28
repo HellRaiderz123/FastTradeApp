@@ -138,7 +138,7 @@ const Settings: React.FC = () => {
       //loadZerodhaSettings();
       loadNotificationSettings();
       loadSessionStatus();
-    }, 60000);
+    }, 600000);
     return () => clearInterval(interval);
   }, []);
 

@@ -54,13 +54,16 @@ async def get_top_movers(
             except Exception as e:
                 logger.warning(f"Error fetching batch quotes: {e}")
         
-        # If no quotes received, raise error
+        # If no quotes received, return empty lists instead of 503
         if not quotes_data:
-            logger.error("Failed to fetch quotes from broker.")
-            raise HTTPException(
-                status_code=503,
-                detail="Unable to fetch market data. Please ensure your broker is connected and has valid API credentials."
-            )
+            logger.warning("top-movers: broker not connected, returning empty lists")
+            return {
+                "gainers": [],
+                "losers": [],
+                "most_active": [],
+                "timestamp": datetime.now().isoformat(),
+                "data_source": "unavailable",
+            }
         
         # Process quotes
         stocks = []
@@ -68,15 +71,19 @@ async def get_top_movers(
             quote = quotes_data.get(f"NSE:{symbol}")
             if not quote:
                 continue
-            
+
             ltp = quote.get("last_price", 0)
             prev_close = quote.get("ohlc", {}).get("close", 0)
             volume = quote.get("volume", 0)
-            
-            if ltp == 0 or prev_close == 0:
+
+            if ltp == 0:
                 continue
-            
-            change_pct = ((ltp - prev_close) / prev_close) * 100
+
+            # prev_close may be 0 for LTP-only brokers (INDstocks) — skip change calc
+            if prev_close > 0:
+                change_pct = ((ltp - prev_close) / prev_close) * 100
+            else:
+                change_pct = 0.0
             
             stocks.append({
                 "symbol": symbol,
@@ -151,28 +158,26 @@ async def get_market_breadth(
             quote = quotes_data.get(f"NSE:{symbol}")
             if not quote:
                 continue
-            
+
             ltp = quote.get("last_price", 0)
             prev_close = quote.get("ohlc", {}).get("close", 0)
-            high_52w = quote.get("upper_circuit_limit", 0)  # Approximate
-            low_52w = quote.get("lower_circuit_limit", 0)   # Approximate
-            
-            if ltp == 0 or prev_close == 0:
+
+            if ltp == 0:
                 continue
-            
-            # Advance/Decline count
-            if ltp > prev_close:
-                advancing += 1
-            elif ltp < prev_close:
-                declining += 1
+
+            if prev_close > 0:
+                if ltp > prev_close:
+                    advancing += 1
+                elif ltp < prev_close:
+                    declining += 1
+                else:
+                    unchanged += 1
             else:
+                # LTP-only broker (INDstocks) — no prev_close available
                 unchanged += 1
-            
-            # New highs/lows (approximate)
-            if high_52w > 0 and ltp >= high_52w * 0.99:
-                new_highs_52w += 1
-            if low_52w > 0 and ltp <= low_52w * 1.01:
-                new_lows_52w += 1
+
+            high_52w = quote.get("upper_circuit_limit", 0)
+            low_52w = quote.get("lower_circuit_limit", 0)
         
         # Calculate A/D ratio
         ad_ratio = advancing / declining if declining > 0 else 0
@@ -189,14 +194,23 @@ async def get_market_breadth(
         else:
             breadth_strength = "VERY_WEAK"
         
-        # If no data received, raise error
+        # If no data received, return neutral defaults instead of 503
         total_stocks = advancing + declining + unchanged
         if total_stocks == 0:
-            logger.error("No market breadth data available")
-            raise HTTPException(
-                status_code=503,
-                detail="Unable to calculate market breadth. Please ensure your broker is connected and try again."
-            )
+            logger.warning("No market breadth data — broker not connected, returning neutral defaults")
+            total = len(symbols) or 50
+            return {
+                "advancing": 0,
+                "declining": 0,
+                "unchanged": total,
+                "advance_decline_ratio": 1.0,
+                "new_highs_52w": 0,
+                "new_lows_52w": 0,
+                "breadth_strength": "NEUTRAL",
+                "total_stocks": total,
+                "timestamp": datetime.now().isoformat(),
+                "data_source": "unavailable",
+            }
         
         return {
             "advancing": advancing,
@@ -286,13 +300,14 @@ async def get_heatmap_data(
                 "avg_price": round(avg_traded_price, 2)
             })
         
-        # If no data received, raise error
+        # If no data received, return empty instead of 503
         if not heatmap_stocks:
-            logger.error("No heatmap data available")
-            raise HTTPException(
-                status_code=503,
-                detail="Unable to fetch heatmap data. Please ensure your broker is connected and try again."
-            )
+            logger.warning("heatmap: broker not connected, returning empty")
+            return {
+                "stocks": [],
+                "timestamp": datetime.now().isoformat(),
+                "data_source": "unavailable",
+            }
         
         return {
             "stocks": heatmap_stocks,

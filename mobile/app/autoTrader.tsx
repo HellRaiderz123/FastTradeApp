@@ -101,7 +101,7 @@ export default function AutoTraderScreen() {
       if (tab === 'overview') {
         autoTraderAPI.getStatus().then((r) => setStatus(r.data)).catch(() => {});
       }
-    }, 10000);
+    }, 100000);
     return () => clearInterval(interval);
   }, [load, tab]);
 

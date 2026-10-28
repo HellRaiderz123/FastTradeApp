@@ -9,6 +9,7 @@ import asyncio
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+import os
 from app.db.session import SessionLocal
 from app.services.websocket import manager
 from app.services.zerodha import KiteConnectService
@@ -23,6 +24,30 @@ _quote_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="quote-wo
 # Singleton Kite service — reused across all WS connections
 _kite_service: KiteConnectService | None = None
 
+# Circuit breaker: after a token error, stop hammering the API
+# Reset when a new token is set (zerodha_client._kite = None resets this too)
+_broker_unavailable: bool = False
+_broker_unavailable_until: float = 0.0  # epoch seconds
+_BROKER_BACKOFF_SECONDS = 300  # 5 min cooldown after auth failure
+
+def _mark_broker_unavailable():
+    import time
+    global _broker_unavailable, _broker_unavailable_until
+    _broker_unavailable = True
+    _broker_unavailable_until = time.time() + _BROKER_BACKOFF_SECONDS
+    logger.warning("WS quotes: broker marked unavailable for %ds (invalid token)", _BROKER_BACKOFF_SECONDS)
+
+
+def _is_broker_unavailable() -> bool:
+    import time
+    global _broker_unavailable, _broker_unavailable_until
+    if not _broker_unavailable:
+        return False
+    if time.time() > _broker_unavailable_until:
+        _broker_unavailable = False  # cooldown expired, try again
+        return False
+    return True
+
 
 def _get_kite_service() -> KiteConnectService:
     """Get or create the singleton KiteConnectService."""
@@ -36,63 +61,129 @@ def _fetch_bulk_quotes_sync(symbol_list: list[str]) -> dict:
     """
     Synchronous function that fetches bulk quotes.
     Runs in a thread pool so it doesn't block the async event loop.
+    Routes to INDMoney or Zerodha based on ACTIVE_BROKER env var.
+    Returns graceful empty data (live=False) on auth failure instead of spamming logs.
     """
-    kite_service = _get_kite_service()
+    # Circuit breaker: don't hammer broker after an auth failure
+    if _is_broker_unavailable():
+        return {
+            sym: {"ltp": 0.0, "change": 0.0, "change_percent": 0.0,
+                  "volume": 0, "last_traded_time": datetime.now().isoformat(),
+                  "live": False, "error": "Broker token invalid — set token in Settings"}
+            for sym in symbol_list
+        }
+
+    active_broker = os.getenv("ACTIVE_BROKER", "ZERODHA").upper()
     quotes_data = {}
-    
-    try:
-        bulk_data = kite_service.get_bulk_quotes(symbol_list)
-        
-        for symbol in symbol_list:
-            try:
-                quote_entry = None
-                if bulk_data:
-                    nse_key = f"NSE:{symbol}"
-                    if nse_key in bulk_data:
-                        quote_entry = bulk_data[nse_key]
-                    else:
-                        for key, val in bulk_data.items():
-                            if key.endswith(f":{symbol}") or key == symbol:
-                                quote_entry = val
-                                break
-                
-                if quote_entry and quote_entry.get("last_price") is not None:
-                    ltp = float(quote_entry["last_price"])
-                    ohlc = quote_entry.get("ohlc", {})
-                    prev_close = ohlc.get("close", ltp)
-                    change = ltp - prev_close
-                    change_pct = (change / prev_close * 100) if prev_close else 0
-                    
+
+    if active_broker == "INDMONEY":
+        try:
+            from app.core.broker.indstocks.market_data import fetch_full_quotes_by_symbol, get_scrip_code
+            # Pre-filter: skip symbols with no scrip-code so one bad symbol
+            # doesn't abort the whole batch
+            resolvable, unresolvable = [], []
+            for sym in symbol_list:
+                try:
+                    get_scrip_code(sym)
+                    resolvable.append(sym)
+                except KeyError:
+                    unresolvable.append(sym)
+
+            if unresolvable:
+                logger.debug("INDMoney: no scrip-code for %s, skipping", unresolvable)
+
+            quote_map = fetch_full_quotes_by_symbol(resolvable) if resolvable else {}
+            now_iso = datetime.now().isoformat()
+            for symbol in symbol_list:
+                q = quote_map.get(symbol)
+                if q is not None:
+                    ltp = q["ltp"]
+                    prev_close = q["prev_close"]
+                    change = round(ltp - prev_close, 2) if prev_close else 0.0
+                    change_pct = round((change / prev_close * 100), 2) if prev_close else 0.0
                     quotes_data[symbol] = {
                         "ltp": round(ltp, 2),
-                        "change": round(change, 2),
-                        "change_percent": round(change_pct, 2),
-                        "volume": quote_entry.get("volume", 0),
-                        "last_traded_time": datetime.now().isoformat(),
+                        "change": change,
+                        "change_percent": change_pct,
+                        "volume": q["volume"],
+                        "open": q["open"],
+                        "high": q["high"],
+                        "low": q["low"],
+                        "last_traded_time": now_iso,
                         "live": True,
                     }
                 else:
+                    err = "No scrip-code" if symbol in unresolvable else "Symbol not found or market closed"
+                    quotes_data[symbol] = {
+                        "ltp": 0.0, "change": 0.0, "change_percent": 0.0,
+                        "volume": 0, "last_traded_time": now_iso,
+                        "live": False, "error": err,
+                    }
+        except Exception as e:
+            logger.error(f"INDMoney bulk quote fetch failed: {e}")
+            now_iso = datetime.now().isoformat()
+            for symbol in symbol_list:
+                quotes_data[symbol] = {
+                    "ltp": 0.0, "change": 0.0, "change_percent": 0.0,
+                    "volume": 0, "last_traded_time": now_iso,
+                    "live": False, "error": str(e),
+                }
+    else:
+        kite_service = _get_kite_service()
+        try:
+            bulk_data = kite_service.get_bulk_quotes(symbol_list)
+            for symbol in symbol_list:
+                try:
+                    quote_entry = None
+                    if bulk_data:
+                        nse_key = f"NSE:{symbol}"
+                        if nse_key in bulk_data:
+                            quote_entry = bulk_data[nse_key]
+                        else:
+                            for key, val in bulk_data.items():
+                                if key.endswith(f":{symbol}") or key == symbol:
+                                    quote_entry = val
+                                    break
+                    if quote_entry and quote_entry.get("last_price") is not None:
+                        ltp = float(quote_entry["last_price"])
+                        ohlc = quote_entry.get("ohlc", {})
+                        prev_close = ohlc.get("close", ltp)
+                        change = ltp - prev_close
+                        change_pct = (change / prev_close * 100) if prev_close else 0
+                        quotes_data[symbol] = {
+                            "ltp": round(ltp, 2),
+                            "change": round(change, 2),
+                            "change_percent": round(change_pct, 2),
+                            "volume": quote_entry.get("volume", 0),
+                            "last_traded_time": datetime.now().isoformat(),
+                            "live": True,
+                        }
+                    else:
+                        quotes_data[symbol] = {
+                            "ltp": 0.0, "change": 0.0, "change_percent": 0.0,
+                            "volume": 0, "last_traded_time": datetime.now().isoformat(),
+                            "live": False, "error": "Market closed or data unavailable",
+                        }
+                except Exception as e:
+                    logger.warning(f"Error processing quote for {symbol}: {e}")
                     quotes_data[symbol] = {
                         "ltp": 0.0, "change": 0.0, "change_percent": 0.0,
                         "volume": 0, "last_traded_time": datetime.now().isoformat(),
-                        "live": False, "error": "Market closed or data unavailable",
+                        "live": False, "error": str(e),
                     }
-            except Exception as e:
-                logger.warning(f"Error processing quote for {symbol}: {e}")
+        except Exception as e:
+            err_str = str(e)
+            if "api_key" in err_str.lower() or "access_token" in err_str.lower() or "incorrect" in err_str.lower():
+                _mark_broker_unavailable()
+            else:
+                logger.error(f"Bulk quote fetch failed: {e}")
+            for symbol in symbol_list:
                 quotes_data[symbol] = {
                     "ltp": 0.0, "change": 0.0, "change_percent": 0.0,
                     "volume": 0, "last_traded_time": datetime.now().isoformat(),
-                    "live": False, "error": str(e),
+                    "live": False, "error": "Broker unavailable" if _broker_unavailable else "Bulk fetch failed",
                 }
-    except Exception as e:
-        logger.error(f"Bulk quote fetch failed: {e}")
-        for symbol in symbol_list:
-            quotes_data[symbol] = {
-                "ltp": 0.0, "change": 0.0, "change_percent": 0.0,
-                "volume": 0, "last_traded_time": datetime.now().isoformat(),
-                "live": False, "error": "Bulk fetch failed",
-            }
-    
+
     return quotes_data
 
 

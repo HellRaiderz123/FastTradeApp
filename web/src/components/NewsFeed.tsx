@@ -150,7 +150,7 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
   };
 
   return (
-    <div style={{ height: `${height}px` }} className="flex flex-col space-y-3 overflow-hidden">
+    <div style={{ height: `${height}px` }} className="overflow-y-auto flex flex-col space-y-3 pr-1">
       {/* Market Alerts */}
       {alerts.length > 0 && (
         <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 space-y-2">
@@ -266,7 +266,7 @@ const NewsFeed: React.FC<NewsFeedProps> = ({ height = 600 }) => {
       </div>
 
       {/* News Feed */}
-      <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+      <div className="space-y-2">
         {loading ? (
           <div className="flex items-center justify-center h-32">
             <div className="text-gray-400 text-sm">Loading news...</div>

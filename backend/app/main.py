@@ -73,6 +73,7 @@ from app.api.routes import scalp
 from app.api.routes import quant
 from app.api.routes import fundamentals as fundamentals_routes
 from app.api.routes import fii_dii as fii_dii_routes
+from app.api.routes import nse_data as nse_data_routes
 from app.core.auth import require_authenticated_user
 
 from app.core.market.scheduler import (
@@ -121,7 +122,7 @@ async def lifespan(app: FastAPI):
     
     # Initialize database tables (create if missing)
     try:
-        from app.db.session import engine
+        from app.db.session import engine, DATABASE_URL
         from app.db.models import Base
         from app.db.models_notification import Notification
         from app.db.models_alexa import AlexaMemory, AlexaInteractionLog  # noqa: F401 ensures table registration
@@ -139,11 +140,16 @@ async def lifespan(app: FastAPI):
         ensure_auto_trader_schema(engine)
         ensure_ai_decisions_schema(engine)
         # Run column migrations (ADD COLUMN IF NOT EXISTS — safe to re-run)
-        from app.db.init_db import _MIGRATIONS
+        from app.db.models_fii_dii import FiiDiiDaily  # noqa: F401 — ensures fii_dii_daily is created
+        from app.db.init_db import _MIGRATIONS_COMMON, _MIGRATIONS_POSTGRES
         from sqlalchemy import text as _text
+        _migrations = _MIGRATIONS_COMMON + (_MIGRATIONS_POSTGRES if DATABASE_URL.startswith("postgresql") else [])
         with engine.connect() as _conn:
-            for _stmt in _MIGRATIONS:
-                _conn.execute(_text(_stmt))
+            for _stmt in _migrations:
+                try:
+                    _conn.execute(_text(_stmt))
+                except Exception:
+                    pass
             _conn.commit()
         logger.info("✅ Database tables initialized")
     except Exception as e:
@@ -162,29 +168,73 @@ async def lifespan(app: FastAPI):
     schedulers_enabled = os.getenv("SCHEDULERS_ENABLED", "true").lower() == "true"
     
     if schedulers_enabled:
+        # Check if a valid broker token exists before starting broker-dependent schedulers
+        def _broker_token_available() -> bool:
+            try:
+                from app.core.broker.registry import get_active_broker as _gab
+                broker = _gab()
+                if broker == "ZERODHA":
+                    from app.db.session import SessionLocal
+                    from app.core.broker.zerodha.oauth import get_active_session
+                    import os
+                    db = SessionLocal()
+                    try:
+                        if get_active_session(db):
+                            return True
+                    finally:
+                        db.close()
+                    return bool(os.getenv("ZERODHA_ACCESS_TOKEN", ""))
+                elif broker == "INDMONEY":
+                    from app.db.session import SessionLocal
+                    from app.db.models_indmoney import INDMoneySession
+                    import os
+                    db = SessionLocal()
+                    try:
+                        s = db.query(INDMoneySession).filter(INDMoneySession.is_active == 1).first()
+                        if s:
+                            return True
+                    finally:
+                        db.close()
+                    return bool(os.getenv("INDMONEY_ACCESS_TOKEN", ""))
+            except Exception as e:
+                logger.warning("Broker token pre-check failed: %s", e)
+            return False
+
+        broker_ready = _broker_token_available()
+        if not broker_ready:
+            logger.warning("⚠️  No broker token found — broker-dependent schedulers will NOT start. Set token via login flow or Settings.")
+
         try:
             daily_backfill_delay = int(os.getenv("DAILY_BACKFILL_DELAY_MINUTES", "5"))
             vix_backfill_delay = int(os.getenv("VIX_BACKFILL_DELAY_MINUTES", "2"))
-            
+
             import threading
-            threading.Thread(target=initialize_vix_data, name="vix-init", daemon=True).start()
-            start_candle_scheduler()
-            start_daily_candles_scheduler(delay_minutes=daily_backfill_delay)
-            start_vix_scheduler(delay_minutes=vix_backfill_delay)
+
+            # Always start broker-independent schedulers
             start_auto_exit_scheduler()
             start_expiry_exit_scheduler()
-            start_intraday_candles_scheduler(delay_minutes=3)
-            start_twitter_sentiment_scheduler()
-            start_nifty100_reconciliation_scheduler()
-            start_holdings_reconciliation_scheduler()
-            start_neon_sync_scheduler()
-            start_zerodha_auto_login_scheduler()
             start_strategy_discovery_scheduler()
             start_strategy_decay_scheduler()
             start_watchlist_analysis_scheduler()
             start_scalp_trading_scheduler()
             start_holdings_auto_exit_scheduler()
-            logger.info("✅ Schedulers started")
+            logger.info("✅ Broker-independent schedulers started")
+
+            # Only start broker-dependent schedulers if a token exists
+            if broker_ready:
+                threading.Thread(target=initialize_vix_data, name="vix-init", daemon=True).start()
+                start_candle_scheduler()
+                start_daily_candles_scheduler(delay_minutes=daily_backfill_delay)
+                start_vix_scheduler(delay_minutes=vix_backfill_delay)
+                start_intraday_candles_scheduler(delay_minutes=3)
+                start_twitter_sentiment_scheduler()
+                start_nifty100_reconciliation_scheduler()
+                start_holdings_reconciliation_scheduler()
+                start_neon_sync_scheduler()
+                start_zerodha_auto_login_scheduler()
+                logger.info("✅ Broker-dependent schedulers started")
+            else:
+                logger.warning("⏭️  Broker-dependent schedulers SKIPPED (no valid token)")
         except Exception as e:
             logger.warning(f"⚠️ Schedulers failed to start: {e}")
 
@@ -451,5 +501,6 @@ app.include_router(scalp.router, dependencies=[Depends(require_authenticated_use
 app.include_router(quant.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(fundamentals_routes.router, dependencies=[Depends(require_authenticated_user)])
 app.include_router(fii_dii_routes.router, dependencies=[Depends(require_authenticated_user)])
+app.include_router(nse_data_routes.router, dependencies=[Depends(require_authenticated_user)])
 
 logger.info(" All routers registered (including Phase 5 features + Quant APIs)")

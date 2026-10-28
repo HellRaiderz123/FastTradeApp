@@ -568,6 +568,10 @@ async def get_bulk_quotes(symbols: str):
         
         # Fallback prices for demo (when Zerodha API not available)
         fallback_prices = {
+            "NIFTY": 24500.0,
+            "BANKNIFTY": 52000.0,
+            "SENSEX": 80500.0,
+            "FINNIFTY": 23000.0,
             "RELIANCE": 2875.40,
             "TCS": 3920.10,
             "HDFCBANK": 1580.20,

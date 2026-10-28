@@ -262,59 +262,145 @@ class EconomicEventsService:
         deduped.sort(key=lambda item: (item.get('date', ''), item.get('time', ''), item.get('title', '')))
         return deduped
 
-    def fetch_earnings_calendar(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
-        """Fetch live earnings-related events from official feeds where available, else current RSS news."""
-        events = self._fetch_official_feed_events(
-            self.CORPORATE_FEEDS["nse_financial_results"],
-            event_type='earnings',
-            days_ahead=days_ahead,
-            default_impact='high',
+    def _fetch_nse_live_corporate_actions(self, days_ahead: int) -> List[Dict[str, Any]]:
+        """Fetch dividends/bonus/splits from live NSE API (replaces broken XML archive)."""
+        import json as _json, urllib.parse
+        _MAC_UA = (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
+        events: List[Dict[str, Any]] = []
+        try:
+            r = self.session.get(
+                "https://www.nseindia.com/api/corporates-corporateActions",
+                headers={
+                    "User-Agent": _MAC_UA,
+                    "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-corporate-actions",
+                    "Accept": "application/json, */*",
+                },
+                params={"index": "equities"},
+                timeout=20,
+            )
+            rows = r.json() if r.status_code == 200 else []
+            if isinstance(rows, dict):
+                rows = rows.get("data", [])
+            for row in rows[:60]:
+                ex_date_str = row.get("exDate") or row.get("exDt") or ""
+                purpose = row.get("purpose") or row.get("subject") or "Corporate Action"
+                symbol = row.get("symbol", "")
+                if not symbol:
+                    continue
+                try:
+                    when = datetime.strptime(ex_date_str[:10], "%d-%b-%Y") if ex_date_str else datetime.now()
+                except Exception:
+                    when = datetime.now()
+                impact = "high" if any(w in purpose.lower() for w in ["dividend", "bonus", "split", "buyback"]) else "medium"
+                events.append(self._build_event(
+                    event_type="dividend" if "dividend" in purpose.lower() else "corporate_action",
+                    title=f"{symbol}: {purpose}",
+                    description=f"Ex-date: {ex_date_str} | Record date: {row.get('recordDate', '')}",
+                    source="NSE",
+                    when=when,
+                    impact=impact,
+                    symbol=symbol,
+                ))
+        except Exception as exc:
+            logger.info("NSE live corporate actions failed, will use RSS fallback: %s", exc)
+        return events
+
+    def _fetch_nse_live_board_meetings(self, days_ahead: int) -> List[Dict[str, Any]]:
+        """Fetch board meetings from live NSE API (replaces broken XML archive)."""
+        _MAC_UA = (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+        events: List[Dict[str, Any]] = []
+        try:
+            r = self.session.get(
+                "https://www.nseindia.com/api/corporate-board-meetings",
+                headers={
+                    "User-Agent": _MAC_UA,
+                    "Referer": "https://www.nseindia.com/companies-listing/corporate-filings-board-meetings",
+                    "Accept": "application/json, */*",
+                },
+                params={"index": "equities"},
+                timeout=20,
+            )
+            rows = r.json() if r.status_code == 200 else []
+            if isinstance(rows, dict):
+                rows = rows.get("data", [])
+            for row in rows[:40]:
+                symbol = row.get("symbol", "")
+                purpose = row.get("purpose") or "Board Meeting"
+                date_str = row.get("meetingDate") or row.get("bm_date") or ""
+                if not symbol:
+                    continue
+                try:
+                    when = datetime.strptime(date_str[:10], "%d-%b-%Y") if date_str else datetime.now()
+                except Exception:
+                    when = datetime.now()
+                impact = "high" if any(w in purpose.lower() for w in ["results", "dividend", "buyback"]) else "medium"
+                events.append(self._build_event(
+                    event_type="earnings" if "result" in purpose.lower() else "board_meeting",
+                    title=f"{symbol}: {purpose}",
+                    description=purpose,
+                    source="NSE",
+                    when=when,
+                    impact=impact,
+                    symbol=symbol,
+                ))
+        except Exception as exc:
+            logger.info("NSE live board meetings failed, will use RSS fallback: %s", exc)
+        return events
+
+    def fetch_earnings_calendar(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
+        """Fetch earnings from NSE live board meetings API first, then RSS fallback."""
+        events = self._fetch_nse_live_board_meetings(days_ahead)
+        events = [e for e in events if e["type"] == "earnings"]
+        if not events:
+            events = self._fetch_official_feed_events(
+                self.CORPORATE_FEEDS["nse_financial_results"],
+                event_type='earnings', days_ahead=days_ahead, default_impact='high',
+            )
         if not events:
             events = self._fetch_live_news_events(
                 event_type='earnings',
                 keywords=['earnings', 'results', 'quarterly', 'q1', 'q2', 'q3', 'q4', 'eps'],
-                preferred_categories=['earnings'],
-                days_ahead=days_ahead,
-                default_impact='high',
+                preferred_categories=['earnings'], days_ahead=days_ahead, default_impact='high',
             )
         return self._dedupe_and_filter(events, days_ahead=days_ahead, keep_recent_days=days_back)
 
     def fetch_dividend_calendar(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
-        """Fetch live dividend and corporate payout events."""
-        events = self._fetch_official_feed_events(
-            self.CORPORATE_FEEDS["nse_dividends"],
-            event_type='dividend',
-            days_ahead=days_ahead,
-            default_impact='medium',
-            limit=12,
-        )
+        """Fetch dividends from NSE live corporate actions API first, then RSS fallback."""
+        events = self._fetch_nse_live_corporate_actions(days_ahead)
+        events = [e for e in events if e["type"] == "dividend"]
+        if not events:
+            events = self._fetch_official_feed_events(
+                self.CORPORATE_FEEDS["nse_dividends"],
+                event_type='dividend', days_ahead=days_ahead, default_impact='medium', limit=12,
+            )
         if not events:
             events = self._fetch_live_news_events(
                 event_type='dividend',
                 keywords=['dividend', 'buyback', 'bonus', 'stock split', 'rights issue'],
-                preferred_categories=['corporate'],
-                days_ahead=days_ahead,
-                default_impact='medium',
+                preferred_categories=['corporate'], days_ahead=days_ahead, default_impact='medium',
             )
         return self._dedupe_and_filter(events, days_ahead=days_ahead, keep_recent_days=days_back)
 
     def fetch_board_meetings(self, days_ahead: int = 30, days_back: int = 14) -> List[Dict[str, Any]]:
-        """Fetch live board meeting and AGM-related announcements."""
-        events = self._fetch_official_feed_events(
-            self.CORPORATE_FEEDS["nse_board_meetings"],
-            event_type='board_meeting',
-            days_ahead=days_ahead,
-            default_impact='medium',
-            limit=12,
-        )
+        """Fetch board meetings from NSE live API first, then RSS fallback."""
+        events = self._fetch_nse_live_board_meetings(days_ahead)
+        events = [e for e in events if e["type"] == "board_meeting"]
+        if not events:
+            events = self._fetch_official_feed_events(
+                self.CORPORATE_FEEDS["nse_board_meetings"],
+                event_type='board_meeting', days_ahead=days_ahead, default_impact='medium', limit=12,
+            )
         if not events:
             events = self._fetch_live_news_events(
                 event_type='board_meeting',
                 keywords=['board meeting', 'agm', 'egm', 'annual general meeting'],
-                preferred_categories=['corporate'],
-                days_ahead=days_ahead,
-                default_impact='medium',
+                preferred_categories=['corporate'], days_ahead=days_ahead, default_impact='medium',
             )
         return self._dedupe_and_filter(events, days_ahead=days_ahead, keep_recent_days=days_back)
 

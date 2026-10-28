@@ -310,11 +310,11 @@ class KiteConnectService:
             def fetch_quotes():
                 """Inner function to fetch quotes - will be retried on transient errors"""
                 return self.kite.quote(instruments)
-            
-            # Retry with exponential backoff on transient errors (503, timeout, etc.)
+
+            # Only retry on transient errors — auth failures should NOT be retried
             data = retry_with_backoff(
                 func=fetch_quotes,
-                max_retries=3,
+                max_retries=2,
                 base_delay=1.0,
                 max_delay=5.0,
                 backoff_factor=2.0

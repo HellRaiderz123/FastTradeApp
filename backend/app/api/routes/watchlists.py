@@ -223,75 +223,45 @@ async def get_watchlist_quotes(watchlist_id: int, db: Session = Depends(get_db))
     if not symbols:
         return {"watchlist": watchlist.name, "quotes": []}
     
-    # Get quotes from market API
-    from app.services.zerodha import KiteConnectService
-    kite = KiteConnectService()
-    
+    # Fetch quotes via the active broker (INDMoney or Zerodha)
+    from app.core.market.provider import get_bulk_quotes as _get_bulk_quotes
+    bulk = {}
+    try:
+        bulk = _get_bulk_quotes(symbols) or {}
+    except Exception as e:
+        import logging as _log
+        _log.getLogger(__name__).warning("watchlist quotes: broker unavailable: %s", e)
+
     quotes = []
     for symbol in symbols:
-        try:
-            full_quote = kite.get_full_quote(symbol) or {}
-            ltp_quote = kite.get_quote(symbol) or {}
-            quote = full_quote or ltp_quote
-
-            if not quote:
-                quotes.append({
-                    "symbol": symbol,
-                    "ltp": None,
-                    "change": None,
-                    "change_pct": None,
-                    "change_percent": None,
-                    "volume": None,
-                    "high": None,
-                    "low": None,
-                    "open": None,
-                    "close": None,
-                    "error": "No quote data available",
-                })
-                continue
-
-            ltp = quote.get("last_price")
-            ohlc = quote.get("ohlc", {}) or {}
-            prev_close = ohlc.get("close") or quote.get("close")
-
-            change = quote.get("change")
-            if change is None:
-                change = quote.get("net_change")
-            if change is None and ltp is not None and prev_close not in (None, 0):
-                change = float(ltp) - float(prev_close)
-
-            change_pct = quote.get("change_percent")
-            if change_pct is None:
-                change_pct = quote.get("change_pct")
-            if change_pct is None and change is not None and prev_close not in (None, 0):
-                change_pct = (float(change) / float(prev_close)) * 100
-
+        q = bulk.get(f"NSE:{symbol.upper()}") or bulk.get(symbol.upper())
+        if not q:
             quotes.append({
-                "symbol": symbol,
-                "ltp": round(float(ltp), 2) if ltp is not None else None,
-                "change": round(float(change), 2) if change is not None else None,
-                "change_pct": round(float(change_pct), 2) if change_pct is not None else None,
-                "change_percent": round(float(change_pct), 2) if change_pct is not None else None,
-                "volume": quote.get("volume"),
-                "high": ohlc.get("high"),
-                "low": ohlc.get("low"),
-                "open": ohlc.get("open"),
-                "close": prev_close,
+                "symbol": symbol, "ltp": None, "change": None,
+                "change_pct": None, "change_percent": None,
+                "volume": None, "high": None, "low": None,
+                "open": None, "close": None, "error": "No quote data",
             })
-        except Exception as e:
-            quotes.append({
-                "symbol": symbol,
-                "ltp": None,
-                "change": None,
-                "change_pct": None,
-                "change_percent": None,
-                "volume": None,
-                "high": None,
-                "low": None,
-                "open": None,
-                "close": None,
-                "error": str(e)
-            })
+            continue
+
+        ltp = q.get("last_price") or 0.0
+        ohlc = q.get("ohlc") or {}
+        prev_close = ohlc.get("close") or 0.0
+        change = round(ltp - prev_close, 2) if prev_close else None
+        change_pct = round((change / prev_close) * 100, 2) if change is not None and prev_close else None
+
+        quotes.append({
+            "symbol": symbol,
+            "ltp": round(ltp, 2),
+            "change": change,
+            "change_pct": change_pct,
+            "change_percent": change_pct,
+            "volume": q.get("volume"),
+            "high": ohlc.get("high"),
+            "low": ohlc.get("low"),
+            "open": ohlc.get("open"),
+            "close": prev_close or None,
+        })
     
     return {
         "watchlist": {

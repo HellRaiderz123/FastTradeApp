@@ -226,6 +226,30 @@ html.light-mode * {
 }
 
 /* ============================================================
+   TERMINAL PAGE — NEWS PANEL
+   ============================================================ */
+
+.news-panel {
+  min-height: 0;
+}
+
+.news-tab-bar {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.news-item-divider {
+  border-bottom: 1px solid rgba(30, 41, 59, 0.8);
+}
+
+html.light-mode .news-tab-bar {
+  background: rgba(226, 232, 240, 0.7) !important;
+}
+
+html.light-mode .news-item-divider {
+  border-bottom-color: rgba(148, 163, 184, 0.35) !important;
+}
+
+/* ============================================================
    SCREENER PAGE LIGHT MODE FIXES
    ============================================================ */
 

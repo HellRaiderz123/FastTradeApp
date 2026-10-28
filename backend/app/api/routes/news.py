@@ -327,10 +327,13 @@ nse_service = NSENewsService()
 
 @router.get("/nse/live")
 async def get_live_nse_news(
-    high_impact_only: bool = Query(default=True, description="Filter only high impact events")
+    high_impact_only: bool = Query(default=False, description="Filter only high impact events")
 ):
-    """Fetches real-time NSE filings and corporate announcements."""
-    items = await nse_service.fetch_nse_announcements()
+    """Fetches real-time NSE + BSE filings and corporate announcements."""
+    nse_items = await nse_service.fetch_nse_announcements()
+    bse_items = await nse_service.fetch_bse_announcements() if not nse_items else []
+    items = nse_items or bse_items
     if high_impact_only:
         items = [item for item in items if item.is_high_impact]
-    return {"status": "success", "count": len(items), "data": items}
+    source = "NSE" if nse_items else ("BSE" if bse_items else "none")
+    return {"status": "success", "count": len(items), "source": source, "data": items}
