@@ -387,6 +387,7 @@ default_cors_origins = {
     "http://192.168.1.104:3000",
     "http://192.168.1.104:5173",
     "http://192.168.1.104:8081",
+    "https://fast-trade-app-59we.vercel.app",
 }
 extra_cors_origins = {
     origin.strip().rstrip("/")
@@ -400,7 +401,7 @@ cors_allowed_origins = sorted(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_allowed_origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$|https://fast-trade[a-z0-9-]*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
