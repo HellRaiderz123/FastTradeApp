@@ -1,0 +1,13 @@
+# ===============================
+# Heavy ML dependencies
+# Install on a dedicated ML worker / EC2 / Railway service
+# NOT suitable for Lambda (exceeds 500 MB limit)
+# ===============================
+xgboost>=2.0.0
+lightgbm>=4.0.0
+shap>=0.44.0
+optuna>=3.5.0
+tensorflow>=2.15.0
+
+# Browser automation (requires playwright install --with-deps)
+playwright>=1.40.0

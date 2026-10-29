@@ -18,20 +18,12 @@ scipy==1.12.0
 ta==0.11.0
 
 # ===============================
-# ML (used by recommend_smart_option)
+# ML - lightweight only
+# xgboost, lightgbm, shap, optuna, tensorflow removed (~2.5 GB)
+# ML routes gracefully return "not_trained" without these
 # ===============================
 scikit-learn==1.4.1.post1
 joblib==1.3.2
-xgboost>=2.0.0
-lightgbm>=4.0.0
-shap>=0.44.0
-optuna>=3.5.0
-tensorflow>=2.15.0
-
-# ===============================
-# Plotting (optional for now, keep for parity)
-# ===============================
-plotly==5.19.0
 
 # ===============================
 # HTTP / Broker / Utils
@@ -44,7 +36,7 @@ feedparser==6.0.11
 beautifulsoup4==4.12.3
 
 # ===============================
-# Database (later, safe to add now)
+# Database
 # ===============================
 sqlalchemy==2.0.29
 psycopg2-binary==2.9.9
@@ -55,18 +47,15 @@ psycopg2-binary==2.9.9
 python-dotenv==1.0.1
 
 # ===============================
-# Phase 5: Monitoring & Notifications
+# Monitoring & Notifications
 # ===============================
 psutil==5.9.8
 websockets==12.0
-
-
 APScheduler==3.10.4
-playwright>=1.40.0
+
+# playwright removed (~400 MB) - browser automation not needed in production
 pyotp>=2.9.0
-
-pymupdf>=1.23.0    # For in-memory PDF extraction (fitz)
-
+pymupdf>=1.23.0
 tweepy>=4.17.0
-
 textblob>=0.20.1
+plotly==5.19.0
