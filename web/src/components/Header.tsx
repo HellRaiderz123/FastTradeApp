@@ -55,8 +55,9 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
 
   useEffect(() => {
     loadHeaderSettings();
-    const interval = setInterval(loadHeaderSettings, 5000);
-    return () => clearInterval(interval);
+    const handler = () => loadHeaderSettings();
+    window.addEventListener('broker-settings-changed', handler);
+    return () => window.removeEventListener('broker-settings-changed', handler);
   }, []);
 
   const loadHeaderSettings = async () => {
@@ -79,6 +80,7 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
     try {
       await settingsAPI.setActiveBroker(broker);
       setActiveBroker(broker);
+      window.dispatchEvent(new Event('broker-settings-changed'));
     } catch {
       // silent
     }

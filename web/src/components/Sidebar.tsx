@@ -33,8 +33,9 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
 
   useEffect(() => {
     loadExecutionMode();
-    const interval = setInterval(loadExecutionMode, 5000);
-    return () => clearInterval(interval);
+    const handler = () => loadExecutionMode();
+    window.addEventListener('broker-settings-changed', handler);
+    return () => window.removeEventListener('broker-settings-changed', handler);
   }, []);
 
   const loadExecutionMode = async () => {
