@@ -58,7 +58,8 @@ function Login() {
       authTokenStore.set(access_token);
 
       try {
-        const r = await fetch('/api/broker/token-status', {
+        const _base = (import.meta as any).env?.VITE_API_BASE || '';
+        const r = await fetch(`${_base}/broker/token-status`, {
           headers: { Authorization: `Bearer ${access_token}` },
         });
         if (r.ok) {
@@ -94,7 +95,8 @@ function Login() {
     setTokenLoading(true);
     try {
       const token = authTokenStore.get();
-      const r = await fetch('/api/broker/set-token', {
+      const _base = (import.meta as any).env?.VITE_API_BASE || '';
+      const r = await fetch(`${_base}/broker/set-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ access_token: accessToken.trim() }),

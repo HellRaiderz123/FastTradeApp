@@ -37,7 +37,8 @@ interface HistoryRecord {
 type Tab = 'cash' | 'fno' | 'chart' | 'history' | 'participant' | 'short' | '52week' | 'turnover';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-const api = axios.create({ baseURL: '/api/fii-dii' });
+const _apiBase = (import.meta as any).env?.VITE_API_BASE || '';
+const api = axios.create({ baseURL: `${_apiBase}/fii-dii` });
 api.interceptors.request.use(c => {
   const t = authTokenStore.get(); if (t) c.headers['Authorization'] = `Bearer ${t}`; return c;
 });
@@ -112,7 +113,7 @@ const FiiDii: React.FC = () => {
   const nseApi = useCallback(async (endpoint: string) => {
     const t = authTokenStore.get();
     const headers: HeadersInit = t ? { Authorization: `Bearer ${t}` } : {};
-    const r = await fetch(`/api/nse/${endpoint}`, { headers });
+    const r = await fetch(`${_apiBase}/nse/${endpoint}`, { headers });
     return r.json();
   }, []);
 

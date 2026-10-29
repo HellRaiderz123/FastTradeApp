@@ -62,6 +62,8 @@ const QUICK_LINKS = [
   { label: 'Quant Bot',   path: '/quant-bot',         icon: Activity,    color: 'text-violet-400' },
 ];
 
+const _API_BASE = (import.meta as any).env?.VITE_API_BASE || '';
+
 const Terminal: React.FC = () => {
   const navigate = useNavigate();
   const [selectedSymbol, setSelectedSymbol] = useState('RELIANCE');
@@ -263,7 +265,7 @@ const Terminal: React.FC = () => {
   // Positions summary
   useEffect(() => {
     const token = authTokenStore.get();
-    fetch('/api/paper/positions', token ? { headers: { Authorization: `Bearer ${token}` } } : {})
+    fetch(`${_API_BASE}/paper/positions`, token ? { headers: { Authorization: `Bearer ${token}` } } : {})
       .then(r => r.ok ? r.json() : null)
       .then((d: any) => {
         if (d) setPositions({ open: d.open_count ?? 0, pnl: d.total_pnl ?? 0 });
@@ -274,7 +276,7 @@ const Terminal: React.FC = () => {
   // FII/DII
   useEffect(() => {
     const token = authTokenStore.get();
-    fetch('/api/fii-dii/latest', token ? { headers: { Authorization: `Bearer ${token}` } } : {})
+    fetch(`${_API_BASE}/fii-dii/latest`, token ? { headers: { Authorization: `Bearer ${token}` } } : {})
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d && (d.fii_net != null || d.dii_net != null)) setFiiDii(d); })
       .catch(() => {});
@@ -287,7 +289,7 @@ const Terminal: React.FC = () => {
       try {
         const token = authTokenStore.get();
         const headers = token ? { Authorization: `Bearer ${token}` } : {} as any;
-        const r = await fetch('/api/news/nse/live?high_impact_only=false', { headers });
+        const r = await fetch(`${_API_BASE}/news/nse/live?high_impact_only=false`, { headers });
         if (r.ok) { const d = await r.json(); setNseFilings(d.data || []); }
       } catch {}
       finally { setNseLoading(false); }
@@ -303,19 +305,19 @@ const Terminal: React.FC = () => {
 
     const loadVix = async () => {
       try {
-        const r = await fetch('/api/nse/vix', { headers: h });
+        const r = await fetch(`${_API_BASE}/nse/vix`, { headers: h });
         if (r.ok) { const d = await r.json(); setVix({ current: d.current, regime: d.regime, implications: d.implications }); }
       } catch {}
     };
 
     const loadAtm = async () => {
       try {
-        const expR = await fetch('/api/market/expiries/NIFTY', { headers: h });
+        const expR = await fetch(`${_API_BASE}/market/expiries/NIFTY`, { headers: h });
         if (!expR.ok) return;
         const expD = await expR.json();
         const expiry = expD.expiries?.[0];
         if (!expiry) return;
-        const chainR = await fetch(`/api/options/real/chain/NIFTY?expiry=${expiry}`, { headers: h });
+        const chainR = await fetch(`${_API_BASE}/options/real/chain/NIFTY?expiry=${expiry}`, { headers: h });
         if (!chainR.ok) return;
         const chainD = await chainR.json();
         const atmRow = (chainD.strikes || []).find((s: any) => s.strike === chainD.atm_strike);
@@ -326,28 +328,28 @@ const Terminal: React.FC = () => {
 
     const loadEarnings = async () => {
       try {
-        const r = await fetch('/api/calendar/earnings?days_ahead=7&days_back=0', { headers: h });
+        const r = await fetch(`${_API_BASE}/calendar/earnings?days_ahead=7&days_back=0`, { headers: h });
         if (r.ok) { const d = await r.json(); setEarningsWeek((d.earnings || []).filter((e: any) => e.impact === 'high').slice(0, 4)); }
       } catch {}
     };
 
     const loadDeals = async () => {
       try {
-        const r = await fetch('/api/nse/block-deals', { headers: h });
+        const r = await fetch(`${_API_BASE}/nse/block-deals`, { headers: h });
         if (r.ok) { const d = await r.json(); setBlockDeals({ block_deals: d.block_deals || [], bulk_deals: d.bulk_deals || [] }); }
       } catch {}
     };
 
     const loadFoBan = async () => {
       try {
-        const r = await fetch('/api/nse/fo-ban', { headers: h });
+        const r = await fetch(`${_API_BASE}/nse/fo-ban`, { headers: h });
         if (r.ok) { const d = await r.json(); setFoBan(d.banned_symbols || []); }
       } catch {}
     };
 
     const loadInsider = async () => {
       try {
-        const r = await fetch('/api/nse/insider-trading', { headers: h });
+        const r = await fetch(`${_API_BASE}/nse/insider-trading`, { headers: h });
         if (r.ok) { const d = await r.json(); setInsiderTrades(d.data || []); }
       } catch {}
     };
@@ -377,7 +379,7 @@ const Terminal: React.FC = () => {
   useEffect(() => {
     const token = authTokenStore.get();
     const h = token ? { Authorization: `Bearer ${token}` } : {} as any;
-    fetch('/api/calendar/earnings?days_ahead=7&days_back=0', { headers: h })
+    fetch(`${_API_BASE}/calendar/earnings?days_ahead=7&days_back=0`, { headers: h })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setEarningsWeek((d.earnings || []).filter((e: any) => e.impact === 'high').slice(0, 4)); })
       .catch(() => {});
@@ -389,7 +391,7 @@ const Terminal: React.FC = () => {
     const load = async () => {
       try {
         const token = authTokenStore.get();
-        const r = await fetch(`/api/market-dashboard/stock-technicals/${selectedSymbol}`,
+        const r = await fetch(`${_API_BASE}/market-dashboard/stock-technicals/${selectedSymbol}`,
           token ? { headers: { Authorization: `Bearer ${token}` } } : {});
         if (r.ok) {
           const d = await r.json();

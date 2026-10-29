@@ -58,7 +58,8 @@ const fetchInitialQuotes = useCallback(async (symbolsList: string[]) => {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const resp = await axios.get('/api/market/quotes/bulk', {
+    const apiBase = (import.meta as any).env?.VITE_API_BASE || '';
+    const resp = await axios.get(`${apiBase}/market/quotes/bulk`, {
       params: { symbols: symbolsList.join(',') },
       timeout: 8000,
       headers,
