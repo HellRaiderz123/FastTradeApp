@@ -138,6 +138,25 @@ def _get_llm_config() -> tuple[str, str, str, str]:
     return _ENV_LLM_PROVIDER, _ENV_LLM_API_KEY, _ENV_LLM_BASE_URL, _ENV_LLM_MODEL
 
 
+# Backward-compatible module-level accessors (used by ai_analysis, simple_ai, etc.)
+def _llm_provider() -> str: return _get_llm_config()[0]
+def _llm_model() -> str:    return _get_llm_config()[3]
+
+# Expose as importable names for legacy callers
+class _LazyStr(str):
+    """A str subclass that re-evaluates on each access via a callable."""
+    __slots__ = ("_fn",)
+    def __new__(cls, fn):
+        obj = str.__new__(cls, fn())
+        object.__setattr__(obj, "_fn", fn)
+        return obj
+    def __str__(self):  return self._fn()
+    def __repr__(self): return repr(self._fn())
+
+LLM_PROVIDER = _LazyStr(_llm_provider)  # type: ignore[assignment]
+LLM_MODEL    = _LazyStr(_llm_model)     # type: ignore[assignment]
+
+
 
 LLM_MIN_INTERVAL_SEC = max(float(os.getenv("LLM_MIN_INTERVAL_SEC", "1.5") or 1.5), 0.0)
 LLM_MAX_RETRIES = max(int(os.getenv("LLM_MAX_RETRIES", "3") or 3), 0)

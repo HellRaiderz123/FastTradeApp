@@ -32,7 +32,7 @@ def get_db():
 @router.get("/sentiment/{symbol}")
 async def get_symbol_sentiment(
     symbol: str,
-    timeframe: str = Query(default="1h", regex="^(15m|1h|4h|1d)$"),
+    timeframe: str = Query(default="1h", pattern="^(15m|1h|4h|1d)$"),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """
@@ -250,7 +250,7 @@ async def get_recent_tweets(
 
 @router.get("/trending")
 async def get_trending_symbols(
-    timeframe: str = Query(default="1h", regex="^(15m|1h|4h|1d)$"),
+    timeframe: str = Query(default="1h", pattern="^(15m|1h|4h|1d)$"),
     limit: int = Query(default=10, ge=1, le=50),
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:

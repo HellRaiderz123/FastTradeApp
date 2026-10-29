@@ -15,6 +15,9 @@ if _is_pytest or _is_testing_env:
     DATABASE_URL = "sqlite:///:memory:"
 else:
     DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_default_db_path.as_posix()}")
+    # SQLAlchemy 2.1 routes plain postgresql:// to psycopg3 — force psycopg2 driver
+    if DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 _is_postgres = DATABASE_URL.startswith("postgresql")
 _is_sqlite = DATABASE_URL.startswith("sqlite")

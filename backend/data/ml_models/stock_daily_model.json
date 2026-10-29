@@ -1,0 +1,136 @@
+{
+  "model_type": "HistGradientBoosting",
+  "timeframe": "daily",
+  "horizon": 20,
+  "return_threshold": 0.03,
+  "decision_threshold": 0.49,
+  "train_rows": 193367,
+  "val_rows": 27680,
+  "test_rows": 55362,
+  "total_samples": 276409,
+  "train_accuracy": 0.5727,
+  "accuracy": 0.5352,
+  "precision": 0.3454,
+  "recall": 0.4915,
+  "f1_score": 0.4057,
+  "roc_auc": 0.5352,
+  "confusion_matrix": [
+    [
+      20846,
+      16646
+    ],
+    [
+      9087,
+      8783
+    ]
+  ],
+  "classification_report": {
+    "0": {
+      "precision": 0.6964220091537767,
+      "recall": 0.5560119492158327,
+      "f1-score": 0.61834631071561,
+      "support": 37492.0
+    },
+    "1": {
+      "precision": 0.34539305517322744,
+      "recall": 0.491494124230554,
+      "f1-score": 0.40569066260190767,
+      "support": 17870.0
+    },
+    "accuracy": 0.5351865900798382,
+    "macro avg": {
+      "precision": 0.520907532163502,
+      "recall": 0.5237530367231934,
+      "f1-score": 0.5120184866587588,
+      "support": 55362.0
+    },
+    "weighted avg": {
+      "precision": 0.5831152751551419,
+      "recall": 0.5351865900798382,
+      "f1-score": 0.5497043463394701,
+      "support": 55362.0
+    }
+  },
+  "feature_importance": {},
+  "feature_columns": [
+    "ret_1",
+    "ret_short",
+    "ret_long",
+    "ret_1_lag1",
+    "ret_1_lag2",
+    "ret_1_lag3",
+    "volatility",
+    "atr_norm",
+    "volatility_change",
+    "rsi",
+    "rsi_normalized",
+    "macd_hist",
+    "macd_hist_change",
+    "adx",
+    "ema_fast_slope",
+    "ema_slow_slope",
+    "price_vs_ema_fast",
+    "price_vs_ema_slow",
+    "ema_cross",
+    "bb_width",
+    "bb_position",
+    "volume_ratio",
+    "obv_slope",
+    "volume_price_corr",
+    "body_ratio",
+    "upper_shadow",
+    "lower_shadow",
+    "rsi_slope",
+    "ret_5_vs_vol",
+    "close_vs_high20",
+    "close_vs_low20",
+    "price_rsi_divergence",
+    "momentum_acceleration",
+    "high_vol_regime",
+    "low_vol_regime",
+    "trend_up",
+    "trend_strength",
+    "mean_reversion_signal",
+    "price_momentum_ratio",
+    "trend_consistency",
+    "breakout_strength"
+  ],
+  "symbols_count": 200,
+  "class_distribution": {
+    "0": 167603,
+    "1": 108806
+  },
+  "training_date": "2026-10-25T13:01:35.461137",
+  "overfitting": {
+    "verdict": "NOT_USABLE",
+    "verdict_message": "1 critical issue(s) found. Do NOT use this model for live or paper trading.",
+    "usability_score": 67,
+    "critical_count": 1,
+    "warning_count": 1,
+    "flags": [
+      {
+        "level": "warning",
+        "code": "WEAK_ROC_AUC",
+        "message": "ROC-AUC 0.535 is weak. Predictions are only slightly better than random.",
+        "value": 0.5352,
+        "threshold": 0.55
+      },
+      {
+        "level": "critical",
+        "code": "VERY_LOW_PRECISION",
+        "message": "Precision 34.5% \u2014 more than 60% of BUY signals are wrong. This will generate losing trades.",
+        "value": 0.3454,
+        "threshold": 0.4
+      }
+    ],
+    "metrics_summary": {
+      "train_accuracy": 0.5727,
+      "test_accuracy": 0.5352,
+      "train_test_gap": 0.0375,
+      "roc_auc": 0.5352,
+      "precision": 0.3454,
+      "recall": 0.4915,
+      "f1": 0.4057
+    }
+  }
+}

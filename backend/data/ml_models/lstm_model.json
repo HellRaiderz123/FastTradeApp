@@ -1,0 +1,70 @@
+{
+  "model_type": "LSTM",
+  "seq_length": 20,
+  "n_features": 36,
+  "decision_threshold": 0.55,
+  "train_accuracy": 0.6031,
+  "accuracy": 0.6762,
+  "precision": 0.0,
+  "recall": 0.0,
+  "f1_score": 0.0,
+  "roc_auc": 0.4708,
+  "train_samples": 185550,
+  "val_samples": 40646,
+  "test_samples": 40772,
+  "epochs_trained": 20,
+  "training_date": "2026-09-08T05:34:54.133772",
+  "overfitting": {
+    "verdict": "NOT_USABLE",
+    "verdict_message": "3 critical issue(s) found. Do NOT use this model for live or paper trading.",
+    "usability_score": 9,
+    "critical_count": 3,
+    "warning_count": 2,
+    "flags": [
+      {
+        "level": "critical",
+        "code": "LOW_ROC_AUC",
+        "message": "ROC-AUC 0.471 is near random (0.50). Model has no discriminative power.",
+        "value": 0.4708,
+        "threshold": 0.52
+      },
+      {
+        "level": "critical",
+        "code": "LOW_PRECISION",
+        "message": "Precision 0.0% \u2014 more than half of BUY signals are wrong. This will generate losing trades.",
+        "value": 0.0,
+        "threshold": 0.5
+      },
+      {
+        "level": "warning",
+        "code": "LOW_F1",
+        "message": "F1 score 0.0% is below minimum threshold. Model is not reliable enough for trading signals.",
+        "value": 0.0,
+        "threshold": 0.45
+      },
+      {
+        "level": "critical",
+        "code": "LOW_PRED_RATE",
+        "message": "Model predicts BUY only 0.0% of the time \u2014 almost never fires.",
+        "value": 0.0,
+        "threshold": 0.15
+      },
+      {
+        "level": "warning",
+        "code": "CLASS_IMBALANCE_BIAS",
+        "message": "Class accuracy gap 100.0% \u2014 model is biased toward UP signals. (UP acc=0.0%, DOWN acc=100.0%)",
+        "value": 1.0,
+        "threshold": 0.3
+      }
+    ],
+    "metrics_summary": {
+      "train_accuracy": 0.6031,
+      "test_accuracy": 0.6762,
+      "train_test_gap": -0.0731,
+      "roc_auc": 0.4708,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    }
+  }
+}

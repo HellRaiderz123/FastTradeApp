@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "runs": 35,
+  "strategy_batches": {
+    "NIFTY50|Day|1 Hour|15 Min": {
+      "last_run_at": "2026-10-29T20:43:11.541368+05:30",
+      "next_offset": 250,
+      "pool_total": 500,
+      "last_batch_start": 200,
+      "last_batch_end": 250,
+      "last_batch_tested": 50,
+      "qualified_count": 0,
+      "saved_count": 0,
+      "saved_names": [],
+      "completed_cycle": false,
+      "cycle_count": 3,
+      "top_results": [
+        {
+          "name": "LAB RSI Rebound Buy 30 EMA34 TP5 1 Hour",
+          "timeframe": "1 Hour",
+          "score": 56.89,
+          "annual_return_pct": 1.64,
+          "max_drawdown_pct": 0.22
+        },
+        {
+          "name": "LAB MACD Breakout Buy RSI55 ADX25 Day",
+          "timeframe": "Day",
+          "score": -1000000000.0,
+          "annual_return_pct": -2.65,
+          "max_drawdown_pct": 2.79
+        },
+        {
+          "name": "LAB STOCH Pullback Buy K30 EMA34 1 Hour",
+          "timeframe": "1 Hour",
+          "score": -1000000000.0,
+          "annual_return_pct": -7.21,
+          "max_drawdown_pct": 1.14
+        },
+        {
+          "name": "LAB BB Momentum Buy PB0.9 ADX24 1 Hour",
+          "timeframe": "1 Hour",
+          "score": -1000000000.0,
+          "annual_return_pct": -11.18,
+          "max_drawdown_pct": 1.29
+        },
+        {
+          "name": "LAB RSI Regime Buy RSI60 ADX24 Day",
+          "timeframe": "Day",
+          "score": -1000000000.0,
+          "annual_return_pct": -47.06,
+          "max_drawdown_pct": 47.06
+        }
+      ],
+      "rolling_top_results": [
+        {
+          "name": "LAB BB Momentum Buy PB0.9 ADX20 1 Hour",
+          "timeframe": "1 Hour",
+          "universe": "NIFTY50",
+          "score": 280.66,
+          "annual_return_pct": 9.93,
+          "total_return_pct": 0.78,
+          "max_drawdown_pct": 0.26,
+          "sharpe_ratio": 5.6,
+          "total_trades": 20,
+          "final_capital": 100781.32
+        },
+        {
+          "name": "LAB BB Momentum Buy PB0.9 ADX16 1 Hour",
+          "timeframe": "1 Hour",
+          "universe": "NIFTY50",
+          "score": 121.97,
+          "annual_return_pct": 4.05,
+          "total_return_pct": 0.33,
+          "max_drawdown_pct": 0.37,
+          "sharpe_ratio": 1.7,
+          "total_trades": 25,
+          "final_capital": 100326.75
+        },
+        {
+          "name": "LAB RSI Regime Buy RSI60 ADX20 1 Hour",
+          "timeframe": "1 Hour",
+          "universe": "NIFTY50",
+          "score": 100.91,
+          "annual_return_pct": 2.18,
+          "total_return_pct": 0.18,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 5.72,
+          "total_trades": 3,
+          "final_capital": 100177.34
+        },
+        {
+          "name": "LAB RSI Regime Buy RSI60 ADX24 1 Hour",
+          "timeframe": "1 Hour",
+          "universe": "NIFTY50",
+          "score": 100.91,
+          "annual_return_pct": 2.18,
+          "total_return_pct": 0.18,
+          "max_drawdown_pct": 0.0,
+          "sharpe_ratio": 5.72,
+          "total_trades": 3,
+          "final_capital": 100177.34
+        },
+        {
+          "name": "LAB RSI Rebound Buy 25 EMA50 TP8 1 Hour",
+          "timeframe": "1 Hour",
+          "universe": "NIFTY50",
+          "score": 57.53,
+          "annual_return_pct": 1.96,
+          "total_return_pct": 0.16,
+          "max_drawdown_pct": 0.11,
+          "sharpe_ratio": 2.57,
+          "total_trades": 11,
+          "final_capital": 100159.63
+        }
+      ]
+    }
+  }
+}
