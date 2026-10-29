@@ -44,10 +44,15 @@ def _cache_set(key: str, value: Any, ttl_seconds: int) -> None:
     _CACHE[key] = (value, time.time() + ttl_seconds)
 
 
+# Hard cap: each NSE fetch (direct + fallback) must finish within this budget
+_NSE_FETCH_TIMEOUT = 8  # seconds — keeps total endpoint latency well under Render's 30s limit
+
+
 def _nse_get(path: str, referer_path: str, params: dict | None = None) -> Any:
     """
     Fetch a JSON endpoint from NSE with the proven Mac UA + Referer pattern.
     Falls back to allorigins proxy on Akamai block (non-200).
+    Hard-capped at _NSE_FETCH_TIMEOUT seconds total to prevent Render 502s.
     """
     url = f"{NSE_BASE}{path}"
     headers = {
@@ -57,18 +62,18 @@ def _nse_get(path: str, referer_path: str, params: dict | None = None) -> Any:
         "Referer": f"{NSE_BASE}{referer_path}",
     }
     try:
-        r = requests.get(url, headers=headers, params=params, timeout=20)
+        r = requests.get(url, headers=headers, params=params, timeout=_NSE_FETCH_TIMEOUT)
         if r.status_code == 200:
             return r.json()
         logger.warning("nse_data: direct fetch %s returned %s", path, r.status_code)
     except Exception as e:
         logger.warning("nse_data: direct fetch %s failed: %s", path, e)
 
-    # allorigins proxy fallback
+    # allorigins proxy fallback — shorter timeout since we already spent some budget
     try:
         full_url = url if not params else url + "?" + urllib.parse.urlencode(params)
         proxy = f"https://api.allorigins.win/get?url={urllib.parse.quote(full_url, safe='')}"
-        r = requests.get(proxy, timeout=30)
+        r = requests.get(proxy, timeout=_NSE_FETCH_TIMEOUT)
         if r.status_code == 200:
             contents = r.json().get("contents") or "null"
             return _json.loads(contents)
@@ -122,8 +127,12 @@ async def get_vix():
     vix_value = await loop.run_in_executor(_nse_executor, _fetch_vix)
 
     if not vix_value:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=503, detail="VIX data temporarily unavailable")
+        return {
+            "current": None,
+            "regime": "UNKNOWN",
+            "implications": "VIX data temporarily unavailable",
+            "timestamp": datetime.now().isoformat(),
+        }
 
     if vix_value < 12:
         regime, implications = "VERY_CALM", "Market complacency. Low options premiums."
