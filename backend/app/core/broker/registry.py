@@ -205,13 +205,26 @@ def get_registry() -> BrokerRegistry:
 
 
 def get_active_broker() -> str:
-    """Read ACTIVE_BROKER from env, normalize, validate against registry."""
-    raw = os.getenv("ACTIVE_BROKER", "ZERODHA").upper().strip()
+    """Read active broker from DB first, env fallback, normalize, validate."""
     aliases = {
         "IND_MONEY": "INDMONEY",
         "IND-MONEY": "INDMONEY",
         "INDSTOCKS": "INDMONEY",
     }
+    try:
+        from app.db.session import SessionLocal
+        from app.db.broker_credentials_repo import get_active_broker_from_db
+        db = SessionLocal()
+        try:
+            db_broker = get_active_broker_from_db(db)
+            if db_broker:
+                raw = db_broker.upper().strip()
+                return aliases.get(raw, raw)
+        finally:
+            db.close()
+    except Exception:
+        pass
+    raw = os.getenv("ACTIVE_BROKER", "ZERODHA").upper().strip()
     return aliases.get(raw, raw)
 
 

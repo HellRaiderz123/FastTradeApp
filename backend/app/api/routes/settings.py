@@ -26,16 +26,16 @@ ENV_FILE = Path(__file__).resolve().parent.parent.parent.parent / ".env"
 def _activate_zerodha_token(access_token: str, user_id: str | None = None) -> None:
     from app.core.broker.zerodha.oauth import activate_access_token
     from app.core.broker.zerodha import client as kite_client_module
-
-    set_key(str(ENV_FILE), "ZERODHA_ACCESS_TOKEN", access_token)
-    os.environ["ZERODHA_ACCESS_TOKEN"] = access_token
+    from app.db.broker_credentials_repo import upsert_broker_credentials
 
     db = SessionLocal()
     try:
+        upsert_broker_credentials(db, "ZERODHA", access_token=access_token)
         activate_access_token(db, access_token, user_id=user_id)
     finally:
         db.close()
 
+    os.environ["ZERODHA_ACCESS_TOKEN"] = access_token
     if kite_client_module._kite is not None:
         kite_client_module._kite.set_access_token(access_token)
     kite_client_module._kite = None
@@ -182,54 +182,36 @@ def set_active_broker(payload: BrokerUpdateRequest):
             detail=f"Invalid broker. Valid brokers: {', '.join(supported)}"
         )
 
-    set_key(str(ENV_FILE), "ACTIVE_BROKER", broker)
+    from app.db.broker_credentials_repo import upsert_app_settings
+    db = SessionLocal()
+    try:
+        upsert_app_settings(db, active_broker=broker)
+    finally:
+        db.close()
     os.environ["ACTIVE_BROKER"] = broker
-
     logger.info("Active broker changed to %s", broker)
-    return {
-        "status": "success",
-        "active_broker": broker,
-    }
+    return {"status": "success", "active_broker": broker}
 
 
 @router.post("/zerodha/credentials")
 def save_zerodha_credentials(credentials: ZerodhaCredentials):
-    """
-    Save Zerodha API credentials to .env file.
-    
-    Args:
-        api_key: Zerodha API key
-        api_secret: Zerodha API secret
-        
-    Returns:
-        {"status": "success", "message": "Credentials saved"}
-    """
+    """Save Zerodha API credentials to DB."""
+    if not credentials.api_key or not credentials.api_secret:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key and secret cannot be empty")
     try:
-        if not credentials.api_key or not credentials.api_secret:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="API key and secret cannot be empty"
-            )
-        
-        # Save to .env file
-        set_key(str(ENV_FILE), "ZERODHA_API_KEY", credentials.api_key)
-        set_key(str(ENV_FILE), "ZERODHA_API_SECRET", credentials.api_secret)
-        
-        # Update environment variables
+        from app.db.broker_credentials_repo import upsert_broker_credentials
+        db = SessionLocal()
+        try:
+            upsert_broker_credentials(db, "ZERODHA", api_key=credentials.api_key, api_secret=credentials.api_secret)
+        finally:
+            db.close()
         os.environ["ZERODHA_API_KEY"] = credentials.api_key
         os.environ["ZERODHA_API_SECRET"] = credentials.api_secret
-        
-        logger.info("Zerodha credentials updated successfully")
-        return {
-            "status": "success",
-            "message": "Zerodha credentials saved successfully"
-        }
+        logger.info("Zerodha credentials updated in DB")
+        return {"status": "success", "message": "Zerodha credentials saved successfully"}
     except Exception as e:
-        logger.error(f"Error saving credentials: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error saving credentials: {str(e)}"
-        )
+        logger.error(f"Error saving credentials: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.post("/zerodha/generate-token", response_model=ZerodhaAccessToken)
@@ -301,74 +283,41 @@ def generate_zerodha_token(request_body: ZerodhaRequestToken):
 
 @router.post("/zerodha/token")
 def save_zerodha_token(token: ZerodhaAccessToken):
-    """
-    Save a manually obtained Zerodha access token to .env file.
-    
-    Args:
-        access_token: The access token obtained from Zerodha login
-        
-    Returns:
-        {"status": "success", "message": "Token saved"}
-    """
+    """Save a manually obtained Zerodha access token to DB."""
+    if not token.access_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Access token cannot be empty")
     try:
-        if not token.access_token:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Access token cannot be empty"
-            )
-        
         _activate_zerodha_token(token.access_token)
-        
-        logger.info("Zerodha access token updated successfully")
-        return {
-            "status": "success",
-            "message": "Zerodha access token saved successfully"
-        }
+        logger.info("Zerodha access token updated")
+        return {"status": "success", "message": "Zerodha access token saved successfully"}
     except Exception as e:
-        logger.error(f"Error saving token: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error saving token: {str(e)}"
-        )
+        logger.error(f"Error saving token: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.post("/execution-mode")
 def set_execution_mode(mode: str):
-    """
-    Set the execution mode (ZERODHA_LIVE, ZERODHA_DRY_RUN, PAPER_TRADING, etc.)
-    
-    Args:
-        mode: The execution mode to set
-        
-    Returns:
-        {"status": "success", "mode": "mode_value"}
-    """
+    """Set the execution mode and persist to DB."""
     try:
         normalized = normalize_execution_mode(mode)
         valid_modes = ["LIVE", "DRY_RUN", "PAPER_TRADING", "BACKTEST"]
-
         if normalized not in valid_modes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid execution mode. Valid modes: {', '.join(valid_modes)}"
-            )
-
-        set_key(str(ENV_FILE), "EXECUTION_MODE", normalized)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid execution mode. Valid modes: {', '.join(valid_modes)}")
+        from app.db.broker_credentials_repo import upsert_app_settings
+        db = SessionLocal()
+        try:
+            upsert_app_settings(db, execution_mode=normalized)
+        finally:
+            db.close()
         os.environ["EXECUTION_MODE"] = normalized
-
         logger.info(f"Execution mode changed to {normalized}")
-        return {
-            "status": "success",
-            "mode": normalized
-        }
+        return {"status": "success", "mode": normalized}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error setting execution mode: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error setting execution mode: {str(e)}"
-        )
+        logger.error(f"Error setting execution mode: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 # ─── Zerodha OAuth Flow ───────────────────────────────────────────────────
@@ -597,9 +546,13 @@ def save_indmoney_token(token: INDMoneyAccessToken):
             db.commit()
         finally:
             db.close()
-        
-        # Also save to .env file as fallback
-        set_key(str(ENV_FILE), "INDMONEY_ACCESS_TOKEN", token.access_token)
+
+        from app.db.broker_credentials_repo import upsert_broker_credentials
+        db2 = SessionLocal()
+        try:
+            upsert_broker_credentials(db2, "INDMONEY", access_token=token.access_token)
+        finally:
+            db2.close()
         os.environ["INDMONEY_ACCESS_TOKEN"] = token.access_token
         
         logger.info("INDMoney access token saved to DB and .env")

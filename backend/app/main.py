@@ -160,10 +160,12 @@ async def lifespan(app: FastAPI):
         try:
             from app.db.user_repo import seed_admin_from_env
             from app.db.user_settings_repo import seed_user_settings_from_env
+            from app.db.broker_credentials_repo import seed_broker_credentials_from_env
             from app.db.session import SessionLocal as _SL2
             _seed_db = _SL2()
             seed_admin_from_env(_seed_db)
             seed_user_settings_from_env(_seed_db)
+            seed_broker_credentials_from_env(_seed_db)
             _seed_db.close()
         except Exception as _se:
             logger.warning(f"⚠️ Admin seed failed: {_se}")

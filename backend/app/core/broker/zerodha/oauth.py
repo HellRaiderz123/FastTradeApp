@@ -61,12 +61,47 @@ def activate_access_token(
     return session
 
 
+def _get_zerodha_api_key(db: Session | None = None) -> str:
+    """Read Zerodha API key from DB first, env fallback."""
+    try:
+        from app.db.broker_credentials_repo import get_broker_credentials
+        from app.db.session import SessionLocal
+        _db = db or SessionLocal()
+        try:
+            creds = get_broker_credentials(_db, "ZERODHA")
+            if creds["api_key"]:
+                return creds["api_key"]
+        finally:
+            if db is None:
+                _db.close()
+    except Exception:
+        pass
+    return os.getenv("ZERODHA_API_KEY", "")
+
+
+def _get_zerodha_api_secret(db: Session | None = None) -> str:
+    """Read Zerodha API secret from DB first, env fallback."""
+    try:
+        from app.db.broker_credentials_repo import get_broker_credentials
+        from app.db.session import SessionLocal
+        _db = db or SessionLocal()
+        try:
+            creds = get_broker_credentials(_db, "ZERODHA")
+            if creds["api_secret"]:
+                return creds["api_secret"]
+        finally:
+            if db is None:
+                _db.close()
+    except Exception:
+        pass
+    return os.getenv("ZERODHA_API_SECRET", "")
+
+
 def get_login_url(callback_url: str) -> str:
     """Generate Zerodha OAuth login URL."""
-    api_key = os.getenv("ZERODHA_API_KEY")
+    api_key = _get_zerodha_api_key()
     if not api_key:
         raise ValueError("ZERODHA_API_KEY not configured")
-    
     kite = KiteConnect(api_key=api_key)
     return kite.login_url()
 
@@ -83,13 +118,13 @@ def exchange_request_token_for_access_token(
         access_token if successful, else None
     """
     try:
-        api_key = os.getenv("ZERODHA_API_KEY")
-        api_secret = os.getenv("ZERODHA_API_SECRET")
-        
+        api_key = _get_zerodha_api_key(db)
+        api_secret = _get_zerodha_api_secret(db)
+
         if not api_key or not api_secret:
             logger.error("Zerodha API key or secret not configured")
             return None
-        
+
         kite = KiteConnect(api_key=api_key)
         session_data = kite.generate_session(request_token, api_secret=api_secret)
         

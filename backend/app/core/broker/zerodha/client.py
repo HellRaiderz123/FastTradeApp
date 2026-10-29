@@ -13,7 +13,16 @@ logger.setLevel(logging.INFO)
 def get_kite_client() -> KiteConnect:
     global _kite
 
-    api_key = os.getenv("ZERODHA_API_KEY")
+    try:
+        from app.db.broker_credentials_repo import get_broker_credentials
+        db = SessionLocal()
+        try:
+            creds = get_broker_credentials(db, "ZERODHA")
+            api_key = creds["api_key"] or os.getenv("ZERODHA_API_KEY")
+        finally:
+            db.close()
+    except Exception:
+        api_key = os.getenv("ZERODHA_API_KEY")
 
     # Always fetch the current token from DB — never use a cached client
     # because Zerodha tokens expire daily and the singleton would stay stale.
