@@ -15,8 +15,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # newsdata.io API configuration
-NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY", "")
 NEWSDATA_BASE_URL = "https://newsdata.io/api/1/news"
+
+
+def _get_newsdata_key() -> str:
+    """Read newsdata key from DB first, env fallback."""
+    try:
+        from app.db.session import SessionLocal
+        from app.db.user_settings_repo import get_user_settings
+        db = SessionLocal()
+        try:
+            row = get_user_settings(db)
+            if row and row.newsdata_api_key:
+                return row.newsdata_api_key
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return os.getenv("NEWSDATA_API_KEY", "")
 
 # In-memory cache for news articles (to save API credits)
 # Format: {symbol: {"articles": [...], "timestamp": datetime, "total": int}}
@@ -110,16 +126,18 @@ async def fetch_newsdata_io(symbol: str, limit: int = 10) -> List[dict]:
     Fetch news from newsdata.io API with caching
     Cache duration: {CACHE_DURATION_MINUTES} minutes to save API credits (200 credits/day, 10 per article)
     """
-    logger.info(f"🔍 fetch_newsdata_io called for {symbol}, API_KEY present: {bool(NEWSDATA_API_KEY)}")
+    logger.info(f"🔍 fetch_newsdata_io called for {symbol}, API_KEY present: {bool(_get_newsdata_key())}")
     
     # Check cache first to save API credits
     if is_cache_valid(symbol):
         cached_data = NEWS_CACHE[symbol]
         logger.info(f"✅ Returning {len(cached_data['articles'])} cached articles for {symbol}")
         return cached_data["articles"]
-    logger.debug(f"API Key value: {NEWSDATA_API_KEY[:20]}..." if NEWSDATA_API_KEY else "API Key: NOT SET")
+
+    api_key = _get_newsdata_key()
+    logger.debug(f"API Key value: {api_key[:20]}..." if api_key else "API Key: NOT SET")
     
-    if not NEWSDATA_API_KEY:
+    if not api_key:
         logger.warning("❌ NEWSDATA_API_KEY not configured, returning empty news list")
         return []
     
@@ -129,7 +147,7 @@ async def fetch_newsdata_io(symbol: str, limit: int = 10) -> List[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # Use /news endpoint with symbol parameter (specifically designed for stock tickers)
             params = {
-                "apikey": NEWSDATA_API_KEY,
+                "apikey": api_key,
                 "q": COMPANY_NAMES.get(symbol, symbol),
                 "country": "in",
                 "language": "en",
@@ -229,10 +247,10 @@ async def get_stock_news(
         symbol = symbol.upper()
         company_name = COMPANY_NAMES.get(symbol, symbol)
         
-        logger.info(f"📰 Fetching news for {symbol} ({company_name}), API_KEY configured: {bool(NEWSDATA_API_KEY)}")
+        logger.info(f"📰 Fetching news for {symbol} ({company_name}), API_KEY configured: {bool(_get_newsdata_key())}")
         
-        # Check if API key is configured
-        if not NEWSDATA_API_KEY:
+        api_key = _get_newsdata_key()
+        if not api_key:
             logger.warning(f"⚠️ NEWSDATA_API_KEY not configured! Cannot fetch news")
             return {
                 "symbol": symbol,

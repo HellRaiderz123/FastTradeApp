@@ -975,3 +975,95 @@ def save_ml_settings(data: dict):
     except Exception as e:
         logger.error(f"Error saving ML settings: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+# ─── LLM Settings ─────────────────────────────────────────────────────────
+
+class LLMSettings(BaseModel):
+    llm_provider: str
+    llm_api_key: str
+    llm_base_url: str | None = None
+    llm_model: str
+
+
+@router.get("/llm")
+def get_llm_settings():
+    """Get current LLM config (key masked)."""
+    from app.db.user_settings_repo import get_user_settings
+    db = SessionLocal()
+    try:
+        row = get_user_settings(db)
+        key = (row.llm_api_key or "") if row else os.getenv("LLM_API_KEY", "")
+        masked = key[:8] + "***" if len(key) > 8 else ("***" if key else "")
+        return {
+            "llm_provider": (row.llm_provider if row else None) or os.getenv("LLM_PROVIDER", "groq"),
+            "llm_api_key_set": bool(key),
+            "llm_api_key_masked": masked,
+            "llm_base_url": (row.llm_base_url if row else None) or os.getenv("LLM_BASE_URL", ""),
+            "llm_model": (row.llm_model if row else None) or os.getenv("LLM_MODEL", "llama-3.1-8b-instant"),
+        }
+    finally:
+        db.close()
+
+
+@router.post("/llm")
+def save_llm_settings(settings: LLMSettings):
+    """Save LLM config to DB."""
+    from app.db.user_settings_repo import upsert_user_settings
+    if not settings.llm_api_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="llm_api_key is required")
+    db = SessionLocal()
+    try:
+        upsert_user_settings(
+            db,
+            llm_provider=settings.llm_provider,
+            llm_api_key=settings.llm_api_key,
+            llm_base_url=settings.llm_base_url or None,
+            llm_model=settings.llm_model,
+        )
+        # Keep process env in sync so llm_service fallback path also works
+        os.environ["LLM_PROVIDER"] = settings.llm_provider
+        os.environ["LLM_API_KEY"] = settings.llm_api_key
+        os.environ["LLM_MODEL"] = settings.llm_model
+        if settings.llm_base_url:
+            os.environ["LLM_BASE_URL"] = settings.llm_base_url
+        logger.info("LLM settings updated in DB")
+        return {"status": "success", "message": "LLM settings saved"}
+    finally:
+        db.close()
+
+
+# ─── Newsdata Settings ────────────────────────────────────────────────────
+
+class NewsdataSettings(BaseModel):
+    newsdata_api_key: str
+
+
+@router.get("/newsdata")
+def get_newsdata_settings():
+    """Get newsdata.io API key status (masked)."""
+    from app.db.user_settings_repo import get_user_settings
+    db = SessionLocal()
+    try:
+        row = get_user_settings(db)
+        key = (row.newsdata_api_key or "") if row else os.getenv("NEWSDATA_API_KEY", "")
+        masked = key[:6] + "***" if len(key) > 6 else ("***" if key else "")
+        return {"newsdata_api_key_set": bool(key), "newsdata_api_key_masked": masked}
+    finally:
+        db.close()
+
+
+@router.post("/newsdata")
+def save_newsdata_settings(settings: NewsdataSettings):
+    """Save newsdata.io API key to DB."""
+    from app.db.user_settings_repo import upsert_user_settings
+    if not settings.newsdata_api_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="newsdata_api_key is required")
+    db = SessionLocal()
+    try:
+        upsert_user_settings(db, newsdata_api_key=settings.newsdata_api_key)
+        os.environ["NEWSDATA_API_KEY"] = settings.newsdata_api_key
+        logger.info("Newsdata API key updated in DB")
+        return {"status": "success", "message": "Newsdata API key saved"}
+    finally:
+        db.close()

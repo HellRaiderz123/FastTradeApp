@@ -101,20 +101,44 @@ _LLM_BASE = {
     "openai": "https://api.openai.com/v1",
 }
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
-LLM_API_KEY  = (
+# Module-level defaults from env (used as fallback if DB row not found)
+_ENV_LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
+_ENV_LLM_API_KEY  = (
     os.getenv("LLM_API_KEY")
     or os.getenv("GROQ_API_KEY")
     or os.getenv("OPENAI_API_KEY")
     or ""
 )
-LLM_BASE_URL = os.getenv("LLM_BASE_URL") or _LLM_BASE.get(LLM_PROVIDER, _LLM_BASE["groq"])
-LLM_MODEL    = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
+_ENV_LLM_BASE_URL = os.getenv("LLM_BASE_URL") or _LLM_BASE.get(_ENV_LLM_PROVIDER, _LLM_BASE["groq"])
+_ENV_LLM_MODEL    = os.getenv("LLM_MODEL", "llama-3.1-8b-instant")
+
 LLM_MODEL_FALLBACKS = [
     model.strip()
     for model in (os.getenv("LLM_MODEL_FALLBACKS", "") or "").split(",")
     if model.strip()
 ]
+
+
+def _get_llm_config() -> tuple[str, str, str, str]:
+    """Return (provider, api_key, base_url, model) — DB first, env fallback."""
+    try:
+        from app.db.session import SessionLocal
+        from app.db.user_settings_repo import get_user_settings
+        db = SessionLocal()
+        try:
+            row = get_user_settings(db)
+            if row and row.llm_api_key:
+                provider = row.llm_provider or _ENV_LLM_PROVIDER
+                base_url = row.llm_base_url or _LLM_BASE.get(provider, _LLM_BASE["groq"])
+                return provider, row.llm_api_key, base_url, row.llm_model or _ENV_LLM_MODEL
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return _ENV_LLM_PROVIDER, _ENV_LLM_API_KEY, _ENV_LLM_BASE_URL, _ENV_LLM_MODEL
+
+
+
 LLM_MIN_INTERVAL_SEC = max(float(os.getenv("LLM_MIN_INTERVAL_SEC", "1.5") or 1.5), 0.0)
 LLM_MAX_RETRIES = max(int(os.getenv("LLM_MAX_RETRIES", "3") or 3), 0)
 LLM_RETRY_BASE_DELAY_SEC = max(float(os.getenv("LLM_RETRY_BASE_DELAY_SEC", "2.0") or 2.0), 0.1)
@@ -157,16 +181,17 @@ def _circuit_record_failure() -> None:
 
 def is_available() -> bool:
     """Return True if an LLM API key is configured and circuit is closed."""
-    return bool(LLM_API_KEY) and not _circuit_is_open()
+    return bool(_get_llm_config()[1]) and not _circuit_is_open()
 
 
 def get_model_candidates(preferred_model: str | None = None) -> list[str]:
+    _, _, _, current_model = _get_llm_config()
     candidates: list[str] = []
-    for model in [preferred_model, LLM_MODEL, *LLM_MODEL_FALLBACKS]:
+    for model in [preferred_model, current_model, *LLM_MODEL_FALLBACKS]:
         clean = str(model or "").strip()
         if clean and clean not in candidates:
             candidates.append(clean)
-    return candidates or [LLM_MODEL]
+    return candidates or [current_model]
 
 
 def _wait_for_rate_limit() -> None:
@@ -206,7 +231,8 @@ def _do_chat_completion(
     caller: str | None = None,
 ) -> tuple[Optional[dict], Optional[str], Optional[str]]:
     """Internal: runs the actual HTTP call. Always executed inside _llm_executor."""
-    if not LLM_API_KEY:
+    _, api_key, base_url, _ = _get_llm_config()
+    if not api_key:
         return None, None, "LLM_API_KEY not configured"
 
     if _circuit_is_open():
@@ -235,9 +261,9 @@ def _do_chat_completion(
                     _wait_for_rate_limit()
                     t0 = time.monotonic()
                     resp = client.post(
-                        f"{LLM_BASE_URL}/chat/completions",
+                        f"{base_url}/chat/completions",
                         headers={
-                            "Authorization": f"Bearer {LLM_API_KEY}",
+                            "Authorization": f"Bearer {api_key}",
                             "Content-Type":  "application/json",
                         },
                         json=payload,
@@ -247,12 +273,8 @@ def _do_chat_completion(
                     _circuit_record_success()
                     result_json = resp.json()
                     _log_ai_usage(
-                        caller=caller,
-                        model=model_name,
-                        messages=messages,
-                        response_json=result_json,
-                        error=None,
-                        latency_ms=latency_ms,
+                        caller=caller, model=model_name, messages=messages,
+                        response_json=result_json, error=None, latency_ms=latency_ms,
                     )
                     return result_json, model_name, None
                 except httpx.HTTPStatusError as e:
@@ -280,13 +302,10 @@ def _do_chat_completion(
                     break
 
     _circuit_record_failure()
+    _, _, _, current_model = _get_llm_config()
     _log_ai_usage(
-        caller=caller,
-        model=preferred_model or LLM_MODEL,
-        messages=messages,
-        response_json=None,
-        error=last_error,
-        latency_ms=0.0,
+        caller=caller, model=preferred_model or current_model, messages=messages,
+        response_json=None, error=last_error, latency_ms=0.0,
     )
     return None, None, last_error
 
@@ -361,7 +380,7 @@ def call_llm(
     Synchronous LLM call. Runs in dedicated thread pool — never blocks main thread.
     Returns response text or None on failure.
     """
-    if not LLM_API_KEY:
+    if not _get_llm_config()[1]:
         logger.debug("LLM_API_KEY not configured — skipping LLM call")
         return None
 
@@ -410,7 +429,7 @@ async def call_llm_async(
     Async LLM call — awaits dedicated thread pool, never blocks event loop.
     Use this from async route handlers.
     """
-    if not LLM_API_KEY or _circuit_is_open():
+    if not _get_llm_config()[1] or _circuit_is_open():
         return None
 
     response_json, model_used, error = await request_chat_completion_async(
