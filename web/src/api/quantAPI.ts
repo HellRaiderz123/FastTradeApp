@@ -2,7 +2,7 @@ import axios from 'axios';
 import { authTokenStore } from '../lib/api';
 
 const QUANT_API = axios.create({
-  baseURL: (import.meta as any).env?.VITE_API_BASE ? `${(import.meta as any).env?.VITE_API_BASE}/api/quant` : '/api/quant',
+  baseURL: (import.meta as any).env?.VITE_API_BASE ? `${(import.meta as any).env?.VITE_API_BASE}/quant` : '/api/quant',
   timeout: 30000,
 });
 

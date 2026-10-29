@@ -110,6 +110,9 @@ export default function Layout() {
       <Tabs.Screen name="account" options={{ href: null }} />
       <Tabs.Screen name="scannerExecution" options={{ href: null }} />
       <Tabs.Screen name="smsScanner" options={{ href: null }} />
+      <Tabs.Screen name="fiiDii" options={{ href: null }} />
+      <Tabs.Screen name="stockResearch" options={{ href: null }} />
+      <Tabs.Screen name="multiTimeframe" options={{ href: null }} />
     </Tabs>
   );
 }

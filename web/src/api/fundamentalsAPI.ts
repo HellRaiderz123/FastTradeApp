@@ -1,7 +1,9 @@
 import axios from 'axios';
 import { authTokenStore } from '../lib/api';
 
-const FUND_API = axios.create({ baseURL: '/api/fundamentals' });
+const FUND_API = axios.create({
+  baseURL: (import.meta as any).env?.VITE_API_BASE ? `${(import.meta as any).env?.VITE_API_BASE}/fundamentals` : '/api/fundamentals',
+});
 FUND_API.interceptors.request.use((config) => {
   const token = authTokenStore.get();
   if (token) config.headers['Authorization'] = `Bearer ${token}`;

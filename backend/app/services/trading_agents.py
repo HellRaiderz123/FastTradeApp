@@ -599,14 +599,40 @@ def _get_candle_data(
 
 
 def _get_news_items(symbol: str = "", limit: int = 15) -> list[dict]:
-    """Fetch recent news, deduplicate by title, date-filter to 7 days, score relevance to symbol."""
+    """Fetch recent news + NSE announcements, deduplicate by title, date-filter to 7 days, score relevance to symbol."""
     try:
         from app.services.rss_feed_service import get_rss_service
         svc = get_rss_service()
         items = svc.fetch_all_feeds()
     except Exception as e:
         logger.warning("trading_agents: news fetch failed: %s", e)
-        return []
+        items = []
+
+    # Inject NSE announcements for this symbol (high relevance, always score 3)
+    if symbol:
+        try:
+            from app.api.routes.nse_data import _nse_get
+            data = _nse_get(
+                "/api/corporate-announcements",
+                "/companies-listing/corporate-filings-announcements",
+                params={"index": "equities", "symbol": symbol},
+            )
+            rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
+            for row in rows[:10]:
+                headline = (
+                    row.get("desc") or row.get("attchmntText") or
+                    row.get("subject") or row.get("purpose") or ""
+                ).strip()
+                if headline:
+                    items.append({
+                        "title": f"[NSE Filing] {headline}",
+                        "description": row.get("attchmntType") or row.get("category") or "NSE Announcement",
+                        "published": row.get("sort_date") or row.get("date") or "",
+                        "source": "NSE",
+                        "relevance_score": 3,  # pre-scored as highly relevant
+                    })
+        except Exception as e:
+            logger.debug("trading_agents: NSE announcements fetch failed for %s: %s", symbol, e)
 
     cutoff = datetime.utcnow() - timedelta(days=7)
     sym_lower = symbol.lower()

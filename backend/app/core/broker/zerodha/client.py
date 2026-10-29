@@ -13,12 +13,10 @@ logger.setLevel(logging.INFO)
 def get_kite_client() -> KiteConnect:
     global _kite
 
-    if _kite:
-        return _kite
-
     api_key = os.getenv("ZERODHA_API_KEY")
-    
-    # Try to get access token from DB first, fall back to .env
+
+    # Always fetch the current token from DB — never use a cached client
+    # because Zerodha tokens expire daily and the singleton would stay stale.
     db = SessionLocal()
     try:
         access_token = get_access_token_for_client(db)
@@ -28,13 +26,15 @@ def get_kite_client() -> KiteConnect:
     finally:
         db.close()
 
-    logger.info("access_token=%s", access_token)
-
     if not api_key or not access_token:
+        _kite = None
         raise RuntimeError("Zerodha API key or access token missing")
+
+    # Reuse cached client only if the token hasn't changed
+    if _kite and _kite.access_token == access_token:
+        return _kite
 
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
-
     _kite = kite
     return kite

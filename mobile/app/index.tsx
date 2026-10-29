@@ -259,6 +259,9 @@ export default function Dashboard() {
               <QuickAction label="ML Center" value="Models" icon="analytics-outline" onPress={() => router.push('/mlCenter')} />
               <QuickAction label="Calendar" value="Events" icon="calendar-outline" onPress={() => router.push('/calendar')} />
               <QuickAction label="News" value="Feed" icon="newspaper-outline" onPress={() => router.push('/news')} />
+              <QuickAction label="FII/DII" value="Flows" icon="trending-up-outline" onPress={() => router.push('/fiiDii')} />
+              <QuickAction label="Research" value="Stocks" icon="search-outline" onPress={() => router.push('/stockResearch')} />
+              <QuickAction label="Charts" value="Multi-TF" icon="bar-chart-outline" onPress={() => router.push('/multiTimeframe')} />
               <QuickAction label="Account" value="Funds" icon="wallet-outline" onPress={() => router.push('/account')} />
             </ScrollView>
           </SafeAreaView>

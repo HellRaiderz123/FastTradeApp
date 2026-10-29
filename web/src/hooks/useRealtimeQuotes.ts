@@ -88,9 +88,8 @@ const fetchInitialQuotes = useCallback(async (symbolsList: string[]) => {
     const connectWebSocket = () => {
       try {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsHost = window.location.hostname === 'localhost' 
-          ? 'localhost:8000' 
-          : window.location.host;
+        const wsHost = import.meta.env?.VITE_WS_HOST || 
+          (window.location.hostname === 'localhost' ? 'localhost:8000' : window.location.host);
         
         const wsUrl = `${wsProtocol}//${wsHost}/ws/quotes?symbols=${symbolsKey}`;
         

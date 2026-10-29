@@ -634,6 +634,7 @@ DATA ACCESS:
 - Scanner signals generated in last 7 days
 - Trade costs and brokerage charges
 - Market news feeds, trending topics, and sentiment-tagged headlines
+- NSE corporate announcements and filings (acquisitions, results, dividends, board meetings, SEBI orders) — fetched live when you ask about a specific stock
 - Major global macro and geopolitical headlines present in the fetched news feeds (e.g., wars, sanctions, oil shocks)
 - Personal finance (transactions, budgets, savings goals, bills)
 
@@ -1268,6 +1269,32 @@ def _execute_tool(name: str, args: dict, db: Session, auth_token: str | None = N
             limit = max(1, min(int(args.get("limit", 8)), 20))
             keyword = str(args.get("keyword") or "").strip().lower()
             try:
+                # Inject NSE announcements for the keyword symbol (if it looks like a stock symbol)
+                nse_items = []
+                symbol_kw = keyword.upper() if keyword and re.match(r'^[A-Z0-9&-]{2,15}$', keyword.upper()) else None
+                if symbol_kw:
+                    try:
+                        from app.api.routes.nse_data import _nse_get
+                        nse_data = _nse_get(
+                            "/api/corporate-announcements",
+                            "/companies-listing/corporate-filings-announcements",
+                            params={"index": "equities", "symbol": symbol_kw},
+                        )
+                        rows = nse_data if isinstance(nse_data, list) else (nse_data.get("data") or [] if nse_data else [])
+                        for row in rows[:5]:
+                            headline = (row.get("desc") or row.get("attchmntText") or row.get("subject") or "").strip()
+                            if headline:
+                                nse_items.append({
+                                    "title": f"[NSE Filing] {headline}",
+                                    "description": row.get("attchmntType") or "NSE Announcement",
+                                    "source": "NSE",
+                                    "sentiment": "neutral",
+                                    "category": "nse_filing",
+                                    "published": row.get("sort_date") or "",
+                                    "link": row.get("attchmntFile") or "",
+                                })
+                    except Exception:
+                        pass
 
                 feed_resp = httpx.get(f"{INTERNAL_API_BASE}/news/feed?limit={limit}", headers=_get_internal_auth_headers(auth_token), timeout=20.0)
                 if feed_resp.status_code != 200:
@@ -1292,6 +1319,9 @@ def _execute_tool(name: str, args: dict, db: Session, auth_token: str | None = N
                         items = filtered_items
 
                 headlines = []
+                # NSE filings come first (highest relevance)
+                for item in nse_items:
+                    headlines.append(item)
                 for item in items[:limit]:
                     if not isinstance(item, dict):
                         continue

@@ -32,6 +32,7 @@ class NotificationType(str, Enum):
     STRATEGY_ENABLED = "strategy_enabled"
     STRATEGY_DISABLED = "strategy_disabled"
     ALERT_TRIGGERED = "alert_triggered"
+    NSE_FILING = "nse_filing"
 
 
 class NotificationPriority(str, Enum):
@@ -385,6 +386,75 @@ class NotificationService:
             priority=NotificationPriority.LOW,
             metadata={"strategy": strategy_name, "enabled": enabled}
         )
+
+    # ============================
+    # NSE FILING NOTIFICATIONS
+    # ============================
+
+    def notify_nse_filing(
+        self,
+        symbol: str,
+        company: str,
+        headline: str,
+        category: str,
+        impact: str = "HIGH",
+        pdf_url: Optional[str] = None,
+        published_at: Optional[str] = None,
+    ):
+        """Send notification for a high-impact NSE filing/announcement."""
+        impact_emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(impact.upper(), "📢")
+        ts = published_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Telegram uses HTML parse_mode — keep it clean
+        tg_lines = [
+            f"{impact_emoji} <b>NSE Filing — {impact.upper()} Impact</b>",
+            f"<b>Symbol:</b> {symbol}",
+            f"<b>Company:</b> {company}",
+            f"<b>Category:</b> {category}",
+            f"<b>Headline:</b> {headline}",
+            f"<b>Time:</b> {ts}",
+        ]
+        if pdf_url:
+            tg_lines.append(f'<a href="{pdf_url}">📄 View Filing</a>')
+        telegram_text = "\n".join(tg_lines)
+
+        plain_message = (
+            f"{impact_emoji} NSE Filing — {impact.upper()} Impact\n"
+            f"Symbol: {symbol}\n"
+            f"Company: {company}\n"
+            f"Category: {category}\n"
+            f"Headline: {headline}\n"
+            f"Time: {ts}"
+        )
+
+        priority = (
+            NotificationPriority.HIGH if impact.upper() == "HIGH"
+            else NotificationPriority.MEDIUM if impact.upper() == "MEDIUM"
+            else NotificationPriority.LOW
+        )
+
+        # Store in-app + email only (skip generic Telegram — HTML version sent below)
+        self._store_in_app_notification(
+            type=NotificationType.NSE_FILING,
+            title=f"{impact_emoji} {symbol} — {category}",
+            message=plain_message,
+            priority=priority,
+            metadata={
+                "symbol": symbol,
+                "company": company,
+                "headline": headline,
+                "category": category,
+                "impact": impact,
+                "pdf_url": pdf_url,
+                "published_at": ts,
+            },
+        )
+        if priority in [NotificationPriority.HIGH, NotificationPriority.CRITICAL] and self.gmail_enabled:
+            self._send_email(f"{impact_emoji} {symbol} — {category}", plain_message)
+
+        # Send HTML version to Telegram (once, not twice)
+        if self.telegram_enabled:
+            self._send_telegram(telegram_text)
 
     # ============================
     # ALERT NOTIFICATIONS

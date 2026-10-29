@@ -15,7 +15,7 @@ from app.core.market.expiry_exit import _expiry_day_exit_job
 
 logger = logging.getLogger(__name__)
 
-# ✅ ONE global scheduler
+# ONE global scheduler
 scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
 
 _DISCOVERY_DEFAULT_TIMEFRAMES = ("Day", "1 Hour", "15 Min")
@@ -38,7 +38,7 @@ def _load_discovery_state() -> dict:
         with path.open("r", encoding="utf-8") as handle:
             state = json.load(handle)
     except Exception as exc:
-        logger.warning("⚠️ Could not read strategy discovery state '%s': %s", path, exc)
+        logger.warning("Could not read strategy discovery state '%s': %s", path, exc)
         return default_state
 
     if not isinstance(state, dict):
@@ -267,7 +267,7 @@ def _update():
             try:
                 fetch_15m_candles(db, sym)
             except Exception as e:
-                logger.warning("⚠️ Skip IT candle %s [broker=%s]: %s", sym, broker, e)
+                logger.warning("Skip IT candle %s [broker=%s]: %s", sym, broker, e)
         logger.info("✅ 15m candles updated (indices + NIFTY_IT) [broker=%s]", broker)
     except Exception as exc:
         logger.error(
@@ -289,7 +289,7 @@ def _update_daily_vix():
         if success:
             logger.info("✅ Daily VIX updated and IV Rank calculated")
         else:
-            logger.warning("⚠️ Daily VIX update partially failed")
+            logger.warning("Daily VIX update partially failed")
     except Exception:
         logger.exception("❌ Daily VIX update failed")
     finally:
@@ -398,7 +398,7 @@ def _update_daily_candles():
                 break  # No point continuing if broker doesn't support it
             except Exception as e:
                 failed += 1
-                logger.warning("⚠️ Skip daily candle %s [broker=%s]: %s", symbol, broker, e)
+                logger.warning("Skip daily candle %s [broker=%s]: %s", symbol, broker, e)
         logger.info("✅ Daily candles updated [broker=%s]: %d ok, %d skipped", broker, success, failed)
     except Exception as exc:
         logger.error("❌ Daily candles update failed [broker=%s]: %s", broker, exc, exc_info=True)
@@ -435,7 +435,7 @@ def _update_5m_candles():
                 logger.error("❌ 5m candles: broker '%s' does not support historical data — %s", broker, e)
                 break
             except Exception as e:
-                logger.warning("⚠️ Skip 5m %s [broker=%s]: %s", sym, broker, e)
+                logger.warning("Skip 5m %s [broker=%s]: %s", sym, broker, e)
         logger.info("✅ 5m candles updated [broker=%s]", broker)
     except Exception as exc:
         logger.error("❌ 5m candle update failed [broker=%s]: %s", broker, exc, exc_info=True)
@@ -459,7 +459,7 @@ def _update_1h_candles():
                 logger.error("❌ 1h candles: broker '%s' does not support historical data — %s", broker, e)
                 break
             except Exception as e:
-                logger.warning("⚠️ Skip 1h %s [broker=%s]: %s", sym, broker, e)
+                logger.warning("Skip 1h %s [broker=%s]: %s", sym, broker, e)
         logger.info("✅ 1h candles updated [broker=%s]", broker)
     except Exception as exc:
         logger.error("❌ 1h candle update failed [broker=%s]: %s", broker, exc, exc_info=True)
@@ -499,11 +499,11 @@ def _train_ml_model():
                 if len(symbols) > 100:
                     symbols = symbols[:100]
         except Exception as e:
-            logger.warning(f"⚠️ Error getting NIFTY100 symbols: {e}")
+            logger.warning(f"Error getting NIFTY100 symbols: {e}")
             symbols = _get_daily_symbols()
         
         if not symbols:
-            logger.warning("⚠️ No symbols with 500+ days of data for ML training")
+            logger.warning("No symbols with 500+ days of data for ML training")
             return
         
         logger.info(f"📊 Training ML model on {len(symbols)} NIFTY100 symbols with 500+ days of daily candle data")
@@ -516,7 +516,7 @@ def _train_ml_model():
         total_samples = metadata.get('total_samples', 0)
         logger.info(f"✅ ML model trained: Accuracy={accuracy}, Precision={precision}, Samples={total_samples}")
     except ImportError:
-        logger.warning("⚠️ ML modules not available, skipping training")
+        logger.warning("ML modules not available, skipping training")
     except Exception:
         logger.exception("❌ ML model training failed")
     finally:
@@ -525,7 +525,7 @@ def _train_ml_model():
 
 def start_candle_scheduler():
     if scheduler.running:
-        logger.warning("⚠️ Candle scheduler already running")
+        logger.warning("Candle scheduler already running")
         return
 
     scheduler.add_job(
@@ -539,7 +539,7 @@ def start_candle_scheduler():
     )
 
     scheduler.start()
-    logger.info("🟢 Candle scheduler started")
+    logger.info("Candle scheduler started")
 
     # Defer initial run to avoid blocking startup (prevents 504)
     from datetime import datetime, timedelta
@@ -559,7 +559,7 @@ def start_vix_scheduler(delay_minutes: int = 2):
         delay_minutes: Delay in minutes before running initial VIX update (default: 2 minutes)
     """
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start VIX scheduler: main scheduler not running")
+        logger.warning("Cannot start VIX scheduler: main scheduler not running")
         return
     
     # Schedule daily VIX update at 3:45 PM IST (market close is 3:30 PM)
@@ -584,9 +584,9 @@ def start_vix_scheduler(delay_minutes: int = 2):
             id="vix_initial_run",
             replace_existing=True,
         )
-        logger.info(f"🟢 VIX scheduler started (daily: 3:45 PM IST, initial run: {delay_minutes}m delay)")
+        logger.info(f"VIX scheduler started (daily: 3:45 PM IST, initial run: {delay_minutes}m delay)")
     else:
-        logger.info("🟢 VIX daily scheduler started (3:45 PM IST)")
+        logger.info("VIX daily scheduler started (3:45 PM IST)")
         _update_daily_vix()
 
 
@@ -598,7 +598,7 @@ def start_daily_candles_scheduler(delay_minutes: int = 5):
                       Set to 0 to run immediately on startup
     """
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start daily candles scheduler: main scheduler not running")
+        logger.warning("Cannot start daily candles scheduler: main scheduler not running")
         return
 
     scheduler.add_job(
@@ -625,9 +625,9 @@ def start_daily_candles_scheduler(delay_minutes: int = 5):
             replace_existing=True,
             misfire_grace_time=3600,  # run even if up to 1h late (e.g. container restart)
         )
-        logger.info(f"🟢 Daily candles scheduler started (daily: 3:50 PM IST, initial backfill: {delay_minutes}m delay)")
+        logger.info(f"Daily candles scheduler started (daily: 3:50 PM IST, initial backfill: {delay_minutes}m delay)")
     else:
-        logger.info("🟢 Daily candles scheduler started (3:50 PM IST)")
+        logger.info("Daily candles scheduler started (3:50 PM IST)")
         _update_daily_candles()
 
 
@@ -642,7 +642,7 @@ def initialize_vix_data():
             logger.info("✅ VIX historic data initialized")
             return True
         else:
-            logger.warning("⚠️ Could not initialize VIX data from Zerodha")
+            logger.warning("Could not initialize VIX data from Zerodha")
             logger.info("   → Try running fetch_vix_historic_from_zerodha manually")
             return False
     except Exception as e:
@@ -655,7 +655,7 @@ def initialize_vix_data():
 def start_auto_exit_scheduler():
     """Start TP/SL/Trailing stop monitoring (runs every 10 seconds during market hours 9:15 AM - 3:30 PM)."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start auto-exit scheduler: main scheduler not running")
+        logger.warning("Cannot start auto-exit scheduler: main scheduler not running")
         return
     
     # Run every 10 seconds, but only during market hours (9:15 AM - 3:30 PM IST)
@@ -670,13 +670,13 @@ def start_auto_exit_scheduler():
         max_instances=1,
     )
     
-    logger.info("🟢 Auto-exit scheduler started (every 10 seconds, market hours only)")
+    logger.info("Auto-exit scheduler started (every 10 seconds, market hours only)")
 
 
 def start_ml_training_scheduler():
     """Start weekly ML model training (runs every Sunday at 4 AM IST)."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start ML training scheduler: main scheduler not running")
+        logger.warning("Cannot start ML training scheduler: main scheduler not running")
         return
     
     scheduler.add_job(
@@ -690,7 +690,7 @@ def start_ml_training_scheduler():
         max_instances=1,
     )
     
-    logger.info("🟢 ML training scheduler started (Sundays at 4 AM IST)")
+    logger.info("ML training scheduler started (Sundays at 4 AM IST)")
 
 
 def start_intraday_candles_scheduler(delay_minutes: int = 3):
@@ -699,7 +699,7 @@ def start_intraday_candles_scheduler(delay_minutes: int = 3):
     - 1h candles: every hour during market hours (all NIFTY100 + indices)
     """
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start intraday candles scheduler: main scheduler not running")
+        logger.warning("Cannot start intraday candles scheduler: main scheduler not running")
         return
 
     # 5-minute candles: fetch every 10 minutes during market hours
@@ -750,13 +750,13 @@ def start_intraday_candles_scheduler(delay_minutes: int = 3):
             misfire_grace_time=3600,
         )
 
-    logger.info("🟢 Intraday candles scheduler started (5m: every 10min, 1h: every hour)")
+    logger.info("Intraday candles scheduler started (5m: every 10min, 1h: every hour)")
 
 
 def stop_scheduler():
     if scheduler.running:
         scheduler.shutdown(wait=False)
-        logger.info("🛑 Scheduler stopped")
+        logger.info("Scheduler stopped")
 
 # ── ADD THIS FUNCTION to scheduler.py ───────────────────────────────────────
 def start_expiry_exit_scheduler():
@@ -768,7 +768,7 @@ def start_expiry_exit_scheduler():
     positions exist that expire today — so it's a no-op on non-expiry days.
     """
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start expiry-exit scheduler: main scheduler not running")
+        logger.warning("Cannot start expiry-exit scheduler: main scheduler not running")
         return
 
     scheduler.add_job(
@@ -783,7 +783,7 @@ def start_expiry_exit_scheduler():
         coalesce=True,
     )
 
-    logger.info("🟢 Expiry-day exit scheduler started (every 1 min, 9:15–3:20 PM IST)")
+    logger.info("Expiry-day exit scheduler started (every 1 min, 9:15–3:20 PM IST)")
 
 
 def start_twitter_sentiment_scheduler():
@@ -794,7 +794,7 @@ def start_twitter_sentiment_scheduler():
     for high-impact tweets.
     """
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start Twitter sentiment scheduler: main scheduler not running")
+        logger.warning("Cannot start Twitter sentiment scheduler: main scheduler not running")
         return
     
     # Run every 15 minutes during market hours (9:15 AM - 3:30 PM IST)
@@ -810,7 +810,7 @@ def start_twitter_sentiment_scheduler():
         coalesce=True,
     )
     
-    logger.info("🟢 Twitter sentiment scheduler started (every 15 min, market hours only)")
+    logger.info("Twitter sentiment scheduler started (every 15 min, market hours only)")
 
 
 def _strategy_discovery_job():
@@ -1086,7 +1086,7 @@ def _strategy_decay_job():
 def start_strategy_decay_scheduler():
     """Run strategy decay check daily at 4:30 PM IST (after discovery at 4:15)."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start strategy decay scheduler: main scheduler not running")
+        logger.warning("Cannot start strategy decay scheduler: main scheduler not running")
         return
     scheduler.add_job(
         func=_strategy_decay_job,
@@ -1099,13 +1099,13 @@ def start_strategy_decay_scheduler():
         max_instances=1,
         coalesce=True,
     )
-    logger.info("🟢 Strategy decay scheduler started (Mon-Fri at 4:30 PM IST)")
+    logger.info("Strategy decay scheduler started (Mon-Fri at 4:30 PM IST)")
 
 
 def start_strategy_discovery_scheduler():
     """Run batched strategy discovery daily at 4:15 PM IST (after candles + VIX are updated)."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start strategy discovery scheduler: main scheduler not running")
+        logger.warning("Cannot start strategy discovery scheduler: main scheduler not running")
         return
 
     scheduler.add_job(
@@ -1119,7 +1119,7 @@ def start_strategy_discovery_scheduler():
         max_instances=1,
         coalesce=True,
     )
-    logger.info("🟢 Strategy discovery scheduler started (Mon-Fri at 4:15 PM IST)")
+    logger.info("Strategy discovery scheduler started (Mon-Fri at 4:15 PM IST)")
 
 
 def start_neon_sync_scheduler():
@@ -1133,7 +1133,7 @@ def start_neon_sync_scheduler():
     is ever lost regardless of how many consecutive runs were skipped.
     """
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start Neon sync scheduler: main scheduler not running")
+        logger.warning("Cannot start Neon sync scheduler: main scheduler not running")
         return
 
     from app.services.neon_sync import run_delta_sync
@@ -1151,7 +1151,7 @@ def start_neon_sync_scheduler():
         misfire_grace_time=3600,  # allow up to 1 h late start (e.g. slow boot)
     )
 
-    logger.info("🟢 Neon delta sync scheduler started (daily at 3:15 PM IST)")
+    logger.info("Neon delta sync scheduler started (daily at 3:15 PM IST)")
 
 
 def start_zerodha_auto_login_scheduler():
@@ -1165,7 +1165,7 @@ def start_watchlist_analysis_scheduler():
     Runs before market open (9:15 AM) so decisions are ready when trading starts.
     """
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start watchlist analysis scheduler: main scheduler not running")
+        logger.warning("Cannot start watchlist analysis scheduler: main scheduler not running")
         return
 
     def _watchlist_analysis_job():
@@ -1174,7 +1174,7 @@ def start_watchlist_analysis_scheduler():
             count = run_watchlist_analysis()
             logger.info("🤖 Watchlist AI analysis: started %d jobs", count)
         except Exception as e:
-            logger.warning("⚠️ Watchlist AI analysis job failed: %s", e)
+            logger.warning("Watchlist AI analysis job failed: %s", e)
 
     scheduler.add_job(
         func=_watchlist_analysis_job,
@@ -1187,13 +1187,13 @@ def start_watchlist_analysis_scheduler():
         max_instances=1,
         coalesce=True,
     )
-    logger.info("🟢 Watchlist AI analysis scheduler started (Mon-Fri at 8:45 AM IST)")
+    logger.info("Watchlist AI analysis scheduler started (Mon-Fri at 8:45 AM IST)")
 
 
 def start_nifty100_reconciliation_scheduler():
     """Schedule daily AI analysis for the Nifty100 universe at 8:55 AM IST (Mon-Fri)."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start Nifty100 reconciliation scheduler: main scheduler not running")
+        logger.warning("Cannot start Nifty100 reconciliation scheduler: main scheduler not running")
         return
 
     def _nifty100_job():
@@ -1202,7 +1202,7 @@ def start_nifty100_reconciliation_scheduler():
             count = run_nifty100_reconciliation()
             logger.info("🤖 Nifty100 reconciliation: queued %d jobs", count)
         except Exception as e:
-            logger.warning("⚠️ Nifty100 reconciliation job failed: %s", e)
+            logger.warning("Nifty100 reconciliation job failed: %s", e)
 
     scheduler.add_job(
         func=_nifty100_job,
@@ -1215,13 +1215,13 @@ def start_nifty100_reconciliation_scheduler():
         max_instances=1,
         coalesce=True,
     )
-    logger.info("🟢 Nifty100 reconciliation scheduler started (Mon-Fri at 8:55 AM IST)")
+    logger.info("Nifty100 reconciliation scheduler started (Mon-Fri at 8:55 AM IST)")
 
 
 def start_holdings_reconciliation_scheduler():
     """Schedule daily AI analysis for Zerodha holdings at 9:05 AM IST (Mon-Fri)."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start holdings reconciliation scheduler: main scheduler not running")
+        logger.warning("Cannot start holdings reconciliation scheduler: main scheduler not running")
         return
 
     def _holdings_job():
@@ -1230,7 +1230,7 @@ def start_holdings_reconciliation_scheduler():
             count = run_holdings_reconciliation()
             logger.info("🤖 Holdings reconciliation: queued %d jobs", count)
         except Exception as e:
-            logger.warning("⚠️ Holdings reconciliation job failed: %s", e)
+            logger.warning("Holdings reconciliation job failed: %s", e)
 
     scheduler.add_job(
         func=_holdings_job,
@@ -1243,13 +1243,13 @@ def start_holdings_reconciliation_scheduler():
         max_instances=1,
         coalesce=True,
     )
-    logger.info("🟢 Holdings reconciliation scheduler started (Mon-Fri at 9:05 AM IST)")
+    logger.info("Holdings reconciliation scheduler started (Mon-Fri at 9:05 AM IST)")
 
 
 def start_scalp_trading_scheduler():
     """Start 5-minute scalp paper trading scheduler."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start scalp trading scheduler: main scheduler not running")
+        logger.warning("Cannot start scalp trading scheduler: main scheduler not running")
         return
     
     from app.core.scalp.scalp_paper_trader import _scalp_trading_job
@@ -1265,16 +1265,267 @@ def start_scalp_trading_scheduler():
         max_instances=1,
         coalesce=True,
     )
-    logger.info("🟢 Scalp trading scheduler started (every 5 min, Mon-Fri 9:20 AM - 3:15 PM IST)")
+    logger.info("Scalp trading scheduler started (every 5 min, Mon-Fri 9:20 AM - 3:15 PM IST)")
 
 
 def start_holdings_auto_exit_scheduler():
     """Start holdings auto-exit scheduler (every 1 min during market hours)."""
     if not scheduler.running:
-        logger.warning("⚠️ Cannot start holdings auto-exit scheduler: main scheduler not running")
+        logger.warning("Cannot start holdings auto-exit scheduler: main scheduler not running")
         return
 
     from app.core.exit.holdings_auto_exit import start_holdings_exit_scheduler
     start_holdings_exit_scheduler(scheduler)
-    logger.info("🟢 Holdings auto-exit scheduler registered")
+    logger.info("Holdings auto-exit scheduler registered")
 
+
+# -- NSE High-Impact Filing Alerts -----------------------------------------
+
+# Tracks already-notified filings so we don't re-alert on the same announcement.
+# Key: "SYMBOL|headline[:80]"  Value: epoch timestamp when first seen.
+_NOTIFIED_FILINGS: dict = {}
+_FILING_DEDUP_TTL = 3600 * 6  # 6 hours
+# Epoch of the last successful poll -- only filings newer than this are alerted.
+# Initialised to (now - 10 min) so the very first run picks up recent filings
+# but not the entire historical backlog.
+import time as _time
+_LAST_FILING_POLL_AT: float = _time.time() - 86400  # 24 hours ago on startup — catches all of today's filings
+_IS_FIRST_FILING_RUN: bool = True  # cap alerts on first run to avoid flood
+
+# Categories that are always treated as HIGH impact regardless of keyword match
+_HIGH_IMPACT_CATEGORIES = {
+    "acquisition", "merger", "amalgamation", "takeover", "open offer",
+    "buyback", "delisting", "rights issue", "qip", "fpo", "ipo",
+    "board meeting", "dividend", "bonus", "stock split", "results",
+    "quarterly results", "annual results", "financial results",
+    "change in management", "ceo", "md", "director", "resignation",
+    "regulatory", "sebi", "nclt", "insolvency", "fraud", "penalty",
+    "litigation", "court order", "fir", "arrest",
+    # Order wins / contracts — NSE desc field uses these exact phrases
+    "bagging", "receiving of orders", "order win", "order receipt",
+    "letter of award", "loa", "letter of intent", "loi",
+    "new order", "work order", "project award",
+}
+
+
+def _classify_filing_impact(headline: str, category: str) -> str:
+    """Return HIGH / MEDIUM / LOW based on headline and category keywords."""
+    # NSE stopped populating attchmntType — treat the headline as the primary signal
+    text = (headline + " " + category).lower()
+    for kw in _HIGH_IMPACT_CATEGORIES:
+        if kw in text:
+            return "HIGH"
+    medium_kws = {
+        "agreement", "mou", "joint venture", "subsidiary", "investment",
+        "capacity", "expansion", "order", "contract", "award",
+        "rating", "credit", "debt", "ncd", "debenture",
+        "press release", "investor presentation", "analyst",
+        "strategic", "technical", "manufacturing",
+        "arrangements", "collaboration", "partnership",
+    }
+    for kw in medium_kws:
+        if kw in text:
+            return "MEDIUM"
+    return "LOW"
+
+
+def _check_nse_high_impact_filings():
+    """
+    Poll NSE corporate announcements every 5 minutes.
+    Sends Telegram + in-app notification for HIGH and MEDIUM impact filings.
+    Deduplicates within a 6-hour window so the same filing is never sent twice.
+    Only alerts on filings newer than the previous poll to prevent startup flood.
+    """
+    import time
+    global _LAST_FILING_POLL_AT, _IS_FIRST_FILING_RUN
+
+    logger.debug("Checking NSE high-impact filings")
+
+    try:
+        from app.api.routes.nse_data import _nse_get
+        data = _nse_get(
+            "/api/corporate-announcements",
+            "/companies-listing/corporate-filings-announcements",
+            params={"index": "equities"},
+        )
+    except Exception as e:
+        logger.warning("NSE filing poll failed: %s", e)
+        return
+
+    if not data:
+        logger.debug("NSE filing poll returned no data")
+        return
+
+    rows = data if isinstance(data, list) else (data.get("data") or [])
+
+    now = time.time()
+    expired = [k for k, v in _NOTIFIED_FILINGS.items() if now - v > _FILING_DEDUP_TTL]
+    for k in expired:
+        _NOTIFIED_FILINGS.pop(k, None)
+
+    _new_poll_at = now
+
+    def _parse_nse_ts(ts_str: str) -> float:
+        if not ts_str:
+            return 0.0
+        from datetime import datetime as _dt, timezone
+        import pytz as _pytz
+        _ist = _pytz.timezone("Asia/Kolkata")
+        for fmt in ("%d-%b-%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d-%b-%Y"):
+            try:
+                return _ist.localize(_dt.strptime(ts_str.strip(), fmt)).timestamp()
+            except ValueError:
+                continue
+        return 0.0
+
+    db = SessionLocal()
+    try:
+        from app.services.notifications import NotificationService
+        svc = NotificationService(db)
+
+        notified = 0
+        # First run: only HIGH impact, cap at 5 to avoid Telegram flood from backlog
+        first_run_cap = 5 if _IS_FIRST_FILING_RUN else 999
+
+        for row in rows[:80]:
+            if notified >= first_run_cap:
+                break
+
+            symbol = (row.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+
+            headline = (
+                row.get("desc") or row.get("attchmntText") or
+                row.get("subject") or row.get("purpose") or ""
+            ).strip()
+            if not headline:
+                continue
+
+            category = (row.get("attchmntType") or row.get("category") or "Announcement").strip()
+            company = (row.get("sm_name") or row.get("companyName") or symbol).strip()
+            pdf_url = row.get("attchmntFile") or row.get("pdfUrl")
+            published_at = row.get("sort_date") or row.get("date") or ""
+
+            # Skip filings older than the last poll window (prevents startup flood)
+            filing_ts = _parse_nse_ts(published_at)
+            if filing_ts and filing_ts < _LAST_FILING_POLL_AT:
+                continue
+
+            impact = _classify_filing_impact(headline, category)
+            if impact == "LOW":
+                continue
+            # First run: only HIGH to avoid flooding with MEDIUM backlog
+            if _IS_FIRST_FILING_RUN and impact != "HIGH":
+                continue
+
+            dedup_key = f"{symbol}|{headline[:80]}"
+            if dedup_key in _NOTIFIED_FILINGS:
+                continue
+
+            _NOTIFIED_FILINGS[dedup_key] = now
+            svc.notify_nse_filing(
+                symbol=symbol,
+                company=company,
+                headline=headline,
+                category=category,
+                impact=impact,
+                pdf_url=pdf_url,
+                published_at=published_at,
+            )
+            notified += 1
+
+        if notified:
+            logger.info("NSE filing alerts sent: %d", notified)
+        else:
+            logger.info("NSE filing check: no new HIGH/MEDIUM filings found")
+
+        # Advance poll cursor so next run only sees genuinely new filings
+        _LAST_FILING_POLL_AT = _new_poll_at
+        _IS_FIRST_FILING_RUN = False
+
+    except Exception:
+        logger.exception("NSE filing notification job failed")
+    finally:
+        db.close()
+
+
+def _nse_snapshot_job():
+    """
+    Proactively fetch and persist all NSE data types to DB every 30 minutes.
+    Each fetch also updates the in-process TTL cache, so API responses are fast.
+    """
+    logger.info("⏱️ Running NSE snapshot job")
+    from app.api.routes.nse_data import (
+        _nse_get, _cache_set, _persist_nse_snapshot,
+        _CACHE,
+    )
+    from datetime import datetime
+
+    def _run(data_type, path, referer, params=None):
+        try:
+            data = _nse_get(path, referer, params)
+            if data is not None:
+                _persist_nse_snapshot(data_type, data)
+                logger.debug("NSE snapshot saved: %s", data_type)
+        except Exception as e:
+            logger.warning("NSE snapshot job failed for %s: %s", data_type, e)
+
+    _run("vix",               "/api/allIndices",                    "/market-data-pre-open/")
+    _run("block_deals",       "/api/block-deal",                    "/market-data-pre-open/block-deal")
+    _run("fo_ban",            "/api/fo-sec-ban",                    "/market-data-pre-open/fo-sec-ban")
+    _run("corporate_actions", "/api/corporates-corporateActions",   "/companies-listing/corporate-filings-corporate-actions", {"index": "equities"})
+    _run("announcements",     "/api/corporate-announcements",       "/companies-listing/corporate-filings-announcements",     {"index": "equities"})
+    _run("insider_trading",   "/api/corporate-announcements",       "/companies-listing/corporate-filings-announcements",     {"index": "sast"})
+    _run("market_turnover",   "/api/market-turnover",               "/market-data-pre-open/")
+    _run("ban_history",       "/api/fo-sec-ban",                    "/market-data-pre-open/fo-sec-ban")
+    logger.info("✅ NSE snapshot job complete")
+
+
+def start_nse_snapshot_scheduler():
+    """Persist all NSE data to DB every 30 minutes (no time gate)."""
+    if not scheduler.running:
+        logger.warning("Cannot start NSE snapshot scheduler: main scheduler not running")
+        return
+
+    from apscheduler.triggers.interval import IntervalTrigger
+    import threading
+
+    scheduler.add_job(
+        func=_nse_snapshot_job,
+        trigger=IntervalTrigger(minutes=30),
+        id="nse_snapshot_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+    threading.Thread(target=_nse_snapshot_job, name="nse-snapshot-initial", daemon=True).start()
+    logger.info("NSE snapshot scheduler started (every 30 min + immediate on startup)")
+
+
+def start_nse_filing_alerts_scheduler():
+    """
+    Poll NSE corporate announcements every 30 minutes (always, no time gate).
+    Fires once immediately on startup, then every 30 min.
+    """
+    if not scheduler.running:
+        logger.warning("Cannot start NSE filing alerts scheduler: main scheduler not running")
+        return
+
+    from apscheduler.triggers.interval import IntervalTrigger
+    import threading
+
+    scheduler.add_job(
+        func=_check_nse_high_impact_filings,
+        trigger=IntervalTrigger(minutes=30),
+        id="nse_filing_alerts_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
+
+    # Fire immediately in a background thread (avoids APScheduler clock skew issues)
+    threading.Thread(target=_check_nse_high_impact_filings, name="nse-filing-initial", daemon=True).start()
+    logger.info("NSE filing alerts scheduler started (every 30 min + immediate on startup)")

@@ -9,11 +9,11 @@ import logging
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from datetime import datetime, date as _date
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/nse", tags=["nse_data"])
@@ -143,6 +143,7 @@ async def get_vix():
         "timestamp": datetime.now().isoformat(),
     }
     _cache_set("vix", result, ttl_seconds=180)
+    _persist_nse_snapshot("vix", result)
     return result
 
 
@@ -173,7 +174,7 @@ async def get_block_deals():
         except Exception as e:
             logger.warning("block deals fetch error: %s", e)
         try:
-            data = _nse_get("/api/bulk-deal", "/market-data-pre-open/bulk-deal")
+            data = _nse_get("/api/bulk-deals", "/market-data-pre-open/bulk-deals")
             if data and isinstance(data, dict):
                 for row in (data.get("data") or data.get("bulkDeal") or []):
                     results["bulk_deals"].append({
@@ -194,6 +195,7 @@ async def get_block_deals():
     results["total"] = len(results["block_deals"]) + len(results["bulk_deals"])
     results["timestamp"] = datetime.now().isoformat()
     _cache_set("block_deals", results, ttl_seconds=300)
+    _persist_nse_snapshot("block_deals", results)
     return results
 
 
@@ -209,7 +211,7 @@ async def get_fo_ban():
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(
         _nse_executor,
-        lambda: _nse_get("/api/fo-secban", "/market-data-pre-open/fo-sec-ban"),
+        lambda: _nse_get("/api/fo-sec-ban", "/market-data-pre-open/fo-sec-ban"),
     )
 
     banned: List[str] = []
@@ -227,6 +229,7 @@ async def get_fo_ban():
         "timestamp": datetime.now().isoformat(),
     }
     _cache_set("fo_ban", result, ttl_seconds=600)
+    _persist_nse_snapshot("fo_ban", result)
     return result
 
 
@@ -286,6 +289,7 @@ async def get_corporate_actions(days_ahead: int = 30):
 
     result = {"actions": actions, "count": len(actions), "timestamp": datetime.now().isoformat()}
     _cache_set(cache_key, result, ttl_seconds=900)
+    _persist_nse_snapshot("corporate_actions", result)
     return result
 
 
@@ -341,6 +345,8 @@ async def get_announcements(symbol: str = ""):
 
     result = {"data": items, "count": len(items), "symbol": sym, "timestamp": datetime.now().isoformat()}
     _cache_set(cache_key, result, ttl_seconds=600)
+    if not sym:  # only persist the "all announcements" snapshot, not per-symbol
+        _persist_nse_snapshot("announcements", result)
     return result
 
 
@@ -358,27 +364,19 @@ async def get_insider_trading():
 
     def _fetch():
         raw_rows: List[Dict] = []
-        try:
-            data = _nse_get(
-                "/api/corporates-sast",
-                "/companies-listing/corporate-filings-insider-trading",
-            )
-            if data:
-                raw_rows = data if isinstance(data, list) else (data.get("data") or [])
-        except Exception as e:
-            logger.warning("insider sast primary error: %s", e)
-
-        if not raw_rows:
+        # NSE renamed /api/corporates-sast — try both current paths
+        for sast_path, sast_referer, sast_params in [
+            ("/api/corporate-announcements", "/companies-listing/corporate-filings-announcements", {"index": "sast"}),
+            ("/api/corporates-sast", "/companies-listing/corporate-filings-insider-trading", None),
+        ]:
             try:
-                data = _nse_get(
-                    "/api/corporate-announcements",
-                    "/companies-listing/corporate-filings-announcements",
-                    params={"index": "sast"},
-                )
+                data = _nse_get(sast_path, sast_referer, params=sast_params)
                 if data:
                     raw_rows = data if isinstance(data, list) else (data.get("data") or [])
+                if raw_rows:
+                    break
             except Exception as e:
-                logger.warning("insider announcements fallback error: %s", e)
+                logger.warning("insider fetch %s error: %s", sast_path, e)
         return raw_rows
 
     loop = asyncio.get_running_loop()
@@ -414,4 +412,395 @@ async def get_insider_trading():
 
     result = {"data": items, "count": len(items), "timestamp": datetime.now().isoformat()}
     _cache_set("insider_trading", result, ttl_seconds=300)
+    _persist_nse_snapshot("insider_trading", result)
     return result
+
+
+# ── Short Selling ────────────────────────────────────────────────────────────
+
+@router.get("/short-selling")
+async def get_short_selling():
+    """NSE short selling data. Cached 10 minutes."""
+    cached = _cache_get("short_selling")
+    if cached:
+        return cached
+
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(
+        _nse_executor,
+        lambda: _nse_get("/api/short-selling", "/market-data-pre-open/short-selling"),
+    )
+
+    items: List[Dict] = []
+    rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
+    for row in rows[:100]:
+        symbol = (row.get("symbol") or row.get("Symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        items.append({
+            "symbol":       symbol,
+            "company":      row.get("companyName") or row.get("name") or symbol,
+            "quantity":     row.get("shortSellQty") or row.get("quantity") or 0,
+            "trade_date":   row.get("tradeDate") or row.get("date") or "",
+            "series":       row.get("series") or "EQ",
+        })
+
+    result = {"data": items, "count": len(items), "timestamp": datetime.now().isoformat()}
+    _cache_set("short_selling", result, ttl_seconds=600)
+    _persist_nse_snapshot("short_selling", result)
+    return result
+
+
+# ── Participant-wise OI ────────────────────────────────────────────────────────
+
+@router.get("/participant-oi")
+async def get_participant_oi():
+    """FII/DII/Pro/Client participant-wise OI in index & stock F&O. Cached 10 minutes."""
+    cached = _cache_get("participant_oi")
+    if cached:
+        return cached
+
+    def _fetch():
+        results = {}
+        for key, params in [
+            ("index_futures",  {"type": "index",  "instrument": "FUTSTK"}),
+            ("stock_futures",  {"type": "equity", "instrument": "FUTSTK"}),
+            ("index_options",  {"type": "index",  "instrument": "OPTSTK"}),
+        ]:
+            try:
+                data = _nse_get(
+                    "/api/participant-wise-trading-data",
+                    "/market-data-pre-open/derivatives",
+                    params=params,
+                )
+                if data:
+                    rows = data if isinstance(data, list) else (data.get("data") or [])
+                    results[key] = [
+                        {
+                            "client_type": r.get("clientType") or r.get("client_type") or "",
+                            "buy_contracts": r.get("buyContracts") or r.get("buy") or 0,
+                            "sell_contracts": r.get("sellContracts") or r.get("sell") or 0,
+                            "net_contracts": r.get("netContracts") or r.get("net") or 0,
+                            "oi_long": r.get("openInterestLong") or r.get("oi_long") or 0,
+                            "oi_short": r.get("openInterestShort") or r.get("oi_short") or 0,
+                            "oi_net": r.get("openInterestNet") or r.get("oi_net") or 0,
+                        }
+                        for r in rows
+                    ]
+            except Exception as e:
+                logger.warning("participant OI %s error: %s", key, e)
+                results[key] = []
+        return results
+
+    loop = asyncio.get_running_loop()
+    results = await loop.run_in_executor(_nse_executor, _fetch)
+    results["timestamp"] = datetime.now().isoformat()
+    _cache_set("participant_oi", results, ttl_seconds=600)
+    _persist_nse_snapshot("participant_oi", results)
+    return results
+
+
+# ── Forthcoming Corporate Actions ─────────────────────────────────────────────
+
+@router.get("/forthcoming-actions")
+async def get_forthcoming_actions():
+    """Upcoming dividends, splits, bonus before ex-date. Cached 30 minutes."""
+    cached = _cache_get("forthcoming_actions")
+    if cached:
+        return cached
+
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(
+        _nse_executor,
+        lambda: _nse_get(
+            "/api/corporates-forthcoming",
+            "/companies-listing/corporate-filings-corporate-actions",
+            params={"index": "equities"},
+        ),
+    )
+
+    items: List[Dict] = []
+    rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
+    for row in rows[:80]:
+        symbol = (row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        items.append({
+            "symbol":      symbol,
+            "company":     row.get("companyName") or row.get("name") or symbol,
+            "action_type": row.get("purpose") or row.get("subject") or "Corporate Action",
+            "ex_date":     row.get("exDate") or row.get("exDt") or "",
+            "record_date": row.get("recordDate") or row.get("recDt") or "",
+            "details":     row.get("remarks") or row.get("details") or "",
+            "series":      row.get("series") or "EQ",
+        })
+
+    result = {"data": items, "count": len(items), "timestamp": datetime.now().isoformat()}
+    _cache_set("forthcoming_actions", result, ttl_seconds=1800)
+    _persist_nse_snapshot("forthcoming_actions", result)
+    return result
+
+
+# ── 52-Week High / Low Movers ─────────────────────────────────────────────────
+
+@router.get("/52week")
+async def get_52week_movers():
+    """Stocks hitting 52-week highs and lows today. Cached 15 minutes."""
+    cached = _cache_get("52week")
+    if cached:
+        return cached
+
+    def _fetch():
+        highs, lows = [], []
+        for category, bucket in [("52W_HIGH", highs), ("52W_LOW", lows)]:
+            try:
+                data = _nse_get(
+                    "/api/live-analysis-data",
+                    "/market-data-pre-open/",
+                    params={"index": category},
+                )
+                rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
+                for r in rows[:50]:
+                    symbol = (r.get("symbol") or r.get("Symbol") or "").strip().upper()
+                    if not symbol:
+                        continue
+                    bucket.append({
+                        "symbol":  symbol,
+                        "company": r.get("companyName") or r.get("name") or symbol,
+                        "ltp":     r.get("lastPrice") or r.get("ltp") or 0,
+                        "high52":  r.get("yearHigh") or r.get("52wHigh") or 0,
+                        "low52":   r.get("yearLow") or r.get("52wLow") or 0,
+                        "change_pct": r.get("pChange") or r.get("changePct") or 0,
+                    })
+            except Exception as e:
+                logger.warning("52week %s error: %s", category, e)
+        return {"highs": highs, "lows": lows}
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(_nse_executor, _fetch)
+    result["timestamp"] = datetime.now().isoformat()
+    _cache_set("52week", result, ttl_seconds=900)
+    _persist_nse_snapshot("52week", result)
+    return result
+
+
+# ── Market Turnover ───────────────────────────────────────────────────────────
+
+@router.get("/market-turnover")
+async def get_market_turnover():
+    """Daily cash + F&O market turnover. Cached 15 minutes."""
+    cached = _cache_get("market_turnover")
+    if cached:
+        return cached
+
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(
+        _nse_executor,
+        lambda: _nse_get("/api/market-turnover", "/market-data-pre-open/"),
+    )
+
+    result: Dict = {"cash": {}, "fno": {}, "raw": data, "timestamp": datetime.now().isoformat()}
+    if data and isinstance(data, dict):
+        result["cash"] = {
+            "total_turnover": data.get("totalTurnover") or data.get("cashTurnover") or 0,
+            "traded_value":   data.get("tradedValue") or 0,
+            "date":           data.get("date") or "",
+        }
+        result["fno"] = {
+            "futures_turnover": data.get("futuresTurnover") or 0,
+            "options_turnover": data.get("optionsTurnover") or 0,
+            "total_fno":        data.get("totalFnoTurnover") or 0,
+        }
+
+    _cache_set("market_turnover", result, ttl_seconds=900)
+    _persist_nse_snapshot("market_turnover", result)
+    return result
+
+
+# ── F&O Ban History ───────────────────────────────────────────────────────────
+
+@router.get("/ban-history")
+async def get_ban_history():
+    """
+    Tracks F&O ban entries/exits by comparing today's ban list against yesterday's.
+    Cached 10 minutes.
+    """
+    cached = _cache_get("ban_history")
+    if cached:
+        return cached
+
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(
+        _nse_executor,
+        lambda: _nse_get("/api/fo-sec-ban", "/market-data-pre-open/fo-sec-ban"),
+    )
+
+    current: List[str] = []
+    if data:
+        if isinstance(data, list):
+            current = [str(s).strip().upper() for s in data if s]
+        elif isinstance(data, dict):
+            current = [str(s).strip().upper() for s in (data.get("data") or data.get("secBanList") or []) if s]
+
+    # Load previous snapshot from cache key "ban_prev"
+    prev_entry = _CACHE.get("ban_prev")
+    previous: List[str] = prev_entry[0] if prev_entry else []
+
+    entered = [s for s in current if s not in previous]
+    exited  = [s for s in previous if s not in current]
+
+    # Save current as new previous
+    _cache_set("ban_prev", current, ttl_seconds=86400)
+
+    result = {
+        "current": current,
+        "entered_today": entered,
+        "exited_today": exited,
+        "count": len(current),
+        "timestamp": datetime.now().isoformat(),
+    }
+    _cache_set("ban_history", result, ttl_seconds=600)
+    _persist_nse_snapshot("ban_history", result)
+    return result
+
+
+# ── DB persistence helper ─────────────────────────────────────────────────
+
+def _persist_nse_snapshot(data_type: str, payload: Any) -> None:
+    """
+    Upsert a snapshot row for today into nse_snapshots.
+    Called after every successful live fetch so the DB always has the latest.
+    """
+    try:
+        from app.db.session import SessionLocal
+        from app.db.models_nse import NseSnapshot
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from sqlalchemy import text
+
+        today = _date.today()
+        db = SessionLocal()
+        try:
+            existing = (
+                db.query(NseSnapshot)
+                .filter(NseSnapshot.data_type == data_type, NseSnapshot.trade_date == today)
+                .first()
+            )
+            if existing:
+                existing.payload = payload
+                existing.fetched_at = datetime.now()
+            else:
+                db.add(NseSnapshot(data_type=data_type, trade_date=today, payload=payload))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("nse_data: DB persist failed for %s: %s", data_type, e)
+
+
+# ── History read endpoint ──────────────────────────────────────────────────
+
+@router.get("/snapshots/{data_type}")
+async def get_nse_snapshots(
+    data_type: str,
+    days: int = Query(30, ge=1, le=365, description="How many days of history to return"),
+):
+    """
+    Return stored NSE snapshots for a given data_type.
+    data_type: vix | block_deals | fo_ban | corporate_actions | announcements |
+               insider_trading | short_selling | participant_oi |
+               forthcoming_actions | 52week | market_turnover | ban_history
+    """
+    from app.db.session import SessionLocal
+    from app.db.models_nse import NseSnapshot
+    from datetime import timedelta
+
+    db = SessionLocal()
+    try:
+        cutoff = _date.today() - timedelta(days=days)
+        rows = (
+            db.query(NseSnapshot)
+            .filter(
+                NseSnapshot.data_type == data_type,
+                NseSnapshot.trade_date >= cutoff,
+            )
+            .order_by(NseSnapshot.trade_date.desc())
+            .all()
+        )
+        return {
+            "data_type": data_type,
+            "count": len(rows),
+            "snapshots": [
+                {
+                    "trade_date": str(r.trade_date),
+                    "fetched_at": r.fetched_at.isoformat() if r.fetched_at else None,
+                    "payload": r.payload,
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        db.close()
+
+
+# ── Debug: manually trigger NSE filing alert job ───────────────────────────
+
+@router.post("/filing-alerts/run-now")
+async def run_filing_alerts_now():
+    """
+    Manually trigger the NSE filing alert job once.
+    Clears the dedup cache first so all current filings are re-evaluated.
+    Returns a summary of what was found and sent.
+    """
+    from app.core.market.scheduler import (
+        _check_nse_high_impact_filings,
+        _NOTIFIED_FILINGS,
+        _classify_filing_impact,
+    )
+    import os
+
+    # Clear dedup so we can see what would fire right now
+    _NOTIFIED_FILINGS.clear()
+
+    # Check Telegram config
+    tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
+
+    # Fetch raw data to show what the job sees
+    data = _nse_get(
+        "/api/corporate-announcements",
+        "/companies-listing/corporate-filings-announcements",
+        params={"index": "equities"},
+    )
+    rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
+
+    preview = []
+    for row in rows[:20]:
+        symbol = (row.get("symbol") or "").strip().upper()
+        headline = (
+            row.get("desc") or row.get("attchmntText") or
+            row.get("subject") or row.get("purpose") or ""
+        ).strip()
+        category = (row.get("attchmntType") or row.get("category") or "Announcement").strip()
+        if symbol and headline:
+            preview.append({
+                "symbol": symbol,
+                "headline": headline[:100],
+                "category": category,
+                "impact": _classify_filing_impact(headline, category),
+            })
+
+    # Now actually run the job (will send Telegram for HIGH/MEDIUM)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _check_nse_high_impact_filings)
+
+    high_medium = [p for p in preview if p["impact"] in ("HIGH", "MEDIUM")]
+
+    return {
+        "telegram_configured": bool(tg_token and tg_chat),
+        "raw_rows_fetched": len(rows),
+        "preview_sample": preview,
+        "high_medium_count": len(high_medium),
+        "high_medium_filings": high_medium,
+        "job_triggered": True,
+        "timestamp": datetime.now().isoformat(),
+    }

@@ -93,6 +93,8 @@ from app.core.market.scheduler import (
     start_watchlist_analysis_scheduler,
     start_scalp_trading_scheduler,
     start_holdings_auto_exit_scheduler,
+    start_nse_filing_alerts_scheduler,
+    start_nse_snapshot_scheduler,
     initialize_vix_data,
     stop_scheduler,
 )
@@ -136,6 +138,7 @@ async def lifespan(app: FastAPI):
         from app.db.models_stock_holding import StockHolding  # noqa: F401 — stock holdings table
         from app.db.models_instruments import IndstocksInstrument  # noqa: F401
         from app.db.models_fundamentals import FundamentalsCache  # noqa: F401
+        from app.db.models_nse import NseSnapshot  # noqa: F401
         Base.metadata.create_all(bind=engine)
         ensure_auto_trader_schema(engine)
         ensure_ai_decisions_schema(engine)
@@ -210,6 +213,12 @@ async def lifespan(app: FastAPI):
 
             import threading
 
+            # Start the APScheduler instance first (always, regardless of broker)
+            from app.core.market.scheduler import scheduler as _apscheduler
+            if not _apscheduler.running:
+                _apscheduler.start()
+                logger.info("✅ APScheduler started")
+
             # Always start broker-independent schedulers
             start_auto_exit_scheduler()
             start_expiry_exit_scheduler()
@@ -218,6 +227,8 @@ async def lifespan(app: FastAPI):
             start_watchlist_analysis_scheduler()
             start_scalp_trading_scheduler()
             start_holdings_auto_exit_scheduler()
+            start_nse_filing_alerts_scheduler()
+            start_nse_snapshot_scheduler()
             logger.info("✅ Broker-independent schedulers started")
 
             # Only start broker-dependent schedulers if a token exists

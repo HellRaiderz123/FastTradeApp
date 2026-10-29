@@ -512,6 +512,29 @@ export const safetyAPI = {
   getExpiryWarnings: () => api.get('/safety/expiry-warnings'),
 };
 
+export const fiiDiiAPI = {
+  getSummary: () => api.get('/fii-dii/summary'),
+  getHistory: (days = 60) => api.get(`/fii-dii/history?days=${days}`),
+};
+
+export const nseAPI = {
+  getParticipantOI: () => api.get('/nse/participant-oi'),
+  getShortSelling: () => api.get('/nse/short-selling'),
+  get52Week: () => api.get('/nse/52week'),
+  getMarketTurnover: () => api.get('/nse/market-turnover'),
+};
+
+export const fundamentalsAPI = {
+  getProfile: (symbol: string) => api.get(`/fundamentals/profile/${symbol}`),
+  getFinancials: (symbol: string) => api.get(`/fundamentals/financials/${symbol}`),
+  getPeers: (symbol: string) => api.get(`/fundamentals/peers/${symbol}`),
+};
+
+export const candleAPI = {
+  getCandles: (symbol: string, timeframe: string, limit = 100) =>
+    api.get(`/candles/${symbol}`, { params: { timeframe, limit } }),
+};
+
 export const settingsAPI = {
   getZerodhaSettings: () => api.get('/settings/zerodha').then((res) => res.data),
   saveZerodhaCredentials: (credentials: { api_key: string; api_secret: string }) =>

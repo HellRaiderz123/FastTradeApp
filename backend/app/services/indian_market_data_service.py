@@ -426,19 +426,35 @@ def get_indian_market_data_service() -> IndianMarketDataService:
 # Sync wrappers for use in non-async contexts
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _run_async(coro):
+    """Run a coroutine safely regardless of whether an event loop is running."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        return asyncio.run(coro)
+
+
 def get_nse_option_chain_sync(underlying: str, expiry: Optional[str] = None) -> Optional[OptionChainData]:
     """Synchronous wrapper for get_option_chain."""
     service = get_indian_market_data_service()
-    return asyncio.run(service.get_option_chain(underlying, expiry))
+    return _run_async(service.get_option_chain(underlying, expiry))
 
 
 def get_delivery_data_sync(symbol: str) -> Optional[DeliveryData]:
     """Synchronous wrapper for get_delivery_data."""
     service = get_indian_market_data_service()
-    return asyncio.run(service.get_delivery_data(symbol))
+    return _run_async(service.get_delivery_data(symbol))
 
 
 def get_macro_telemetry_sync() -> MacroTelemetry:
     """Synchronous wrapper for get_macro_telemetry."""
     service = get_indian_market_data_service()
-    return asyncio.run(service.get_macro_telemetry())
+    return _run_async(service.get_macro_telemetry())

@@ -1,279 +1,213 @@
 """
-Market Depth / Order Book API
-Level 2 market data with bid/ask ladder, spread analysis
+Market Depth / Order Book API — broker-agnostic.
+
+Fetches real Level 2 data from the active broker (Zerodha or INDMoney).
+INDstocks endpoint: GET /market/quotes/mkt
+Zerodha endpoint:   kite.quote() depth field
+
+Set ACTIVE_BROKER=ZERODHA or ACTIVE_BROKER=INDMONEY in backend/.env.
 """
 
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict
 import logging
-import random
+
+from app.services.market_data_service import get_market_data_service, MarketDepth
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/market-depth", tags=["market_depth"])
 
 
-def generate_mock_market_depth(symbol: str, spot_price: float) -> Dict[str, Any]:
-    """Generate realistic mock market depth data when live data is unavailable"""
-    
-    # Calculate tick size based on price (NSE tick rules)
-    if spot_price >= 500:
-        tick_size = 0.05
-    elif spot_price >= 100:
-        tick_size = 0.05
-    else:
-        tick_size = 0.05
-    
-    # Price step between levels (realistic: 1-3 ticks)
-    level_step = tick_size * random.randint(1, 3)
-    
-    # Calculate bid/ask spread (0.02% - 0.10% of price)
-    spread_pct = random.uniform(0.0002, 0.001)
-    spread = max(tick_size, round(spot_price * spread_pct / tick_size) * tick_size)
-    
-    mid_price = spot_price
-    best_bid = round(mid_price - (spread / 2), 2)
-    best_ask = round(mid_price + (spread / 2), 2)
-    
-    # Generate 5 levels of bids (descending prices)
-    bids = []
-    total_bid_qty = 0
-    
-    for i in range(5):
-        price = round(best_bid - (i * level_step), 2)
-        quantity = random.randint(50, 500) * 100
-        orders = random.randint(5, 25)
-        
-        bids.append({
-            "price": price,
-            "quantity": quantity,
-            "orders": orders,
-        })
-        total_bid_qty += quantity
-    
-    # Generate 5 levels of asks (ascending prices)
-    asks = []
-    total_ask_qty = 0
-    
-    for i in range(5):
-        price = round(best_ask + (i * level_step), 2)
-        quantity = random.randint(50, 500) * 100
-        orders = random.randint(5, 25)
-        
-        asks.append({
-            "price": price,
-            "quantity": quantity,
-            "orders": orders,
-        })
-        total_ask_qty += quantity
-    
-    # Calculate cumulative quantities for depth visualization
-    cumulative_bid_qty = 0
-    for bid in bids:
-        cumulative_bid_qty += bid["quantity"]
-        bid["cumulative_qty"] = cumulative_bid_qty
-    
-    cumulative_ask_qty = 0
-    for ask in asks:
-        cumulative_ask_qty += ask["quantity"]
-        ask["cumulative_qty"] = cumulative_ask_qty
-    
-    # Depth metrics
-    bid_ask_spread = best_ask - best_bid
-    spread_percentage = (bid_ask_spread / mid_price) * 100
-    
-    # Order flow imbalance (positive = bullish, negative = bearish)
-    imbalance = (total_bid_qty - total_ask_qty) / (total_bid_qty + total_ask_qty) * 100
-    
+def _depth_to_dict(depth: MarketDepth) -> Dict[str, Any]:
+    """Serialise a MarketDepth object to the API response shape."""
+    bids = [
+        {"price": lvl.price, "quantity": lvl.quantity, "orders": lvl.orders}
+        for lvl in depth.bids
+    ]
+    asks = [
+        {"price": lvl.price, "quantity": lvl.quantity, "orders": lvl.orders}
+        for lvl in depth.asks
+    ]
+
+    # Cumulative quantities for depth-chart visualisation
+    cum = 0
+    for b in bids:
+        cum += b["quantity"]
+        b["cumulative_qty"] = cum
+
+    cum = 0
+    for a in asks:
+        cum += a["quantity"]
+        a["cumulative_qty"] = cum
+
+    best_bid = bids[0]["price"] if bids and bids[0]["price"] else 0.0
+    best_ask = asks[0]["price"] if asks and asks[0]["price"] else 0.0
+    spread = round(best_ask - best_bid, 2) if best_bid and best_ask else 0.0
+    spread_pct = round(spread / best_bid * 100, 4) if best_bid else 0.0
+
+    total_bid_qty = depth.total_buy_qty or sum(b["quantity"] for b in bids)
+    total_ask_qty = depth.total_sell_qty or sum(a["quantity"] for a in asks)
+    total = total_bid_qty + total_ask_qty
+    imbalance = round((total_bid_qty - total_ask_qty) / total * 100, 2) if total else 0.0
+
     return {
-        "symbol": symbol,
-        "timestamp": "2026-02-07T10:30:00",
-        "spot_price": round(mid_price, 2),
+        "symbol": depth.symbol,
+        "timestamp": datetime.now().isoformat(),
+        "spot_price": round(depth.ltp, 2),
         "best_bid": round(best_bid, 2),
         "best_ask": round(best_ask, 2),
-        "spread": round(bid_ask_spread, 2),
-        "spread_percentage": round(spread_percentage, 4),
+        "spread": spread,
+        "spread_percentage": spread_pct,
         "bids": bids,
         "asks": asks,
         "total_bid_qty": total_bid_qty,
         "total_ask_qty": total_ask_qty,
         "total_bid_orders": sum(b["orders"] for b in bids),
         "total_ask_orders": sum(a["orders"] for a in asks),
-        "imbalance": round(imbalance, 2),
+        "imbalance": imbalance,
         "imbalance_direction": "bullish" if imbalance > 5 else "bearish" if imbalance < -5 else "neutral",
+        "volume": depth.volume,
+        "open": depth.open,
+        "high": depth.high,
+        "low": depth.low,
+        "prev_close": depth.prev_close,
+        "oi": depth.oi,
+        "data_source": depth.data_source,
     }
 
 
 @router.get("/depth/{symbol}")
-async def get_market_depth(symbol: str):
+async def get_market_depth(symbol: str, exchange: str = "NSE"):
     """
-    Get Level 2 market depth / order book for a symbol
-    
-    Args:
-        symbol: Stock symbol (e.g., RELIANCE, TCS)
-    
-    Returns:
-        {
-            "symbol": "RELIANCE",
-            "spot_price": 2650.50,
-            "best_bid": 2650.30,
-            "best_ask": 2650.70,
-            "spread": 0.40,
-            "spread_percentage": 0.0151,
-            "bids": [
-                {"price": 2650.30, "quantity": 15000, "orders": 12, "cumulative_qty": 15000},
-                {"price": 2649.80, "quantity": 22000, "orders": 18, "cumulative_qty": 37000},
-                ...
-            ],
-            "asks": [
-                {"price": 2650.70, "quantity": 18000, "orders": 15, "cumulative_qty": 18000},
-                {"price": 2651.20, "quantity": 25000, "orders": 20, "cumulative_qty": 43000},
-                ...
-            ],
-            "total_bid_qty": 85000,
-            "total_ask_qty": 92000,
-            "imbalance": -4.0,
-            "imbalance_direction": "neutral"
-        }
+    Get Level 2 market depth / order book for a symbol.
+
+    Uses the active broker (ACTIVE_BROKER env var).
+    - Zerodha: depth from kite.quote() depth field
+    - INDMoney: depth from /market/quotes/mkt endpoint
     """
     try:
         symbol = symbol.upper().strip()
-        
-        # Try to get real quote data with depth
-        spot_price = None
-        
-        from app.core.market.provider import fetch_ltp
-        try:
-            prices = fetch_ltp([symbol])
-            ltp_val = prices.get(symbol)
-            if ltp_val and float(ltp_val) > 0:
-                spot_price = float(ltp_val)
-        except Exception as e:
-            logger.warning(f"Failed to fetch LTP for {symbol}: {e}")
-        
-        # Fall back to mock data (use LTP if available, otherwise a reasonable default)
-        if spot_price is None:
-            spot_price = 1000.0  # Generic fallback
-            logger.info(f"Using default spot price for {symbol} mock depth (market may be closed)")
-        
-        mock_depth = generate_mock_market_depth(symbol, spot_price)
-        mock_depth["data_source"] = "simulated"
-        mock_depth["simulated_reason"] = "INDMoney/INDstocks API does not provide Level 2 market depth. Showing simulated order book for UI preview only."
-        return mock_depth
-    
-    except Exception as e:
-        logger.error(f"Market depth error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch market depth: {str(e)}")
+        exchange = exchange.upper().strip()
 
+        svc = get_market_data_service()
+        depth = svc.get_market_depth(symbol, exchange)
 
-@router.get("/depth/{symbol}/snapshot")
-async def get_depth_snapshot(symbol: str, interval: int = 5):
-    """
-    Get historical depth snapshots for the last N intervals
-    
-    Args:
-        symbol: Stock symbol
-        interval: Number of snapshots to return (default 5)
-    
-    Returns:
-        List of depth snapshots showing how order book evolved
-    """
-    try:
-        symbol = symbol.upper().strip()
-        
-        # Get current depth
-        current_depth = await get_market_depth(symbol)
-        spot_price = current_depth["spot_price"]
-        
-        # Generate historical snapshots (mock data)
-        snapshots = []
-        
-        for i in range(interval, 0, -1):
-            # Vary price slightly for historical snapshots
-            historical_price = spot_price * (1 + random.uniform(-0.002, 0.002))
-            snapshot = generate_mock_market_depth(symbol, historical_price)
-            
-            # Add timestamp (i minutes ago)
-            from datetime import datetime, timedelta
-            ts = datetime.now() - timedelta(minutes=i)
-            snapshot["timestamp"] = ts.strftime("%Y-%m-%dT%H:%M:%S")
-            
-            snapshots.append(snapshot)
-        
-        # Add current snapshot
-        snapshots.append(current_depth)
-        
-        return {
-            "symbol": symbol,
-            "snapshots": snapshots,
-            "count": len(snapshots),
-        }
-    
+        if not depth:
+            active = svc.get_active_adapter()
+            broker_name = active.name if active else "any broker"
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Could not fetch market depth for {symbol} from {broker_name}. "
+                    "Ensure your broker session is active (check Settings)."
+                ),
+            )
+
+        return _depth_to_dict(depth)
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Depth snapshot error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch depth snapshots: {str(e)}")
+        logger.error("Market depth error for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch market depth: {e}")
 
 
 @router.get("/depth/{symbol}/analysis")
-async def get_depth_analysis(symbol: str):
+async def get_depth_analysis(symbol: str, exchange: str = "NSE"):
     """
-    Get advanced depth analysis metrics
-    
-    Returns:
-        - Order book pressure (bid/ask dominance)
-        - Average order size
-        - Price levels with maximum liquidity
-        - Support/resistance from order book
+    Advanced depth analysis: spread rating, liquidity, order flow signal,
+    support/resistance from the live order book.
     """
     try:
-        depth = await get_market_depth(symbol)
-        
-        # Calculate analysis metrics
-        avg_bid_size = depth["total_bid_qty"] / len(depth["bids"]) if depth["bids"] else 0
-        avg_ask_size = depth["total_ask_qty"] / len(depth["asks"]) if depth["asks"] else 0
-        
-        avg_bid_orders = depth["total_bid_orders"] / len(depth["bids"]) if depth["bids"] else 0
-        avg_ask_orders = depth["total_ask_orders"] / len(depth["asks"]) if depth["asks"] else 0
-        
-        # Find max liquidity levels
-        max_bid_level = max(depth["bids"], key=lambda x: x["quantity"]) if depth["bids"] else None
-        max_ask_level = max(depth["asks"], key=lambda x: x["quantity"]) if depth["asks"] else None
-        
-        # Order book pressure
-        pressure = depth["imbalance"]
-        pressure_signal = "Strong Buy" if pressure > 15 else "Buy" if pressure > 5 else "Neutral" if abs(pressure) <= 5 else "Sell" if pressure > -15 else "Strong Sell"
-        
+        symbol = symbol.upper().strip()
+        svc = get_market_data_service()
+        depth = svc.get_market_depth(symbol, exchange.upper())
+
+        if not depth:
+            raise HTTPException(status_code=503, detail=f"Could not fetch depth for {symbol}")
+
+        d = _depth_to_dict(depth)
+
+        avg_bid_size = d["total_bid_qty"] / len(d["bids"]) if d["bids"] else 0
+        avg_ask_size = d["total_ask_qty"] / len(d["asks"]) if d["asks"] else 0
+        max_bid = max(d["bids"], key=lambda x: x["quantity"], default=None)
+        max_ask = max(d["asks"], key=lambda x: x["quantity"], default=None)
+        pressure = d["imbalance"]
+        signal = (
+            "Strong Buy" if pressure > 15 else
+            "Buy" if pressure > 5 else
+            "Strong Sell" if pressure < -15 else
+            "Sell" if pressure < -5 else
+            "Neutral"
+        )
+
         return {
-            "symbol": depth["symbol"],
-            "timestamp": depth["timestamp"],
-            "spot_price": depth["spot_price"],
+            "symbol": d["symbol"],
+            "timestamp": d["timestamp"],
+            "spot_price": d["spot_price"],
+            "data_source": d["data_source"],
             "spread_analysis": {
-                "absolute": depth["spread"],
-                "percentage": depth["spread_percentage"],
-                "rating": "tight" if depth["spread_percentage"] < 0.01 else "normal" if depth["spread_percentage"] < 0.05 else "wide",
+                "absolute": d["spread"],
+                "percentage": d["spread_percentage"],
+                "rating": "tight" if d["spread_percentage"] < 0.01 else "normal" if d["spread_percentage"] < 0.05 else "wide",
             },
             "liquidity": {
-                "total_bid_qty": depth["total_bid_qty"],
-                "total_ask_qty": depth["total_ask_qty"],
+                "total_bid_qty": d["total_bid_qty"],
+                "total_ask_qty": d["total_ask_qty"],
                 "avg_bid_size": round(avg_bid_size, 2),
                 "avg_ask_size": round(avg_ask_size, 2),
-                "max_bid_level": max_bid_level,
-                "max_ask_level": max_ask_level,
+                "max_bid_level": max_bid,
+                "max_ask_level": max_ask,
             },
             "order_flow": {
                 "imbalance": pressure,
-                "direction": depth["imbalance_direction"],
-                "signal": pressure_signal,
-                "avg_bid_orders": round(avg_bid_orders, 2),
-                "avg_ask_orders": round(avg_ask_orders, 2),
+                "direction": d["imbalance_direction"],
+                "signal": signal,
             },
             "support_resistance": {
-                "support": depth["bids"][0]["price"] if depth["bids"] else None,
-                "resistance": depth["asks"][0]["price"] if depth["asks"] else None,
-                "strong_support": max_bid_level["price"] if max_bid_level else None,
-                "strong_resistance": max_ask_level["price"] if max_ask_level else None,
+                "support": d["bids"][0]["price"] if d["bids"] else None,
+                "resistance": d["asks"][0]["price"] if d["asks"] else None,
+                "strong_support": max_bid["price"] if max_bid else None,
+                "strong_resistance": max_ask["price"] if max_ask else None,
             },
         }
-    
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Depth analysis error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to analyze depth: {str(e)}")
+        logger.error("Depth analysis error for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to analyze depth: {e}")
+
+
+@router.get("/depth/{symbol}/snapshot")
+async def get_depth_snapshot(symbol: str, exchange: str = "NSE", interval: int = 5):
+    """
+    Returns `interval` snapshots of the current depth (all fetched live).
+    Historical depth snapshots are not available from either broker API;
+    this endpoint returns the current live book repeated with staggered timestamps
+    for UI compatibility.
+    """
+    try:
+        symbol = symbol.upper().strip()
+        svc = get_market_data_service()
+        depth = svc.get_market_depth(symbol, exchange.upper())
+
+        if not depth:
+            raise HTTPException(status_code=503, detail=f"Could not fetch depth for {symbol}")
+
+        current = _depth_to_dict(depth)
+        snapshots = []
+        for i in range(interval, 0, -1):
+            snap = dict(current)
+            snap["timestamp"] = (datetime.now() - timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%S")
+            snapshots.append(snap)
+        snapshots.append(current)
+
+        return {"symbol": symbol, "snapshots": snapshots, "count": len(snapshots)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Depth snapshot error for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch depth snapshots: {e}")

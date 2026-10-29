@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   TrendingUp, TrendingDown, RefreshCw, Activity, BarChart3,
-  ArrowUpRight, ArrowDownRight, Minus, AlertCircle, Clock
+  ArrowUpRight, ArrowDownRight, Minus, AlertCircle, Clock,
+  TrendingDown as ShortIcon, Users, Layers, DollarSign
 } from 'lucide-react';
 import axios from 'axios';
 import { authTokenStore } from '../lib/api';
@@ -33,7 +34,7 @@ interface HistoryRecord {
   dii_buy: number; dii_sell: number; sentiment_score: number | null;
 }
 
-type Tab = 'cash' | 'fno' | 'chart' | 'history';
+type Tab = 'cash' | 'fno' | 'chart' | 'history' | 'participant' | 'short' | '52week' | 'turnover';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const api = axios.create({ baseURL: '/api/fii-dii' });
@@ -105,6 +106,15 @@ const FiiDii: React.FC = () => {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [extraData, setExtraData] = useState<Record<string, any>>({});
+  const [extraLoading, setExtraLoading] = useState(false);
+
+  const nseApi = useCallback(async (endpoint: string) => {
+    const t = authTokenStore.get();
+    const headers: HeadersInit = t ? { Authorization: `Bearer ${t}` } : {};
+    const r = await fetch(`/api/nse/${endpoint}`, { headers });
+    return r.json();
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -125,11 +135,29 @@ const FiiDii: React.FC = () => {
   useEffect(() => { load(); }, [load]);
 
   const tabs: { id: Tab; label: string; icon: React.ElementType }[] = [
-    { id: 'cash', label: 'Cash Flows', icon: TrendingUp },
-    { id: 'fno', label: 'F&O Positions', icon: BarChart3 },
-    { id: 'chart', label: 'Heatmap', icon: Activity },
-    { id: 'history', label: 'History', icon: Clock },
+    { id: 'cash',        label: 'Cash Flows',    icon: TrendingUp },
+    { id: 'fno',         label: 'F&O Positions', icon: BarChart3 },
+    { id: 'participant', label: 'Participant OI', icon: Users },
+    { id: 'chart',       label: 'Heatmap',       icon: Activity },
+    { id: 'history',     label: 'History',       icon: Clock },
+    { id: 'short',       label: 'Short Selling', icon: ShortIcon },
+    { id: '52week',      label: '52W Movers',    icon: Layers },
+    { id: 'turnover',    label: 'Turnover',      icon: DollarSign },
   ];
+
+  const loadExtra = useCallback(async (t: Tab) => {
+    if (extraData[t]) return;
+    setExtraLoading(true);
+    try {
+      let data: any;
+      if (t === 'participant') data = await nseApi('participant-oi');
+      else if (t === 'short')  data = await nseApi('short-selling');
+      else if (t === '52week') data = await nseApi('52week');
+      else if (t === 'turnover') data = await nseApi('market-turnover');
+      if (data) setExtraData(prev => ({ ...prev, [t]: data }));
+    } catch {}
+    finally { setExtraLoading(false); }
+  }, [extraData, nseApi]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -227,9 +255,9 @@ const FiiDii: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
         {tabs.map(({ id, label, icon: Icon }) => (
-          <button key={id} onClick={() => setTab(id)}
+          <button key={id} onClick={() => { setTab(id); loadExtra(id); }}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
               tab === id ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
             }`}>
@@ -372,6 +400,184 @@ const FiiDii: React.FC = () => {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── Participant OI Tab ── */}
+      {tab === 'participant' && (
+        <div className="space-y-4">
+          {extraLoading ? (
+            <div className="flex items-center justify-center py-10"><Activity size={24} className="text-emerald-400 animate-pulse" /></div>
+          ) : !extraData.participant ? (
+            <p className="text-slate-500 text-sm text-center py-10">No participant OI data available</p>
+          ) : (
+            (['index_futures', 'stock_futures', 'index_options'] as const).map(key => {
+              const rows: any[] = extraData.participant[key] || [];
+              if (!rows.length) return null;
+              return (
+                <div key={key} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+                  <p className="text-sm font-semibold text-white mb-3 capitalize">{key.replace('_', ' ')}</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-700/50 text-slate-400">
+                          <th className="text-left py-2 pr-3">Client Type</th>
+                          <th className="text-right py-2 pr-3">Buy</th>
+                          <th className="text-right py-2 pr-3">Sell</th>
+                          <th className="text-right py-2 pr-3">Net</th>
+                          <th className="text-right py-2 pr-3">OI Long</th>
+                          <th className="text-right py-2 pr-3">OI Short</th>
+                          <th className="text-right py-2">OI Net</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r, i) => (
+                          <tr key={i} className="border-b border-slate-700/20 hover:bg-slate-800/30">
+                            <td className="py-2 pr-3 text-white font-medium">{r.client_type}</td>
+                            <td className="text-right py-2 pr-3 text-emerald-400">{Number(r.buy_contracts||0).toLocaleString('en-IN')}</td>
+                            <td className="text-right py-2 pr-3 text-red-400">{Number(r.sell_contracts||0).toLocaleString('en-IN')}</td>
+                            <td className={`text-right py-2 pr-3 font-semibold ${(r.net_contracts||0)>=0?'text-emerald-400':'text-red-400'}`}>{Number(r.net_contracts||0).toLocaleString('en-IN')}</td>
+                            <td className="text-right py-2 pr-3 text-slate-300">{Number(r.oi_long||0).toLocaleString('en-IN')}</td>
+                            <td className="text-right py-2 pr-3 text-slate-300">{Number(r.oi_short||0).toLocaleString('en-IN')}</td>
+                            <td className={`text-right py-2 font-semibold ${(r.oi_net||0)>=0?'text-emerald-400':'text-red-400'}`}>{Number(r.oi_net||0).toLocaleString('en-IN')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* ── Short Selling Tab ── */}
+      {tab === 'short' && (
+        <div>
+          {extraLoading ? (
+            <div className="flex items-center justify-center py-10"><Activity size={24} className="text-emerald-400 animate-pulse" /></div>
+          ) : !extraData.short?.data?.length ? (
+            <p className="text-slate-500 text-sm text-center py-10">No short selling data available today</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700/50 text-slate-400 text-xs">
+                    <th className="text-left py-3 px-3">Symbol</th>
+                    <th className="text-left py-3 px-3">Company</th>
+                    <th className="text-right py-3 px-3">Short Qty</th>
+                    <th className="text-right py-3 px-3">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {extraData.short.data.map((r: any, i: number) => (
+                    <tr key={i} className="border-b border-slate-700/30 hover:bg-slate-800/30">
+                      <td className="py-2 px-3 text-white font-semibold">{r.symbol}</td>
+                      <td className="py-2 px-3 text-slate-300 text-xs">{r.company}</td>
+                      <td className="py-2 px-3 text-right text-red-400 font-medium">{Number(r.quantity||0).toLocaleString('en-IN')}</td>
+                      <td className="py-2 px-3 text-right text-slate-500 text-xs">{r.trade_date}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 52W Movers Tab ── */}
+      {tab === '52week' && (
+        <div className="space-y-4">
+          {extraLoading ? (
+            <div className="flex items-center justify-center py-10"><Activity size={24} className="text-emerald-400 animate-pulse" /></div>
+          ) : (
+            <>
+              {(['highs', 'lows'] as const).map(bucket => {
+                const rows: any[] = extraData['52week']?.[bucket] || [];
+                return (
+                  <div key={bucket} className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+                    <p className={`text-sm font-semibold mb-3 ${bucket==='highs'?'text-emerald-400':'text-red-400'}`}>
+                      {bucket==='highs' ? '🚀 52-Week Highs' : '📉 52-Week Lows'} ({rows.length})
+                    </p>
+                    {!rows.length ? (
+                      <p className="text-xs text-slate-500">No data available</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-700/50 text-slate-400">
+                              <th className="text-left py-2 pr-3">Symbol</th>
+                              <th className="text-right py-2 pr-3">LTP</th>
+                              <th className="text-right py-2 pr-3">52W High</th>
+                              <th className="text-right py-2 pr-3">52W Low</th>
+                              <th className="text-right py-2">Chg%</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map((r: any, i: number) => (
+                              <tr key={i} className="border-b border-slate-700/20 hover:bg-slate-800/30">
+                                <td className="py-2 pr-3 text-white font-semibold">{r.symbol}</td>
+                                <td className="text-right py-2 pr-3 text-white">₹{Number(r.ltp||0).toLocaleString('en-IN')}</td>
+                                <td className="text-right py-2 pr-3 text-emerald-400">₹{Number(r.high52||0).toLocaleString('en-IN')}</td>
+                                <td className="text-right py-2 pr-3 text-red-400">₹{Number(r.low52||0).toLocaleString('en-IN')}</td>
+                                <td className={`text-right py-2 font-semibold ${(r.change_pct||0)>=0?'text-emerald-400':'text-red-400'}`}>
+                                  {(r.change_pct||0)>=0?'+':''}{Number(r.change_pct||0).toFixed(2)}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Turnover Tab ── */}
+      {tab === 'turnover' && (
+        <div className="space-y-4">
+          {extraLoading ? (
+            <div className="flex items-center justify-center py-10"><Activity size={24} className="text-emerald-400 animate-pulse" /></div>
+          ) : !extraData.turnover ? (
+            <p className="text-slate-500 text-sm text-center py-10">No turnover data available</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                <p className="text-xs text-slate-400 mb-3">Cash Market</p>
+                <p className="text-2xl font-bold text-white">
+                  {extraData.turnover.cash?.total_turnover
+                    ? `₹${(extraData.turnover.cash.total_turnover/1000).toFixed(0)}K Cr`
+                    : 'N/A'}
+                </p>
+                {extraData.turnover.cash?.date && <p className="text-xs text-slate-500 mt-1">{extraData.turnover.cash.date}</p>}
+              </div>
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                <p className="text-xs text-slate-400 mb-3">F&O Total</p>
+                <p className="text-2xl font-bold text-emerald-400">
+                  {extraData.turnover.fno?.total_fno
+                    ? `₹${(extraData.turnover.fno.total_fno/1000).toFixed(0)}K Cr`
+                    : 'N/A'}
+                </p>
+                <div className="flex gap-4 mt-2 text-xs text-slate-400">
+                  <span>Futures: {extraData.turnover.fno?.futures_turnover
+                    ? `₹${(extraData.turnover.fno.futures_turnover/1000).toFixed(0)}K Cr` : 'N/A'}</span>
+                  <span>Options: {extraData.turnover.fno?.options_turnover
+                    ? `₹${(extraData.turnover.fno.options_turnover/1000).toFixed(0)}K Cr` : 'N/A'}</span>
+                </div>
+              </div>
+              {extraData.turnover.raw && (
+                <div className="col-span-2 bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+                  <p className="text-xs text-slate-400 mb-2">Raw Data</p>
+                  <pre className="text-xs text-slate-300 overflow-x-auto">{JSON.stringify(extraData.turnover.raw, null, 2)}</pre>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

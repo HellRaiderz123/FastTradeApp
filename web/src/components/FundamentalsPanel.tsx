@@ -20,7 +20,18 @@ interface NewsArticle {
   category?: string;
 }
 
-type Tab = 'fundamentals' | 'news' | 'peers';
+type Tab = 'fundamentals' | 'news' | 'peers' | 'nse';
+
+interface NseData {
+  corporateActions: any[];
+  forthcomingActions: any[];
+  blockDeals: any[];
+  bulkDeals: any[];
+  insiderTrading: any[];
+  foBanned: string[];
+  banEntered: string[];
+  banExited: string[];
+}
 
 interface FundamentalsPanelProps {
   initialSymbol?: string;
@@ -80,6 +91,8 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
   const [newsLoading, setNewsLoading] = useState(false);
   const [aboutExpanded, setAboutExpanded] = useState(false);
   const [showAllQuarters, setShowAllQuarters] = useState(false);
+  const [nseData, setNseData] = useState<NseData | null>(null);
+  const [nseLoading, setNseLoading] = useState(false);
 
   const fetchFundamentals = useCallback(async (sym: string, force = false) => {
     if (!sym) return;
@@ -97,11 +110,50 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
     }
   }, []);
 
+  const fetchNseData = useCallback(async (sym: string) => {
+    setNseLoading(true);
+    try {
+      const token = authTokenStore.get();
+      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+      const [actionsRes, forthRes, dealsRes, insiderRes, foRes, banHistRes] = await Promise.allSettled([
+        fetch(`/api/nse/corporate-actions`, { headers }).then(r => r.json()),
+        fetch(`/api/nse/forthcoming-actions`, { headers }).then(r => r.json()),
+        fetch(`/api/nse/block-deals`, { headers }).then(r => r.json()),
+        fetch(`/api/nse/insider-trading`, { headers }).then(r => r.json()),
+        fetch(`/api/nse/fo-ban`, { headers }).then(r => r.json()),
+        fetch(`/api/nse/ban-history`, { headers }).then(r => r.json()),
+      ]);
+      const f = (r: PromiseSettledResult<any>, key: string) =>
+        r.status === 'fulfilled' ? (r.value[key] || []) : [];
+      const actions  = f(actionsRes, 'actions');
+      const forth    = f(forthRes, 'data');
+      const deals    = dealsRes.status === 'fulfilled' ? dealsRes.value : {};
+      const insider  = f(insiderRes, 'data');
+      const foBan    = f(foRes, 'banned_symbols');
+      const banHist  = banHistRes.status === 'fulfilled' ? banHistRes.value : {};
+      const up = (s: string) => s.toUpperCase();
+      setNseData({
+        corporateActions:  actions.filter((a: any) => up(a.symbol || '') === up(sym)),
+        forthcomingActions: forth.filter((a: any) => up(a.symbol || '') === up(sym)),
+        blockDeals:        (deals.block_deals || []).filter((d: any) => up(d.symbol || '') === up(sym)),
+        bulkDeals:         (deals.bulk_deals  || []).filter((d: any) => up(d.symbol || '') === up(sym)),
+        insiderTrading:    insider.filter((i: any) => up(i.symbol || '') === up(sym)),
+        foBanned:          foBan,
+        banEntered:        banHist.entered_today || [],
+        banExited:         banHist.exited_today  || [],
+      });
+    } catch {
+      setNseData(null);
+    } finally {
+      setNseLoading(false);
+    }
+  }, []);
+
   const fetchNews = useCallback(async (sym: string) => {
     setNewsLoading(true);
     try {
       const token = authTokenStore.get();
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
 
       const [newsRes, nseRes] = await Promise.allSettled([
         fetch(`/api/stock-news/${sym}`, { headers }).then(r => r.json()),
@@ -202,6 +254,7 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
     { id: 'fundamentals', label: 'Fundamentals', icon: BarChart3 },
     { id: 'news', label: 'News', icon: Newspaper },
     { id: 'peers', label: 'Peers', icon: TrendingUp },
+    { id: 'nse', label: 'NSE Data', icon: Activity },
   ];
 
   return (
@@ -265,7 +318,10 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
             {tabs.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
-                onClick={() => setTab(id)}
+                onClick={() => {
+                  setTab(id);
+                  if (id === 'nse' && !nseData && activeSymbol) fetchNseData(activeSymbol);
+                }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
                   tab === id
                     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
@@ -601,6 +657,158 @@ const FundamentalsPanel: React.FC<FundamentalsPanelProps> = ({ initialSymbol = '
                           <p className="text-slate-400 text-sm">No news found for {activeSymbol}</p>
                         </div>
                       )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ── NSE Data Tab ── */}
+              {tab === 'nse' && (
+                <div className="space-y-5">
+                  {nseLoading ? (
+                    <div className="flex items-center justify-center py-10">
+                      <Activity size={24} className="text-emerald-400 animate-pulse" />
+                    </div>
+                  ) : !nseData ? (
+                    <div className="text-center py-10 text-slate-500 text-sm">No NSE data loaded</div>
+                  ) : (
+                    <>
+                      {/* F&O Ban status */}
+                      {nseData.foBanned.includes(activeSymbol) && (
+                        <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                          <AlertCircle size={15} className="text-red-400 shrink-0" />
+                          <span className="text-sm text-red-400 font-medium">{activeSymbol} is in F&O Ban (MWPL &gt; 95%) — fresh positions cannot be opened.</span>
+                        </div>
+                      )}
+                      {nseData.banEntered.includes(activeSymbol) && (
+                        <div className="flex items-center gap-2 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+                          <AlertCircle size={15} className="text-orange-400 shrink-0" />
+                          <span className="text-sm text-orange-400 font-medium">{activeSymbol} entered F&O ban today.</span>
+                        </div>
+                      )}
+                      {nseData.banExited.includes(activeSymbol) && (
+                        <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
+                          <AlertCircle size={15} className="text-emerald-400 shrink-0" />
+                          <span className="text-sm text-emerald-400 font-medium">{activeSymbol} exited F&O ban today — positions can be opened again.</span>
+                        </div>
+                      )}
+
+                      {/* Corporate Actions */}
+                      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                        <SectionHeader title="Corporate Actions" icon={FileText} />
+                        {nseData.corporateActions.length === 0 ? (
+                          <p className="text-xs text-slate-500">No upcoming corporate actions found for {activeSymbol}</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {nseData.corporateActions.map((a, i) => (
+                              <div key={i} className="flex items-start justify-between gap-3 text-xs border-b border-slate-700/30 pb-2 last:border-0">
+                                <div>
+                                  <p className="text-white font-medium">{a.action_type}</p>
+                                  {a.details && <p className="text-slate-400 mt-0.5">{a.details}</p>}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  {a.ex_date && <p className="text-emerald-400">Ex: {a.ex_date}</p>}
+                                  {a.record_date && <p className="text-slate-500">Rec: {a.record_date}</p>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Block & Bulk Deals */}
+                      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                        <SectionHeader title="Block & Bulk Deals" icon={BarChart3} />
+                        {nseData.blockDeals.length === 0 && nseData.bulkDeals.length === 0 ? (
+                          <p className="text-xs text-slate-500">No block/bulk deals found for {activeSymbol} today</p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b border-slate-700/50 text-slate-400">
+                                  <th className="text-left py-2 pr-3">Type</th>
+                                  <th className="text-left py-2 pr-3">Client</th>
+                                  <th className="text-left py-2 pr-3">B/S</th>
+                                  <th className="text-right py-2 pr-3">Qty</th>
+                                  <th className="text-right py-2">Price</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {[...nseData.blockDeals.map(d => ({ ...d, _type: 'Block' })),
+                                  ...nseData.bulkDeals.map(d => ({ ...d, _type: 'Bulk' }))].map((d, i) => (
+                                  <tr key={i} className="border-b border-slate-700/20 hover:bg-slate-700/20">
+                                    <td className="py-2 pr-3">
+                                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                        d._type === 'Block' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
+                                      }`}>{d._type}</span>
+                                    </td>
+                                    <td className="py-2 pr-3 text-slate-300 max-w-[140px] truncate">{d.client}</td>
+                                    <td className={`py-2 pr-3 font-medium ${
+                                      (d.deal_type || '').toUpperCase().includes('BUY') ? 'text-emerald-400' : 'text-red-400'
+                                    }`}>{d.deal_type}</td>
+                                    <td className="py-2 pr-3 text-right text-slate-300">{Number(d.quantity || 0).toLocaleString('en-IN')}</td>
+                                    <td className="py-2 text-right text-white">₹{Number(d.price || 0).toLocaleString('en-IN')}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Insider / SAST */}
+                      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                        <SectionHeader title="Insider Trading / SAST" icon={AlertCircle} />
+                        {nseData.insiderTrading.length === 0 ? (
+                          <p className="text-xs text-slate-500">No recent insider disclosures found for {activeSymbol}</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {nseData.insiderTrading.map((t, i) => (
+                              <div key={i} className="flex items-start justify-between gap-3 text-xs border-b border-slate-700/30 pb-2 last:border-0">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white font-medium leading-snug">{t.headline}</p>
+                                  <p className="text-slate-500 mt-0.5">{t.published_at ? new Date(t.published_at).toLocaleDateString('en-IN') : ''}</p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                    t.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' :
+                                    t.direction === 'SELL' ? 'bg-red-500/20 text-red-400' :
+                                    'bg-slate-500/20 text-slate-400'
+                                  }`}>{t.direction}</span>
+                                  {t.pdf_url && (
+                                    <a href={t.pdf_url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">
+                                      <ExternalLink size={11} />
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Forthcoming Corporate Actions */}
+                      <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-5">
+                        <SectionHeader title="Forthcoming Actions" icon={Clock} />
+                        {nseData.forthcomingActions.length === 0 ? (
+                          <p className="text-xs text-slate-500">No forthcoming actions for {activeSymbol}</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {nseData.forthcomingActions.map((a, i) => (
+                              <div key={i} className="flex items-start justify-between gap-3 text-xs border-b border-slate-700/30 pb-2 last:border-0">
+                                <div>
+                                  <p className="text-white font-medium">{a.action_type}</p>
+                                  {a.details && <p className="text-slate-400 mt-0.5">{a.details}</p>}
+                                </div>
+                                <div className="text-right shrink-0">
+                                  {a.ex_date && <p className="text-yellow-400">Ex: {a.ex_date}</p>}
+                                  {a.record_date && <p className="text-slate-500">Rec: {a.record_date}</p>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </>
                   )}
                 </div>
