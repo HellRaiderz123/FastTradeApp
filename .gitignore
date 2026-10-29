@@ -66,6 +66,8 @@ data/*.db
 # ================================
 # Secrets / Broker Keys
 # ================================
+**/.env
+backend/.env
 secrets.json
 credentials.json
 kite_token.json
