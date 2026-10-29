@@ -5,7 +5,6 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List
-from dotenv import load_dotenv, set_key
 
 from app.core.broker.indmoney.client import INDMoneyClient
 from app.core.broker.indmoney.instruments import INDMoneyInstrumentsResolver
@@ -18,9 +17,6 @@ from app.db.models_risk import default_iv_limits
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
-
-# Get the .env file path
-ENV_FILE = Path(__file__).resolve().parent.parent.parent.parent / ".env"
 
 
 def _activate_zerodha_token(access_token: str, user_id: str | None = None) -> None:
@@ -779,40 +775,44 @@ def save_risk_limits(settings: RiskLimitsPayload):
 
 @router.get("/notifications")
 def get_notification_settings():
-    """Get current notification settings status"""
-    gmail_user = get_env_value("GMAIL_USER")
-    alert_email = get_env_value("ALERT_EMAIL")
-    enabled = get_env_value("NOTIFY_GMAIL_ENABLED").lower() if get_env_value("NOTIFY_GMAIL_ENABLED") else "true"
-
-    # Mask user for display
-    masked_user = (
-        gmail_user[:2] + "***" + gmail_user[-10:] if gmail_user else ""
-    )
-
+    """Get current notification settings status (credentials masked)."""
+    from app.db.notification_settings_repo import get_notification_config
+    db = SessionLocal()
+    try:
+        cfg = get_notification_config(db)
+    finally:
+        db.close()
+    gmail_user = cfg["gmail_user"]
+    masked_user = gmail_user[:2] + "***" + gmail_user[-10:] if gmail_user else ""
     return {
-        "gmail_configured": bool(gmail_user and get_env_value("GMAIL_APP_PASSWORD")),
-        "gmail_enabled": enabled in ["1", "true", "yes"],
+        "gmail_configured": bool(gmail_user and cfg["gmail_app_password"]),
+        "gmail_enabled": cfg["gmail_enabled"],
         "gmail_user": masked_user,
-        "alert_email": alert_email or gmail_user or ""
+        "alert_email": cfg["alert_email"] or gmail_user or "",
     }
 
 
 @router.post("/notifications/gmail")
 def save_gmail_settings(settings: GmailSettings):
-    """Save Gmail notification credentials and alert email to .env"""
+    """Save Gmail notification credentials to DB."""
+    if not settings.gmail_user or not settings.gmail_app_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gmail user and app password are required")
     try:
-        if not settings.gmail_user or not settings.gmail_app_password:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Gmail user and app password are required")
-
-        set_key(str(ENV_FILE), "GMAIL_USER", settings.gmail_user)
-        set_key(str(ENV_FILE), "GMAIL_APP_PASSWORD", settings.gmail_app_password)
-        set_key(str(ENV_FILE), "ALERT_EMAIL", settings.alert_email or settings.gmail_user)
-
+        from app.db.notification_settings_repo import upsert_notification_settings
+        db = SessionLocal()
+        try:
+            upsert_notification_settings(
+                db,
+                gmail_user=settings.gmail_user,
+                gmail_app_password=settings.gmail_app_password,
+                alert_email=settings.alert_email or settings.gmail_user,
+            )
+        finally:
+            db.close()
         os.environ["GMAIL_USER"] = settings.gmail_user
         os.environ["GMAIL_APP_PASSWORD"] = settings.gmail_app_password
         os.environ["ALERT_EMAIL"] = settings.alert_email or settings.gmail_user
-
-        logger.info("Gmail notification settings updated")
+        logger.info("Gmail notification settings updated in DB")
         return {"status": "success", "message": "Gmail settings saved"}
     except Exception as e:
         logger.error(f"Error saving Gmail settings: {e}")
@@ -821,11 +821,14 @@ def save_gmail_settings(settings: GmailSettings):
 
 @router.post("/notifications/gmail/enabled")
 def set_gmail_enabled(toggle: GmailToggle):
-    """Enable or disable Gmail notifications"""
+    """Enable or disable Gmail notifications in DB."""
     try:
-        val = "true" if toggle.enabled else "false"
-        set_key(str(ENV_FILE), "NOTIFY_GMAIL_ENABLED", val)
-        os.environ["NOTIFY_GMAIL_ENABLED"] = val
+        from app.db.notification_settings_repo import upsert_notification_settings
+        db = SessionLocal()
+        try:
+            upsert_notification_settings(db, gmail_enabled=toggle.enabled)
+        finally:
+            db.close()
         return {"status": "success", "gmail_enabled": toggle.enabled}
     except Exception as e:
         logger.error(f"Error toggling Gmail notifications: {e}")
@@ -849,25 +852,38 @@ def send_test_email(subject: str = "FastTrade Test", body: str = "This is a test
 
 @router.get("/notifications/telegram")
 def get_telegram_settings():
-    """Get Telegram notification settings status"""
-    token = get_env_value("TELEGRAM_BOT_TOKEN")
-    chat_id = get_env_value("TELEGRAM_CHAT_ID")
+    """Get Telegram notification settings status."""
+    from app.db.notification_settings_repo import get_notification_config
+    db = SessionLocal()
+    try:
+        cfg = get_notification_config(db)
+    finally:
+        db.close()
+    token = cfg["telegram_bot_token"]
     return {
-        "configured": bool(token and chat_id),
-        "chat_id": chat_id,
+        "configured": bool(token and cfg["telegram_chat_id"]),
+        "chat_id": cfg["telegram_chat_id"],
         "token_set": bool(token),
     }
 
 
 @router.post("/notifications/telegram")
 def save_telegram_settings(settings: TelegramSettings):
-    """Save Telegram bot token and chat ID to .env"""
+    """Save Telegram bot token and chat ID to DB."""
     try:
-        set_key(str(ENV_FILE), "TELEGRAM_BOT_TOKEN", settings.bot_token)
-        set_key(str(ENV_FILE), "TELEGRAM_CHAT_ID", settings.chat_id)
+        from app.db.notification_settings_repo import upsert_notification_settings
+        db = SessionLocal()
+        try:
+            upsert_notification_settings(
+                db,
+                telegram_bot_token=settings.bot_token,
+                telegram_chat_id=settings.chat_id,
+            )
+        finally:
+            db.close()
         os.environ["TELEGRAM_BOT_TOKEN"] = settings.bot_token
         os.environ["TELEGRAM_CHAT_ID"] = settings.chat_id
-        logger.info("Telegram settings updated")
+        logger.info("Telegram settings updated in DB")
         return {"status": "success", "message": "Telegram settings saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

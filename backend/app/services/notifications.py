@@ -50,52 +50,35 @@ class NotificationService:
     
     def __init__(self, db: Session):
         self.db = db
-        self.gmail_enabled = self._check_gmail_config()
-        self.telegram_enabled = self._check_telegram_config()
-        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-        
-        # Load Gmail credentials
-        # Primary envs
-        gmail_user_env = os.getenv("GMAIL_USER")
-        gmail_pass_env = os.getenv("GMAIL_APP_PASSWORD")
-        alert_email_env = os.getenv("ALERT_EMAIL")
 
-        # Fallbacks for compatibility with other apps
-        from_email_fallback = os.getenv("ALERT_FROM_EMAIL")
-        from_password_fallback = os.getenv("ALERT_FROM_PASSWORD")
-        to_emails_fallback = os.getenv("ALERT_TO_EMAILS")
+        # Load config from DB first, env fallback
+        try:
+            from app.db.notification_settings_repo import get_notification_config
+            cfg = get_notification_config(db)
+        except Exception:
+            cfg = {
+                "gmail_user": os.getenv("GMAIL_USER", ""),
+                "gmail_app_password": os.getenv("GMAIL_APP_PASSWORD", ""),
+                "alert_email": os.getenv("ALERT_EMAIL", ""),
+                "gmail_enabled": os.getenv("NOTIFY_GMAIL_ENABLED", "true").lower() in ("1", "true", "yes"),
+                "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
+                "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
+            }
 
-        # Derive values
-        self.gmail_user = (gmail_user_env or from_email_fallback or "").strip()
-        self.gmail_password = (gmail_pass_env or from_password_fallback or "").strip()  # Use app-specific password
+        self.gmail_user       = cfg["gmail_user"].strip()
+        self.gmail_password   = cfg["gmail_app_password"].strip()
+        self.recipient_email  = (cfg["alert_email"] or cfg["gmail_user"]).strip()
+        self.telegram_bot_token = cfg["telegram_bot_token"].strip()
+        self.telegram_chat_id   = cfg["telegram_chat_id"].strip()
 
-        # Choose alert recipient: ALERT_EMAIL > ALERT_TO_EMAILS (first) > gmail_user
-        if alert_email_env:
-            alert_email_val = alert_email_env
-        elif to_emails_fallback:
-            alert_email_val = to_emails_fallback.split(",")[0]
-        else:
-            alert_email_val = self.gmail_user
-        self.recipient_email = (alert_email_val or "").strip()
-        
+        _gmail_creds_ok = bool(self.gmail_user and self.gmail_password)
+        self.gmail_enabled    = _gmail_creds_ok and bool(cfg["gmail_enabled"])
+        self.telegram_enabled = bool(self.telegram_bot_token and self.telegram_chat_id)
+
         if self.gmail_enabled:
             logger.info("✅ Gmail notifications enabled")
         else:
             logger.warning("⚠️ Gmail notifications disabled - missing credentials")
-    
-    def _check_gmail_config(self) -> bool:
-        """Check if Gmail is properly configured and enabled"""
-        creds_ok = bool(
-            os.getenv("GMAIL_USER") and 
-            os.getenv("GMAIL_APP_PASSWORD")
-        )
-        enabled_flag = os.getenv("NOTIFY_GMAIL_ENABLED", "true").lower() in ["1", "true", "yes"]
-        return creds_ok and enabled_flag
-
-    def _check_telegram_config(self) -> bool:
-        """Check if Telegram bot is configured"""
-        return bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"))
     
     # ============================
     # TRADE NOTIFICATIONS

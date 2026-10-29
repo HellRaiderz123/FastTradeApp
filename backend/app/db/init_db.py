@@ -12,6 +12,7 @@ from app.core.scalp.scalp_paper_trader import ScalpTrade
 from app.db.models_user import User  # noqa: F401 — registers table
 from app.db.models_user_settings import UserSettings  # noqa: F401 — registers table
 from app.db.models_broker_credentials import BrokerCredentials  # noqa: F401 — registers table
+from app.db.models_notification_settings import NotificationSettings  # noqa: F401 — registers table
 from app.db.models_ai_log import AIUsageLog  # noqa: F401 — registers table
 from app.db.models_fii_dii import FiiDiiDaily  # noqa: F401 — registers table
 from app.db.models_watchlist import Watchlist, WatchlistAlert  # noqa: F401
