@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import and_, text
 from app.core.market.provider import fetch_candles
@@ -13,7 +12,7 @@ import logging
 logger = logging.getLogger("candles")
 logger.setLevel(logging.INFO)
 
-_IS_POSTGRES = engine.dialect.name == "postgresql"
+_IS_POSTGRES = False
 
 # Symbols that are indices — skip price sanity checks for these
 # (index values like 22000 would fail a stock-price sanity check)
@@ -25,13 +24,10 @@ _INDEX_SYMBOLS = {
 
 
 def _bulk_upsert(db: Session, model, rows: list[dict]) -> int:
-    """Insert rows with ON CONFLICT DO NOTHING. Works for both Postgres and SQLite."""
+    """Insert rows with ON CONFLICT DO NOTHING."""
     if not rows:
         return 0
-    if _IS_POSTGRES:
-        stmt = pg_insert(model).values(rows).on_conflict_do_nothing()
-    else:
-        stmt = sqlite_insert(model).values(rows).prefix_with("OR IGNORE")
+    stmt = sqlite_insert(model).values(rows).prefix_with("OR IGNORE")
     result = db.execute(stmt)
     db.commit()
     return result.rowcount if result.rowcount >= 0 else len(rows)

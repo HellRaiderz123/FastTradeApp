@@ -21,8 +21,8 @@ function loadCollapsed(): Record<string, boolean> {
 }
 
 function getModeInfo(mode: string) {
-  if (mode === 'ZERODHA_LIVE') return { label: 'Live', color: 'bg-red-500', text: 'text-red-400' };
-  if (mode === 'ZERODHA_DRY_RUN') return { label: 'Dry Run', color: 'bg-amber-500', text: 'text-amber-400' };
+  if (mode === 'LIVE' || mode === 'ZERODHA_LIVE') return { label: 'Live', color: 'bg-red-500', text: 'text-red-400' };
+  if (mode === 'DRY_RUN' || mode === 'ZERODHA_DRY_RUN') return { label: 'Dry Run', color: 'bg-amber-500', text: 'text-amber-400' };
   return { label: 'Paper', color: 'bg-emerald-500', text: 'text-emerald-400' };
 }
 

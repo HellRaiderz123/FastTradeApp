@@ -4,8 +4,11 @@ from datetime import date, datetime, timedelta
 from app.db.session import SessionLocal
 from app.db.models import DailyCapital
 from app.core.broker.registry import get_active_broker, get_registry
+from app.core.execution.mode import get_execution_mode, is_live_mode
 import logging
 import os
+
+PAPER_CAPITAL = 20_000_000.0  # ₹2 Cr virtual capital for PAPER_TRADING / DRY_RUN
 
 logger = logging.getLogger(__name__)
 
@@ -46,27 +49,66 @@ def _get_zerodha_profile() -> dict:
     }
 
 
+def _parse_indmoney_funds(raw: dict) -> dict:
+    """Extract balance fields from INDstocks /funds response.
+    Tries multiple known key shapes across API versions.
+    """
+    def _f(obj, *keys):
+        for k in keys:
+            v = obj.get(k)
+            if v is not None:
+                try:
+                    return float(v)
+                except Exception:
+                    pass
+        return 0.0
+
+    # Unwrap common envelope shapes: {data: {...}} or {data: [{...}]}
+    data = raw.get("data", raw)
+    if isinstance(data, list) and data:
+        data = data[0]
+    if not isinstance(data, dict):
+        data = raw
+
+    available = _f(data, "available_balance", "availableBalance", "available",
+                   "net", "net_balance", "netBalance", "cash", "balance")
+    used = _f(data, "used_margin", "usedMargin", "utilised", "used")
+    total = _f(data, "total_balance", "totalBalance", "total", "gross") or (available + used)
+    collateral = _f(data, "collateral", "collateralValue")
+
+    return {
+        "live_balance": available,
+        "cash": available,
+        "margins_available": available,
+        "capital": available,
+        "equity": total,
+        "net_worth": total,
+        "collateral": collateral,
+        "used_margin": used,
+        "raw_funds": raw,
+    }
+
+
 def _get_indmoney_profile() -> dict:
-    """Fetch profile from INDMoney. funds capability is not available — returns
-    what we can (user identity) and zeros for balance fields."""
+    """Fetch profile + funds from INDMoney."""
     from app.core.broker.indmoney.client import get_indmoney_client
     client = get_indmoney_client()
-    # INDMoney has no profile/funds API — return identity from env + zero balances
     user_id = os.getenv("INDMONEY_CLIENT_ID", "INDMONEY_USER")
-    logger.info("📊 INDMoney account %s: funds API not available", user_id)
+
+    funds_data: dict = {}
+    try:
+        raw = client.get_funds()
+        funds_data = _parse_indmoney_funds(raw)
+        logger.info("📊 INDMoney account %s: available=₹%s", user_id, funds_data.get("live_balance"))
+    except Exception as exc:
+        logger.warning("INDMoney funds fetch failed: %s", exc)
+
     return {
         "user_id": user_id,
         "email": "",
         "phone": "",
         "broker": "INDMONEY",
-        "capital": 0.0,
-        "equity": 0.0,
-        "net_worth": 0.0,
-        "margins_available": 0.0,
-        "live_balance": 0.0,
-        "cash": 0.0,
-        "collateral": 0.0,
-        "note": "INDMoney funds/margin API not yet integrated",
+        **funds_data,
     }
 
 
@@ -102,14 +144,33 @@ def _snapshot_daily_capital(live_balance: float, broker: str) -> None:
 def get_account_profile():
     """
     Fetch account profile from the currently active broker.
-    Routes to Zerodha or INDMoney based on ACTIVE_BROKER env var.
+    In PAPER_TRADING / DRY_RUN mode returns ₹2Cr virtual capital regardless of broker.
     """
     broker = get_active_broker()
+    mode = get_execution_mode()
+
+    # Paper / dry-run: return virtual ₹2Cr balance, skip broker API call
+    if not is_live_mode(mode):
+        return {
+            "user_id": os.getenv("AUTH_USERNAME", "trader"),
+            "email": "",
+            "phone": "",
+            "broker": broker,
+            "execution_mode": mode,
+            "capital": PAPER_CAPITAL,
+            "live_balance": PAPER_CAPITAL,
+            "cash": PAPER_CAPITAL,
+            "equity": PAPER_CAPITAL,
+            "net_worth": PAPER_CAPITAL,
+            "margins_available": PAPER_CAPITAL,
+            "collateral": 0.0,
+            "note": f"{mode} mode — ₹2 Cr virtual capital",
+        }
+
     try:
         if broker == "INDMONEY":
             data = _get_indmoney_profile()
         else:
-            # Default / ZERODHA
             try:
                 data = _get_zerodha_profile()
             except RuntimeError as e:
@@ -120,6 +181,7 @@ def get_account_profile():
                         "email": "demo@zerodha.com",
                         "phone": "+91-9876543210",
                         "broker": "ZERODHA",
+                        "execution_mode": mode,
                         "capital": 500000.0,
                         "live_balance": 500000.0,
                         "cash": 500000.0,
@@ -129,6 +191,7 @@ def get_account_profile():
                     }
                 raise
 
+        data["execution_mode"] = mode
         if data.get("live_balance", 0):
             _snapshot_daily_capital(data["live_balance"], broker)
         return data
@@ -141,13 +204,30 @@ def get_account_profile():
 @router.get("/capital")
 def get_available_capital():
     """
-    Get available capital from the active broker.
+    Get available capital.
+    PAPER_TRADING / DRY_RUN → ₹2 Cr virtual. LIVE → broker funds.
     """
     broker = get_active_broker()
+    mode = get_execution_mode()
+
+    if not is_live_mode(mode):
+        return {"capital": PAPER_CAPITAL, "currency": "INR", "source": mode.lower(),
+                "note": f"{mode} mode — ₹2 Cr virtual capital"}
+
     try:
         if broker == "INDMONEY":
-            return {"capital": 0.0, "currency": "INR", "source": "indmoney",
-                    "note": "INDMoney funds API not yet integrated"}
+            from app.core.broker.indmoney.client import get_indmoney_client
+            client = get_indmoney_client()
+            try:
+                raw = client.get_funds()
+                funds = _parse_indmoney_funds(raw)
+                balance = funds["live_balance"]
+            except Exception as exc:
+                logger.warning("INDMoney funds fetch failed in /capital: %s", exc)
+                balance = 0.0
+            logger.info("💰 Available Capital (INDMoney): ₹%s", balance)
+            return {"capital": balance, "currency": "INR", "source": "indmoney",
+                    **(({"note": "funds API returned 0 — check INDMONEY_FUNDS_PATH in .env"}) if balance == 0 else {})}
 
         # Zerodha
         from app.core.broker.zerodha.client import get_kite_client

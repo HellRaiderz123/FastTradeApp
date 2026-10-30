@@ -419,6 +419,7 @@ const Settings: React.FC = () => {
     try {
       setZerodhaLoading(true);
       await settingsAPI.setExecutionMode(mode);
+      window.dispatchEvent(new Event('broker-settings-changed'));
       setZerodhaForm(prev => ({ ...prev, executionMode: mode }));
       setZerodhaMessage(`✓ Mode changed to ${mode}`);
       // Refresh immediately and again after delay

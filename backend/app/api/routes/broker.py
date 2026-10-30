@@ -291,6 +291,11 @@ def set_broker_token(
             raise HTTPException(status_code=400, detail=f"Token setup not supported for broker: {active_broker}")
 
         logger.info("Broker token set via UI by %s for %s", current_user.get("username"), active_broker)
+
+        # Resume broker-dependent schedulers that were skipped at startup
+        # (or paused because the previous token expired).
+        _resume_broker_schedulers()
+
         return {"success": True, "message": f"{active_broker} token activated successfully"}
 
     except HTTPException:
@@ -298,3 +303,48 @@ def set_broker_token(
     except Exception as exc:
         logger.error("set-token failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _resume_broker_schedulers() -> None:
+    """Start broker-dependent schedulers if the APScheduler is running and they aren't already scheduled."""
+    try:
+        from app.core.market.scheduler import (
+            scheduler as _apscheduler,
+            start_candle_scheduler,
+            start_daily_candles_scheduler,
+            start_intraday_candles_scheduler,
+            start_vix_scheduler,
+            start_twitter_sentiment_scheduler,
+            start_nifty100_reconciliation_scheduler,
+            start_holdings_reconciliation_scheduler,
+            initialize_vix_data,
+        )
+        import threading, os
+
+        if not _apscheduler.running:
+            logger.warning("_resume_broker_schedulers: APScheduler not running, skipping")
+            return
+
+        existing_ids = {job.id for job in _apscheduler.get_jobs()}
+
+        if "candle_scheduler" not in existing_ids:
+            start_candle_scheduler()
+        if "daily_candles" not in existing_ids:
+            delay = int(os.getenv("DAILY_BACKFILL_DELAY_MINUTES", "5"))
+            start_daily_candles_scheduler(delay_minutes=delay)
+        if "vix_scheduler" not in existing_ids:
+            delay = int(os.getenv("VIX_BACKFILL_DELAY_MINUTES", "2"))
+            start_vix_scheduler(delay_minutes=delay)
+        if "intraday_candles" not in existing_ids:
+            start_intraday_candles_scheduler(delay_minutes=3)
+        if "twitter_sentiment" not in existing_ids:
+            start_twitter_sentiment_scheduler()
+        if "nifty100_reconciliation" not in existing_ids:
+            start_nifty100_reconciliation_scheduler()
+        if "holdings_reconciliation" not in existing_ids:
+            start_holdings_reconciliation_scheduler()
+
+        threading.Thread(target=initialize_vix_data, name="vix-init", daemon=True).start()
+        logger.info("✅ Broker-dependent schedulers resumed after token activation")
+    except Exception as exc:
+        logger.warning("_resume_broker_schedulers failed: %s", exc)

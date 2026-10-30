@@ -23,14 +23,18 @@ interface HeaderProps {
 }
 
 function getModeLabel(mode: string) {
+  if (mode === 'LIVE') return 'Live';
+  if (mode === 'DRY_RUN') return 'Dry Run';
+  if (mode === 'PAPER_TRADING') return 'Paper';
+  // legacy aliases
   if (mode === 'ZERODHA_LIVE') return 'Live';
   if (mode === 'ZERODHA_DRY_RUN') return 'Dry Run';
   return 'Paper';
 }
 
 function getModeVariant(mode: string): 'loss' | 'sell' | 'profit' {
-  if (mode === 'ZERODHA_LIVE') return 'loss';
-  if (mode === 'ZERODHA_DRY_RUN') return 'sell';
+  if (mode === 'LIVE' || mode === 'ZERODHA_LIVE') return 'loss';
+  if (mode === 'DRY_RUN' || mode === 'ZERODHA_DRY_RUN') return 'sell';
   return 'profit';
 }
 

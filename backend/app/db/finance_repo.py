@@ -67,32 +67,8 @@ def backfill_merchants(db: Session) -> int:
 
 # ============= TRANSACTIONS =============
 def _sync_postgres_id_sequence(db: Session, model):
-    """Safely reset the PK sequence so bulk inserts don't collide."""
-    bind = db.get_bind()
-    if bind is None or bind.dialect.name != "postgresql":
-        return
-    table_name = model.__table__.name
-    try:
-        db.execute(text(f"""
-            SELECT setval(
-                pg_get_serial_sequence('{table_name}', 'id'),
-                COALESCE((SELECT MAX(id) FROM {table_name}), 0),
-                true
-            )
-        """))
-    except Exception:
-        # pg_get_serial_sequence returns NULL when sequence name can't be found
-        # (e.g. table created without SERIAL). Fall back to explicit sequence name.
-        try:
-            db.execute(text(f"""
-                SELECT setval(
-                    '{table_name}_id_seq',
-                    COALESCE((SELECT MAX(id) FROM {table_name}), 0),
-                    true
-                )
-            """))
-        except Exception:
-            pass
+    """No-op: sequence sync is Postgres-only, not needed for SQLite."""
+    pass
 
 
 def create_transactions(

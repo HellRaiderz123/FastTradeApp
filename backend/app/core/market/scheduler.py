@@ -531,11 +531,13 @@ def start_candle_scheduler():
     scheduler.add_job(
         func=_update,
         trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",
         minute="*/5",
-        id="candle_15m_job",          # ✅ important
-        replace_existing=True,        # ✅ important
-        max_instances=1,              # ✅ prevents overlap
-        coalesce=True,                # ✅ merges missed runs
+        id="candle_15m_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
 
     scheduler.start()
@@ -1123,35 +1125,8 @@ def start_strategy_discovery_scheduler():
 
 
 def start_neon_sync_scheduler():
-    """
-    Start daily delta sync: local Docker Postgres → Neon (cloud backup).
-    Runs once a day at 3:15 PM IST.
-
-    Persistent catch-up: the last successful sync timestamp is written to
-    data/neon_sync_state.json.  If the service was down for N days, the next
-    run automatically syncs all rows from the entire missed window — no data
-    is ever lost regardless of how many consecutive runs were skipped.
-    """
-    if not scheduler.running:
-        logger.warning("Cannot start Neon sync scheduler: main scheduler not running")
-        return
-
-    from app.services.neon_sync import run_delta_sync
-
-    scheduler.add_job(
-        func=run_delta_sync,
-        trigger="cron",
-        hour=15,     # 3 PM IST
-        minute=15,   # :15
-        timezone="Asia/Kolkata",
-        id="neon_sync_job",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,   # if multiple triggers fired while down, run only once
-        misfire_grace_time=3600,  # allow up to 1 h late start (e.g. slow boot)
-    )
-
-    logger.info("Neon delta sync scheduler started (daily at 3:15 PM IST)")
+    "No-op: Neon cloud sync removed (SQLite-only)."
+    pass
 
 
 def start_zerodha_auto_login_scheduler():
@@ -1384,8 +1359,9 @@ def _check_nse_high_impact_filings():
         svc = NotificationService(db)
 
         notified = 0
-        # First run: only HIGH impact, cap at 5 to avoid Telegram flood from backlog
-        first_run_cap = 5 if _IS_FIRST_FILING_RUN else 999
+        # First run cap: allow up to 10 alerts (overnight filings are genuinely new,
+        # not a backlog — but still cap to avoid Telegram flood on very active nights)
+        first_run_cap = 10 if _IS_FIRST_FILING_RUN else 999
 
         for row in rows[:80]:
             if notified >= first_run_cap:
@@ -1415,8 +1391,8 @@ def _check_nse_high_impact_filings():
             impact = _classify_filing_impact(headline, category)
             if impact == "LOW":
                 continue
-            # First run: only HIGH to avoid flooding with MEDIUM backlog
-            if _IS_FIRST_FILING_RUN and impact != "HIGH":
+            # First run: allow HIGH + MEDIUM (overnight filings are genuinely new)
+            if _IS_FIRST_FILING_RUN and impact == "LOW":
                 continue
 
             dedup_key = f"{symbol}|{headline[:80]}"
@@ -1493,7 +1469,10 @@ def start_nse_snapshot_scheduler():
 
     scheduler.add_job(
         func=_nse_snapshot_job,
-        trigger=IntervalTrigger(minutes=30),
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",
+        minute="*/30",
         id="nse_snapshot_job",
         replace_existing=True,
         max_instances=1,
@@ -1501,7 +1480,7 @@ def start_nse_snapshot_scheduler():
         misfire_grace_time=300,
     )
     threading.Thread(target=_nse_snapshot_job, name="nse-snapshot-initial", daemon=True).start()
-    logger.info("NSE snapshot scheduler started (every 30 min + immediate on startup)")
+    logger.info("NSE snapshot scheduler started (every 30 min, market hours Mon-Fri)")
 
 
 def start_nse_filing_alerts_scheduler():
@@ -1516,9 +1495,13 @@ def start_nse_filing_alerts_scheduler():
     from apscheduler.triggers.interval import IntervalTrigger
     import threading
 
+    # Every 30 min during market + post-market hours
     scheduler.add_job(
         func=_check_nse_high_impact_filings,
-        trigger=IntervalTrigger(minutes=30),
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-16",
+        minute="*/30",
         id="nse_filing_alerts_job",
         replace_existing=True,
         max_instances=1,
@@ -1526,6 +1509,22 @@ def start_nse_filing_alerts_scheduler():
         misfire_grace_time=300,
     )
 
-    # Fire immediately in a background thread (avoids APScheduler clock skew issues)
+    # Pre-market catch-up at 8:30 AM — picks up ALL overnight filings
+    # _LAST_FILING_POLL_AT is initialised to now-24h so this run sees everything
+    # posted since yesterday's last poll, including late-night board meeting results,
+    # SEBI orders, earnings releases, etc.
+    scheduler.add_job(
+        func=_check_nse_high_impact_filings,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=30,
+        id="nse_filing_premarket_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=1800,
+    )
+
     threading.Thread(target=_check_nse_high_impact_filings, name="nse-filing-initial", daemon=True).start()
-    logger.info("NSE filing alerts scheduler started (every 30 min + immediate on startup)")
+    logger.info("NSE filing alerts scheduler started (pre-market 8:30 AM + every 30 min 9 AM-4 PM, Mon-Fri)")

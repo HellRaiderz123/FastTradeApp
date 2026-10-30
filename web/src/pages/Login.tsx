@@ -64,11 +64,10 @@ function Login() {
         });
         if (r.ok) {
           const status: BrokerStatus = await r.json();
-          if (!status.has_token) {
-            setBrokerStatus(status);
-            setStep('broker');
-            return;
-          }
+          // Always show broker step — tokens expire daily, user should confirm each session
+          setBrokerStatus(status);
+          setStep('broker');
+          return;
         }
       } catch {
         // token-status failure must not block login
@@ -213,13 +212,21 @@ function Login() {
             </div>
           </div>
 
-          {/* Warning */}
-          <div className="mt-4 mb-6 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-start gap-2">
-            <AlertTriangle size={16} className="text-amber-400 mt-0.5 flex-shrink-0" />
-            <p className="text-xs text-amber-300">
-              {brokerStatus?.token_found && !brokerStatus?.token_valid
-                ? <>Existing <span className="font-semibold">{meta.label}</span> token is <span className="font-semibold text-red-300">expired or invalid</span>. Please provide a fresh token to resume live data and schedulers.</>  
-                : <>No active <span className="font-semibold">{meta.label}</span> token found. Without it, schedulers, live quotes, and candle backfill will fail on every request.</>
+          {/* Warning / Status */}
+          <div className={`mt-4 mb-6 p-3 rounded-lg flex items-start gap-2 ${
+            brokerStatus?.token_valid
+              ? 'bg-emerald-500/10 border border-emerald-500/30'
+              : 'bg-amber-500/10 border border-amber-500/30'
+          }`}>
+            {brokerStatus?.token_valid
+              ? <CheckCircle size={16} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+              : <AlertTriangle size={16} className="text-amber-400 mt-0.5 flex-shrink-0" />}
+            <p className={`text-xs ${brokerStatus?.token_valid ? 'text-emerald-300' : 'text-amber-300'}`}>
+              {brokerStatus?.token_valid
+                ? <>Active <span className="font-semibold">{meta.label}</span> token found. You can continue or paste a fresh token to replace it.</>
+                : brokerStatus?.token_found
+                  ? <>Existing <span className="font-semibold">{meta.label}</span> token is <span className="font-semibold text-red-300">expired or invalid</span>. Please provide a fresh token.</>
+                  : <>No active <span className="font-semibold">{meta.label}</span> token found. Without it, schedulers, live quotes, and candle backfill will not work.</>
               }
             </p>
           </div>
@@ -317,7 +324,7 @@ function Login() {
                 <div className="flex-1 h-px bg-slate-700/60" />
               </div>
 
-              {/* Skip */}
+              {/* Skip / Continue */}
               <button
                 onClick={() => navigate('/')}
                 className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg
@@ -325,10 +332,12 @@ function Login() {
                            hover:border-slate-500/60 transition text-sm"
               >
                 <SkipForward size={14} />
-                Skip for now — I'll set it up in Settings
+                {brokerStatus?.token_valid ? 'Continue with existing token' : 'Skip for now — I\'ll set it up in Settings'}
               </button>
               <p className="text-[11px] text-slate-600 text-center mt-2">
-                Schedulers and live data will be unavailable until a token is set.
+                {brokerStatus?.token_valid
+                  ? 'Your existing token is active and schedulers are running.'
+                  : 'Schedulers and live data will be unavailable until a token is set.'}
               </p>
             </>
           )}

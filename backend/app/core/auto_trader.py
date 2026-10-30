@@ -925,19 +925,26 @@ def reset_daily_counters(db: Session):
 
 # ─── Scheduler integration ───────────────────────────────────────────
 
-_JOB_ID = "auto_trader_scan"
+_JOB_ID = "auto_trader_scan"  # interval scan job
+_JOB_WAKEUP_ID = "auto_trader_market_open"   # cron: resume at 09:15
+_JOB_SLEEP_ID  = "auto_trader_market_close"  # cron: pause at 15:16
+
+
+# Market open/close times for scheduler gating (IST)
+_MARKET_OPEN_H, _MARKET_OPEN_M   = 9, 15
+_MARKET_CLOSE_H, _MARKET_CLOSE_M = 15, 16
 
 
 def _ensure_scheduler_job(interval_sec: int = 30):
-    """Add the auto-trader job to the global APScheduler if not already there."""
+    """
+    Register the scan job AND two cron jobs that pause/resume it at
+    market open/close so it never fires outside trading hours.
+    """
     from app.core.market.scheduler import scheduler
 
+    # ── Scan job ──────────────────────────────────────────────────
     if scheduler.get_job(_JOB_ID):
-        scheduler.reschedule_job(
-            _JOB_ID,
-            trigger="interval",
-            seconds=interval_sec,
-        )
+        scheduler.reschedule_job(_JOB_ID, trigger="interval", seconds=interval_sec)
     else:
         scheduler.add_job(
             auto_trader_scan,
@@ -947,12 +954,70 @@ def _ensure_scheduler_job(interval_sec: int = 30):
             replace_existing=True,
             max_instances=1,
         )
-    logger.info("Auto-trader scheduler job active (every %ds)", interval_sec)
+
+    # Pause immediately if outside market hours
+    if not _is_market_open():
+        job = scheduler.get_job(_JOB_ID)
+        if job:
+            job.pause()
+            logger.info("Auto-trader scan job paused (outside market hours)")
+
+    # ── Cron: resume at market open (Mon-Fri 09:15 IST) ──────────
+    if not scheduler.get_job(_JOB_WAKEUP_ID):
+        scheduler.add_job(
+            _resume_scan_job,
+            "cron",
+            day_of_week="mon-fri",
+            hour=_MARKET_OPEN_H,
+            minute=_MARKET_OPEN_M,
+            timezone="Asia/Kolkata",
+            id=_JOB_WAKEUP_ID,
+            replace_existing=True,
+        )
+
+    # ── Cron: pause at market close (Mon-Fri 15:16 IST) ──────────
+    if not scheduler.get_job(_JOB_SLEEP_ID):
+        scheduler.add_job(
+            _pause_scan_job,
+            "cron",
+            day_of_week="mon-fri",
+            hour=_MARKET_CLOSE_H,
+            minute=_MARKET_CLOSE_M,
+            timezone="Asia/Kolkata",
+            id=_JOB_SLEEP_ID,
+            replace_existing=True,
+        )
+
+    logger.info(
+        "Auto-trader scheduler active (every %ds, market hours Mon-Fri %02d:%02d-%02d:%02d IST)",
+        interval_sec,
+        _MARKET_OPEN_H, _MARKET_OPEN_M,
+        _MARKET_CLOSE_H, _MARKET_CLOSE_M,
+    )
+
+
+def _resume_scan_job():
+    """Called by cron at market open — resume the scan job."""
+    from app.core.market.scheduler import scheduler
+    job = scheduler.get_job(_JOB_ID)
+    if job:
+        job.resume()
+        logger.info("Auto-trader scan job RESUMED at market open")
+
+
+def _pause_scan_job():
+    """Called by cron at market close — pause the scan job."""
+    from app.core.market.scheduler import scheduler
+    job = scheduler.get_job(_JOB_ID)
+    if job:
+        job.pause()
+        logger.info("Auto-trader scan job PAUSED at market close")
 
 
 def _remove_scheduler_job():
-    """Remove the auto-trader job from the scheduler."""
+    """Remove the auto-trader scan + gating cron jobs from the scheduler."""
     from app.core.market.scheduler import scheduler
-    if scheduler.get_job(_JOB_ID):
-        scheduler.remove_job(_JOB_ID)
-        logger.info("Auto-trader scheduler job removed")
+    for jid in (_JOB_ID, _JOB_WAKEUP_ID, _JOB_SLEEP_ID):
+        if scheduler.get_job(jid):
+            scheduler.remove_job(jid)
+    logger.info("Auto-trader scheduler jobs removed")

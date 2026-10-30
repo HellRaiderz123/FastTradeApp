@@ -39,9 +39,7 @@ def sync_instruments(force: bool = False) -> int:
     from app.db.session import SessionLocal
     from app.db.models_instruments import IndstocksInstrument
     from app.core.broker.indstocks.market_data import _access_token, _rate_limiter
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    from app.db.session import engine
 
     db = SessionLocal()
     try:
@@ -64,7 +62,6 @@ def sync_instruments(force: bool = False) -> int:
 
         token = _access_token()
         headers = {"Authorization": token}
-        is_postgres = engine.dialect.name == "postgresql"
 
         total_upserted = 0
 
@@ -129,18 +126,11 @@ def sync_instruments(force: bool = False) -> int:
                         })
 
             # Upsert: update scrip_code + synced_at on conflict
-            if is_postgres:
-                stmt = pg_insert(IndstocksInstrument).values(rows)
-                stmt = stmt.on_conflict_do_update(
-                    constraint="uq_instrument_symbol_source",
-                    set_={"scrip_code": stmt.excluded.scrip_code, "synced_at": stmt.excluded.synced_at},
-                )
-            else:
-                stmt = sqlite_insert(IndstocksInstrument).values(rows)
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["symbol", "source"],
-                    set_={"scrip_code": stmt.excluded.scrip_code, "synced_at": stmt.excluded.synced_at},
-                )
+            stmt = sqlite_insert(IndstocksInstrument).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "source"],
+                set_={"scrip_code": stmt.excluded.scrip_code, "synced_at": stmt.excluded.synced_at},
+            )
 
             result = db.execute(stmt)
             db.commit()

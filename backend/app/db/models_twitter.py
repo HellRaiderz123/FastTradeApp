@@ -92,7 +92,7 @@ class TwitterSentiment(Base):
     __table_args__ = (
         Index('ix_twitter_sentiment_symbol_time', 'primary_symbol', 'created_at_twitter'),
         Index('ix_twitter_sentiment_high_impact_unalerted', 'high_impact', 'alert_sent'),
-        Index('ix_twitter_sentiment_created_desc', 'created_at', postgresql_ops={'created_at': 'DESC'}),
+        Index('ix_twitter_sentiment_created_desc', 'created_at'),
     )
 
 

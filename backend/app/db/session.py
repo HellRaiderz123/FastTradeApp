@@ -16,43 +16,16 @@ if _is_pytest or _is_testing_env:
 else:
     DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_default_db_path.as_posix()}")
 
-_is_postgres = DATABASE_URL.startswith("postgresql")
-_is_sqlite = DATABASE_URL.startswith("sqlite")
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False, "timeout": 30},
+)
 
-# Build engine kwargs based on DB type
-_engine_kwargs = {}
-if _is_sqlite:
-    _engine_kwargs["connect_args"] = {
-        "check_same_thread": False,
-        "timeout": 30,
-    }
-elif _is_postgres:
-    # Connection pool tuning for Postgres
-    _engine_kwargs["pool_size"] = 5
-    _engine_kwargs["max_overflow"] = 10
-    _engine_kwargs["pool_pre_ping"] = True
-    _engine_kwargs["pool_recycle"] = 300
-    # Only force SSL for remote/cloud connections (not local Docker)
-    _is_local_pg = any(h in DATABASE_URL for h in ["localhost", "127.0.0.1", "@db:", "@db/"])
-    if not _is_local_pg:
-        _engine_kwargs["connect_args"] = {
-            "sslmode": "require",
-            "options": "-c timezone=Asia/Kolkata",
-        }
-    else:
-        _engine_kwargs["connect_args"] = {
-            "options": "-c timezone=Asia/Kolkata",
-        }
-
-engine = create_engine(DATABASE_URL, **_engine_kwargs)
-
-# SQLite-only: enable WAL mode for concurrent reads
-if _is_sqlite:
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.close()
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
 
 SessionLocal = sessionmaker(
     autocommit=False,

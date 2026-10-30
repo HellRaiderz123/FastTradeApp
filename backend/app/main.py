@@ -144,16 +144,14 @@ async def lifespan(app: FastAPI):
         ensure_ai_decisions_schema(engine)
         # Run column migrations (ADD COLUMN IF NOT EXISTS — safe to re-run)
         from app.db.models_fii_dii import FiiDiiDaily  # noqa: F401 — ensures fii_dii_daily is created
-        from app.db.init_db import _MIGRATIONS_COMMON, _MIGRATIONS_POSTGRES
+        from app.db.init_db import _MIGRATIONS_COMMON
         from sqlalchemy import text as _text
-        _migrations = _MIGRATIONS_COMMON + (_MIGRATIONS_POSTGRES if DATABASE_URL.startswith("postgresql") else [])
-        with engine.connect() as _conn:
-            for _stmt in _migrations:
-                try:
+        for _stmt in _MIGRATIONS_COMMON:
+            try:
+                with engine.begin() as _conn:
                     _conn.execute(_text(_stmt))
-                except Exception:
-                    pass
-            _conn.commit()
+            except Exception as _e:
+                logger.debug("Migration skipped (already applied or N/A): %s", _e)
         logger.info("✅ Database tables initialized")
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")
@@ -303,7 +301,11 @@ async def lifespan(app: FastAPI):
 
             _scheduler.add_job(
                 _run_outcome_evaluation,
-                trigger=IntervalTrigger(hours=24),
+                trigger="cron",
+                day_of_week="mon-fri",
+                hour=16,
+                minute=45,
+                timezone="Asia/Kolkata",
                 id="ai_outcome_evaluator",
                 replace_existing=True,
             )

@@ -683,7 +683,6 @@ def _persist_nse_snapshot(data_type: str, payload: Any) -> None:
     try:
         from app.db.session import SessionLocal
         from app.db.models_nse import NseSnapshot
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
         from sqlalchemy import text
 
         today = _date.today()
