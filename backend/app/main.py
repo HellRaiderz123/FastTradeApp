@@ -125,6 +125,19 @@ async def lifespan(app: FastAPI):
     # Restore DB from R2 before anything else (no-op if R2 not configured)
     try:
         from app.db.r2_backup import restore_from_r2, start_periodic_backup
+        _b2_bucket   = os.getenv("BACKUP_BUCKET_NAME", "")
+        _b2_key_id   = os.getenv("BACKUP_KEY_ID", "")
+        _b2_app_key  = os.getenv("BACKUP_APP_KEY", "")
+        _b2_endpoint = os.getenv("BACKUP_ENDPOINT_URL", "")
+        _b2_interval = os.getenv("BACKUP_INTERVAL_MINUTES", "60")
+        logger.info(
+            "🗄️  B2 backup config: BUCKET=%s | ENDPOINT=%s | KEY_ID=%s | APP_KEY=%s | INTERVAL=%s min",
+            _b2_bucket   or "❌ NOT SET",
+            _b2_endpoint or "❌ NOT SET",
+            ("✅ set (" + _b2_key_id[:6] + "...)") if _b2_key_id   else "❌ NOT SET",
+            "✅ set"                                if _b2_app_key  else "❌ NOT SET",
+            _b2_interval,
+        )
         restore_from_r2()
         start_periodic_backup()
     except Exception as _e:

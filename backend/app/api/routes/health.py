@@ -141,10 +141,17 @@ def get_cache_stats():
 
 @router.post("/run-migrations")
 def run_migrations():
-    """Manually run DB column migrations — safe to call multiple times."""
+    """Manually run DB column migrations + ensure all tables exist. Safe to call multiple times."""
     from app.db.session import engine
-    from app.db.init_db import _MIGRATIONS_COMMON
+    from app.db.init_db import init_db, _MIGRATIONS_COMMON
     from sqlalchemy import text
+
+    # Ensure all tables are created first
+    try:
+        init_db()
+        table_status = "ok"
+    except Exception as e:
+        table_status = str(e)
 
     results = []
     for stmt in _MIGRATIONS_COMMON:
@@ -154,7 +161,7 @@ def run_migrations():
             results.append({"stmt": stmt[:60], "status": "applied"})
         except Exception as e:
             results.append({"stmt": stmt[:60], "status": "skipped", "reason": str(e)})
-    return {"status": "done", "results": results}
+    return {"status": "done", "table_init": table_status, "results": results}
 
 
 @router.post("/backup-now")
