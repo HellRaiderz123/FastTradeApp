@@ -137,3 +137,31 @@ def get_cache_stats():
     except Exception as e:
         logger.error(f"Error fetching cache stats: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch cache stats")
+
+
+@router.post("/run-migrations")
+def run_migrations():
+    """Manually run DB column migrations — safe to call multiple times."""
+    from app.db.session import engine
+    from app.db.init_db import _MIGRATIONS_COMMON
+    from sqlalchemy import text
+
+    results = []
+    for stmt in _MIGRATIONS_COMMON:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(stmt))
+            results.append({"stmt": stmt[:60], "status": "applied"})
+        except Exception as e:
+            results.append({"stmt": stmt[:60], "status": "skipped", "reason": str(e)})
+    return {"status": "done", "results": results}
+
+
+@router.post("/backup-now")
+def trigger_backup():
+    """Manually trigger DB backup to cloud storage."""
+    from app.db.r2_backup import backup_to_r2, _configured
+    if not _configured():
+        return {"status": "skipped", "reason": "BACKUP_BUCKET_NAME not configured"}
+    ok = backup_to_r2()
+    return {"status": "ok" if ok else "failed"}

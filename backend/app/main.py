@@ -121,6 +121,14 @@ logger.info(f"📝 Environment loaded: NEWSDATA_API_KEY={'✅' if newsdata_key e
 async def lifespan(app: FastAPI):
     # 🔹 Startup
     logger.info("🚀 App starting")
+
+    # Restore DB from R2 before anything else (no-op if R2 not configured)
+    try:
+        from app.db.r2_backup import restore_from_r2, start_periodic_backup
+        restore_from_r2()
+        start_periodic_backup()
+    except Exception as _e:
+        logger.warning("R2 restore/backup init failed: %s", _e)
     
     # Initialize database tables (create if missing)
     try:
@@ -151,7 +159,7 @@ async def lifespan(app: FastAPI):
                 with engine.begin() as _conn:
                     _conn.execute(_text(_stmt))
             except Exception as _e:
-                logger.debug("Migration skipped (already applied or N/A): %s", _e)
+                logger.warning("Migration skipped (already applied or N/A): %s", _e)
         logger.info("✅ Database tables initialized")
     except Exception as e:
         logger.error(f"❌ Failed to initialize database: {e}")
@@ -358,6 +366,13 @@ async def lifespan(app: FastAPI):
     # 🔹 Shutdown
     logger.info("🛑 App shutting down")
     stop_scheduler()
+
+    # Backup DB to R2 before process exits
+    try:
+        from app.db.r2_backup import backup_to_r2
+        backup_to_r2()
+    except Exception as _e:
+        logger.warning("R2 backup on shutdown failed: %s", _e)
     
     # Cancel background tasks (guard against None if startup failed)
     if mtm_task:
