@@ -124,13 +124,16 @@ def restore_from_r2(force: bool = False) -> bool:
     if not force and _DB_PATH.exists():
         local_mtime = _DB_PATH.stat().st_mtime
         local_size = _DB_PATH.stat().st_size
-        # Skip if local is newer AND similar size (within 10%)
-        if local_mtime >= remote_mtime and local_size >= remote_size * 0.9:
-            logger.info("✅ Local DB is up-to-date, skipping restore")
-            return False
-        # Force restore if local is much smaller (likely incomplete)
+        # Force restore if local is much smaller (likely incomplete/fresh)
         if local_size < remote_size * 0.5:
-            logger.info("⚠️ Local DB is much smaller than remote (%d vs %d bytes) — forcing restore", local_size, remote_size)
+            logger.info("⚠️ Local DB (%d bytes) much smaller than remote (%d bytes) — restoring", local_size, remote_size)
+            # Fall through to download
+        # Skip if local is newer AND similar size (within 10%)
+        elif local_mtime >= remote_mtime and local_size >= remote_size * 0.9:
+            logger.info("✅ Local DB is up-to-date (%d bytes), skipping restore", local_size)
+            return False
+        else:
+            logger.info("📥 Remote DB is newer or larger — restoring")
 
     # Download all 3 files
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
