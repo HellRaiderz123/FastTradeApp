@@ -100,10 +100,11 @@ def backup_to_r2() -> bool:
     return True
 
 
-def restore_from_r2() -> bool:
+def restore_from_r2(force: bool = False) -> bool:
     """
     Download trading.db (+ .shm + .wal) from bucket on startup.
-    Only restores if remote trading.db is newer than local, or local is missing.
+    If force=True, always download regardless of timestamps.
+    Otherwise only restores if remote trading.db is newer than local, or local is missing.
     """
     if not _configured():
         logger.debug("Restore skipped — BACKUP_BUCKET_NAME not configured")
@@ -115,15 +116,21 @@ def restore_from_r2() -> bool:
     try:
         head = client.head_object(Bucket=_BUCKET, Key="trading.db")
         remote_mtime = head["LastModified"].timestamp()
+        remote_size = head.get("ContentLength", 0)
     except Exception as e:
         logger.info("No remote backup found or unreachable (%s) — starting fresh", e)
         return False
 
-    if _DB_PATH.exists():
+    if not force and _DB_PATH.exists():
         local_mtime = _DB_PATH.stat().st_mtime
-        if local_mtime >= remote_mtime:
+        local_size = _DB_PATH.stat().st_size
+        # Skip if local is newer AND similar size (within 10%)
+        if local_mtime >= remote_mtime and local_size >= remote_size * 0.9:
             logger.info("✅ Local DB is up-to-date, skipping restore")
             return False
+        # Force restore if local is much smaller (likely incomplete)
+        if local_size < remote_size * 0.5:
+            logger.info("⚠️ Local DB is much smaller than remote (%d vs %d bytes) — forcing restore", local_size, remote_size)
 
     # Download all 3 files
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)

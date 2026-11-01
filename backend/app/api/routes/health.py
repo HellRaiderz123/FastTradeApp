@@ -32,6 +32,61 @@ def health_check():
     }
 
 
+@router.get("/ready")
+def readiness_check(db: Session = Depends(get_db)):
+    """
+    Readiness check — verifies all critical dependencies are available.
+    Returns 503 if any dependency is unhealthy.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text
+    
+    checks = {
+        "database": False,
+        "broker": False,
+        "scheduler": False,
+    }
+    errors = []
+    
+    # Check database
+    try:
+        db.execute(text("SELECT 1")).scalar()
+        checks["database"] = True
+    except Exception as e:
+        errors.append(f"database: {e}")
+    
+    # Check broker
+    try:
+        from app.core.broker.interface import get_broker_manager
+        manager = get_broker_manager()
+        status = manager.get_status()
+        checks["broker"] = bool(status.get("active_broker"))
+    except Exception as e:
+        errors.append(f"broker: {e}")
+    
+    # Check scheduler
+    try:
+        from app.core.market.scheduler import scheduler
+        checks["scheduler"] = scheduler.running
+    except Exception as e:
+        errors.append(f"scheduler: {e}")
+    
+    all_ready = all(checks.values())
+    
+    result = {
+        "ready": all_ready,
+        "checks": checks,
+    }
+    
+    if errors:
+        result["errors"] = errors
+    
+    if not all_ready:
+        raise HTTPException(status_code=503, detail=result)
+    
+    return result
+
+
 @router.get("/heartbeat")
 def heartbeat(db: Session = Depends(get_db)):
     """Heartbeat with basic info"""
@@ -41,9 +96,19 @@ def heartbeat(db: Session = Depends(get_db)):
 
 @router.get("/full")
 def full_health_status(db: Session = Depends(get_db)):
-    """Comprehensive health status"""
+    """Comprehensive health status including broker"""
     monitor = HealthMonitor(db)
-    return monitor.get_full_health_status()
+    status = monitor.get_full_health_status()
+    
+    # Add broker status
+    try:
+        from app.core.broker.interface import get_broker_manager
+        broker_status = get_broker_manager().get_status()
+        status["broker"] = broker_status
+    except Exception as e:
+        status["broker"] = {"status": "error", "error": str(e)}
+    
+    return status
 
 
 @router.get("/database")
@@ -172,3 +237,13 @@ def trigger_backup():
         return {"status": "skipped", "reason": "BACKUP_BUCKET_NAME not configured"}
     ok = backup_to_r2()
     return {"status": "ok" if ok else "failed"}
+
+
+@router.post("/restore-now")
+def trigger_restore():
+    """Force restore DB from cloud storage (overwrites local)."""
+    from app.db.r2_backup import restore_from_r2, _configured
+    if not _configured():
+        return {"status": "skipped", "reason": "BACKUP_BUCKET_NAME not configured"}
+    ok = restore_from_r2(force=True)
+    return {"status": "restored" if ok else "failed"}
