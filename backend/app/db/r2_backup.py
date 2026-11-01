@@ -138,7 +138,26 @@ def restore_from_r2(force: bool = False) -> bool:
     # Download all 3 files
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     restored = []
+    
+    # Download main DB file first (most important)
+    main_key = "trading.db"
+    logger.info("📥 Starting download of %s (%d bytes expected)...", main_key, remote_size)
+    try:
+        client.download_file(_BUCKET, main_key, str(_DB_PATH))
+        actual_size = _DB_PATH.stat().st_size
+        if actual_size < remote_size * 0.9:
+            logger.error("❌ Download incomplete: got %d bytes, expected %d", actual_size, remote_size)
+            return False
+        restored.append(f"{main_key} ({actual_size / 1024:.1f} KB)")
+        logger.info("✅ Downloaded %s: %d bytes", main_key, actual_size)
+    except Exception as e:
+        logger.error("❌ Failed to download %s: %s", main_key, e)
+        return False
+    
+    # Download WAL files (optional, may not exist)
     for local_path, object_key in _FILES.items():
+        if object_key == "trading.db":
+            continue  # Already downloaded
         try:
             client.download_file(_BUCKET, object_key, str(local_path))
             size_kb = local_path.stat().st_size / 1024
