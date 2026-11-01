@@ -19,6 +19,7 @@ from app.core.ml.stock_model import train_stock_model
 from app.db.session import SessionLocal
 from app.db.models_candles import CandleDaily
 from app.core.market.candles import fetch_daily_candles
+from app.core.auth import get_current_user_optional
 
 # LSTM imports (optional - requires tensorflow)
 try:
@@ -81,7 +82,7 @@ def _get_nifty100_symbols(db: Session) -> list:
 
 
 @router.get("/metrics")
-async def get_ml_metrics(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def get_ml_metrics(db: Session = Depends(get_db), _user=Depends(get_current_user_optional)) -> Dict[str, Any]:
     """
     Get ML model metrics including accuracy, precision, recall, F1 score.
     Reports 'ready' if either single or ensemble model file exists.
@@ -453,7 +454,7 @@ async def get_model_performance() -> Dict[str, Any]:
 
 
 @router.get("/predict/{symbol}")
-async def predict_symbol(symbol: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def predict_symbol(symbol: str, db: Session = Depends(get_db), _user=Depends(get_current_user_optional)) -> Dict[str, Any]:
     """
     Get ML prediction for a single symbol.
     Returns signal (BULLISH / BEARISH / NO_TRADE), confidence, and bias.
@@ -488,7 +489,7 @@ class BulkPredictRequest(BaseModel):
 
 
 @router.post("/predict-bulk")
-async def predict_bulk(request: BulkPredictRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def predict_bulk(request: BulkPredictRequest, db: Session = Depends(get_db), _user=Depends(get_current_user_optional)) -> Dict[str, Any]:
     """
     Get ML predictions for multiple symbols at once.
     Uses thread pool to run predictions concurrently instead of sequentially.

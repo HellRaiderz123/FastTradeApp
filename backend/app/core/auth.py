@@ -154,6 +154,37 @@ def require_authenticated_user(
     return current_user
 
 
+def get_current_user_optional(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> Dict[str, Any] | None:
+    """
+    Optional authentication - returns user if authenticated, None otherwise.
+    Use for endpoints that work both with and without auth.
+    """
+    if not _is_auth_enabled():
+        return {"username": "anonymous", "auth_enabled": False}
+
+    token = None
+    if credentials and credentials.credentials:
+        token = credentials.credentials
+    elif request is not None:
+        token = request.query_params.get("token")
+
+    if not token:
+        return None  # No auth provided, but that's OK for optional endpoints
+
+    try:
+        payload = decode_access_token(token)
+        return {
+            "username": payload["sub"],
+            "auth_enabled": True,
+            "exp": payload.get("exp"),
+        }
+    except HTTPException:
+        return None  # Invalid token, treat as unauthenticated
+
+
 def authenticate_websocket(websocket: WebSocket) -> Dict[str, Any]:
     """
     Authenticate a WebSocket connection using bearer token from either:

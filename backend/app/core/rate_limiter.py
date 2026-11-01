@@ -127,55 +127,106 @@ class RateLimiter:
 
 class RequestCache:
     """
-    Simple in-memory cache for API responses
-    Reduces redundant API calls
+    LRU cache for API responses with TTL and size limits.
+    Reduces redundant API calls while preventing memory bloat.
     """
     
-    def __init__(self, ttl_seconds: int = 2):
+    def __init__(self, ttl_seconds: int = 2, max_size: int = 1000):
         """
-        Initialize cache
+        Initialize cache with LRU eviction.
         
         Args:
             ttl_seconds: Time-to-live for cached items
+            max_size: Maximum number of items in cache (LRU eviction when exceeded)
         """
         self.ttl_seconds = ttl_seconds
-        self.cache: Dict[str, tuple] = {}  # key -> (data, expiry_time)
+        self.max_size = max_size
+        self.cache: Dict[str, tuple] = {}  # key -> (data, expiry_time, access_time)
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
     
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache if not expired"""
+        """Get value from cache if not expired, updating access time."""
         if key not in self.cache:
+            self._misses += 1
             return None
         
-        data, expiry_time = self.cache[key]
+        data, expiry_time, _ = self.cache[key]
         
         if time.time() > expiry_time:
             del self.cache[key]
+            self._misses += 1
             return None
         
+        # Update access time for LRU tracking
+        self.cache[key] = (data, expiry_time, time.time())
+        self._hits += 1
         logger.debug(f"Cache hit: {key}")
         return data
     
     def set(self, key: str, data: Any, ttl: Optional[int] = None):
-        """Set value in cache"""
+        """Set value in cache with LRU eviction if needed."""
+        # Evict expired items first
+        self._evict_expired()
+        
+        # Evict LRU items if at capacity
+        while len(self.cache) >= self.max_size:
+            self._evict_lru()
+        
         ttl = ttl or self.ttl_seconds
         expiry_time = time.time() + ttl
-        self.cache[key] = (data, expiry_time)
+        self.cache[key] = (data, expiry_time, time.time())
         logger.debug(f"Cache set: {key} (TTL: {ttl}s)")
     
+    def _evict_expired(self) -> int:
+        """Remove all expired items. Returns count of evicted items."""
+        now = time.time()
+        expired_keys = [
+            k for k, (_, expiry, _) in self.cache.items()
+            if now > expiry
+        ]
+        for k in expired_keys:
+            del self.cache[k]
+            self._evictions += 1
+        return len(expired_keys)
+    
+    def _evict_lru(self) -> bool:
+        """Evict the least recently used item. Returns True if evicted."""
+        if not self.cache:
+            return False
+        
+        # Find item with oldest access time
+        lru_key = min(self.cache.keys(), key=lambda k: self.cache[k][2])
+        del self.cache[lru_key]
+        self._evictions += 1
+        logger.debug(f"Cache LRU eviction: {lru_key}")
+        return True
+    
     def clear(self):
-        """Clear entire cache"""
+        """Clear entire cache."""
         self.cache.clear()
+        self._hits = 0
+        self._misses = 0
+        self._evictions = 0
         logger.info("Cache cleared")
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics"""
+        """Get cache statistics including hit rate."""
         now = time.time()
-        active_items = sum(1 for _, expiry in self.cache.values() if now < expiry)
+        active_items = sum(1 for _, expiry, _ in self.cache.values() if now < expiry)
+        total_requests = self._hits + self._misses
+        hit_rate = (self._hits / total_requests * 100) if total_requests > 0 else 0.0
         
         return {
             "total_items": len(self.cache),
             "active_items": active_items,
-            "expired_items": len(self.cache) - active_items
+            "expired_items": len(self.cache) - active_items,
+            "max_size": self.max_size,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate_percent": round(hit_rate, 2),
+            "evictions": self._evictions,
         }
 
 

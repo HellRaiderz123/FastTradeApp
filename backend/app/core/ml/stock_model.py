@@ -239,43 +239,57 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
 
 
 def predict_stock_signal(db: Session, symbol: str, config: StockMLConfig) -> Dict:
-    model = load_model(config)
-    if model is None:
-        return {"signal": "NO_TRADE", "confidence": 0, "reason": "ML model not trained", "bias": "NEUTRAL"}
+    """Predict stock signal using trained ML model."""
+    try:
+        model = load_model(config)
+        if model is None:
+            return {"signal": "NO_TRADE", "confidence": 0, "reason": "ML model not trained", "bias": "NEUTRAL"}
 
-    # Load calibrated threshold from saved metadata
-    meta_path = config.model_path.with_suffix(".json")
-    decision_threshold = 0.5
-    if meta_path.exists():
-        import json
-        with open(meta_path, "r") as f:
-            decision_threshold = json.load(f).get("decision_threshold", 0.5)
+        # Load calibrated threshold from saved metadata
+        meta_path = config.model_path.with_suffix(".json")
+        decision_threshold = 0.5
+        if meta_path.exists():
+            import json
+            try:
+                with open(meta_path, "r") as f:
+                    decision_threshold = json.load(f).get("decision_threshold", 0.5)
+            except Exception as e:
+                logger.warning(f"Failed to load model metadata: {e}")
 
-    raw = _load_candles_df(db, symbol, config.timeframe, config.max_candles)
-    if raw.empty:
-        return {"signal": "NO_TRADE", "confidence": 0, "reason": "No candle data", "bias": "NEUTRAL"}
+        raw = _load_candles_df(db, symbol, config.timeframe, config.max_candles)
+        if raw.empty:
+            return {"signal": "NO_TRADE", "confidence": 0, "reason": "No candle data", "bias": "NEUTRAL"}
 
-    features = build_features_from_df(raw, config)
-    if features.empty:
-        return {"signal": "NO_TRADE", "confidence": 0, "reason": "Not enough feature rows", "bias": "NEUTRAL"}
+        features = build_features_from_df(raw, config)
+        if features.empty:
+            return {"signal": "NO_TRADE", "confidence": 0, "reason": "Not enough feature rows", "bias": "NEUTRAL"}
 
-    x = features.iloc[-1:][FEATURE_COLUMNS]
-    prob_up = float(model.predict_proba(x)[0][1])
+        x = features.iloc[-1:][FEATURE_COLUMNS]
+        
+        # Check for NaN values in features
+        if x.isnull().any().any():
+            logger.warning(f"NaN values in features for {symbol}, filling with 0")
+            x = x.fillna(0)
+        
+        prob_up = float(model.predict_proba(x)[0][1])
 
-    if prob_up >= decision_threshold + 0.05:
-        signal, bias = "BULLISH", "BULLISH"
-    elif prob_up <= decision_threshold - 0.05:
-        signal, bias = "BEARISH", "BEARISH"
-    else:
-        signal, bias = "NO_TRADE", "NEUTRAL"
+        if prob_up >= decision_threshold + 0.05:
+            signal, bias = "BULLISH", "BULLISH"
+        elif prob_up <= decision_threshold - 0.05:
+            signal, bias = "BEARISH", "BEARISH"
+        else:
+            signal, bias = "NO_TRADE", "NEUTRAL"
 
-    confidence = int(abs(prob_up - decision_threshold) / (1 - decision_threshold) * 100)
-    confidence = max(0, min(confidence, 100))
+        confidence = int(abs(prob_up - decision_threshold) / (1 - decision_threshold) * 100)
+        confidence = max(0, min(confidence, 100))
 
-    return {
-        "signal": signal,
-        "confidence": confidence,
-        "reason": f"ML prob_up={prob_up:.3f} threshold={decision_threshold}",
-        "bias": bias,
-        "indicators": {"ml_prob_up": round(prob_up, 4), "decision_threshold": decision_threshold},
-    }
+        return {
+            "signal": signal,
+            "confidence": confidence,
+            "reason": f"ML prob_up={prob_up:.3f} threshold={decision_threshold}",
+            "bias": bias,
+            "indicators": {"ml_prob_up": round(prob_up, 4), "decision_threshold": decision_threshold},
+        }
+    except Exception as e:
+        logger.error(f"Error predicting signal for {symbol}: {e}")
+        return {"signal": "NO_TRADE", "confidence": 0, "reason": f"Prediction error: {str(e)}", "bias": "NEUTRAL"}

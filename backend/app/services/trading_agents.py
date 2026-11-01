@@ -68,7 +68,9 @@ def _ws_broadcast(payload: dict) -> None:
 # In-memory job store  {job_id: JobState}
 # ---------------------------------------------------------------------------
 # TTL: completed / failed jobs are cleaned up after RESULT_TTL_MINUTES.
+# Max size: prevent unbounded growth with MAX_JOBS limit.
 RESULT_TTL_MINUTES = 60
+MAX_JOBS = 500  # Maximum jobs to keep in memory
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
 _CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "data_cache" / "ai_checkpoints"
@@ -190,6 +192,9 @@ def clear_analysis_checkpoint(symbol: str, exchange: str = "NSE") -> bool:
 
 
 def _new_job(symbol: str, exchange: str, desk_key: str | None = None) -> str:
+    # Enforce max jobs limit before creating new one
+    _enforce_max_jobs()
+    
     job_id = str(uuid.uuid4())
     with _jobs_lock:
         _jobs[job_id] = {
@@ -250,6 +255,50 @@ def cleanup_expired_jobs() -> int:
             del _jobs[jid]
             removed += 1
     return removed
+
+
+def _enforce_max_jobs() -> int:
+    """
+    Enforce MAX_JOBS limit by removing oldest completed/failed jobs.
+    Called automatically when adding new jobs.
+    Returns number of jobs evicted.
+    """
+    evicted = 0
+    with _jobs_lock:
+        if len(_jobs) < MAX_JOBS:
+            return 0
+        
+        # First, remove expired jobs
+        cutoff = datetime.utcnow() - timedelta(minutes=RESULT_TTL_MINUTES)
+        expired = [
+            jid for jid, j in _jobs.items()
+            if j["status"] in ("COMPLETED", "FAILED")
+            and datetime.fromisoformat(j["created_at"]) < cutoff
+        ]
+        for jid in expired:
+            del _jobs[jid]
+            evicted += 1
+        
+        # If still over limit, remove oldest completed/failed jobs
+        while len(_jobs) >= MAX_JOBS:
+            # Find oldest completed/failed job
+            candidates = [
+                (jid, j["created_at"])
+                for jid, j in _jobs.items()
+                if j["status"] in ("COMPLETED", "FAILED")
+            ]
+            if not candidates:
+                # All jobs are running/queued, can't evict
+                break
+            
+            oldest_jid = min(candidates, key=lambda x: x[1])[0]
+            del _jobs[oldest_jid]
+            evicted += 1
+            logger.debug("trading_agents: evicted job %s (max jobs limit)", oldest_jid)
+    
+    if evicted > 0:
+        logger.info("trading_agents: evicted %d jobs to enforce MAX_JOBS=%d", evicted, MAX_JOBS)
+    return evicted
 
 
 # ---------------------------------------------------------------------------

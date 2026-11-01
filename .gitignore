@@ -142,3 +142,12 @@ web/playwright-report/*
 backend/docker_backup_20261027_180926/*
 backend/docker_backup_20261027_184047/*
 backend/neon_backup_20261027_183825/*
+
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# B2 upload script with credentials
+upload_to_b2.bat

@@ -17,8 +17,8 @@ import {
   Brain,
   TrendingUp as TrendIcon
 } from 'lucide-react';
-import { mlAPI } from '../lib/api';
-import TechnicalChart from './TechnicalChart';
+import api, { mlAPI, authTokenStore } from '../lib/api';
+import TradingChart from './TradingChart';
 import HistoricalReturns from './HistoricalReturns';
 import PeerComparison from './PeerComparison';
 import StockStrategyPanel from './StockStrategyPanel';
@@ -130,28 +130,13 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
   const loadNews = async () => {
     setNewsLoading(true);
     try {
-      const newsUrl = `/api/stock-news/${symbol}`;
-      
-      const response = await fetch(newsUrl);
-      
-      if (!response.ok) {
-        console.error(`News API error ${response.status}:`, response.statusText);
-        setNews([]);
-        return;
+      const res = await api.get(`/stock-news/${symbol}`);
+      if (res.data?.error) {
+        console.warn('News API warning:', res.data.error);
       }
-      
-      const data = await response.json();
-      
-      if (data.error) {
-        console.warn('News API warning:', data.error);
-      }
-      
-      setNews(data.articles || []);
-    } catch (error) {
-      console.error('Failed to load news:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', error.message, error.stack);
-      }
+      setNews(res.data?.articles || []);
+    } catch (error: any) {
+      console.error('Failed to load news:', error?.message || error);
       setNews([]);
     } finally {
       setNewsLoading(false);
@@ -160,18 +145,8 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
 
   const loadTechnicals = async () => {
     try {
-      const techUrl = `/api/market-dashboard/stock-technicals/${symbol}`;
-      
-      const response = await fetch(techUrl);
-      
-      if (!response.ok) {
-        console.error(`Technicals API error ${response.status}:`, response.statusText);
-        setTechnicals(null);
-        return;
-      }
-      
-      const data = await response.json();
-      
+      const res = await api.get(`/market-dashboard/stock-technicals/${symbol}`);
+      const data = res.data;
       setTechnicals({
         rsi: data.indicators?.rsi || null,
         macd: data.indicators?.macd || null,
@@ -180,11 +155,8 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
         trend: data.trend || 'SIDEWAYS',
         recommendation: data.recommendation || 'HOLD'
       });
-    } catch (error) {
-      console.error('Failed to load technicals:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', error.message, error.stack);
-      }
+    } catch (error: any) {
+      console.error('Failed to load technicals:', error?.message || error);
       setTechnicals(null);
     }
   };
@@ -206,31 +178,15 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
 
   const loadTimeframeSuggestions = async () => {
     try {
-      const response = await fetch(`/api/timeframe-suggestions/${symbol}`);
-      const data = await response.json();
-      setTimeframeSuggestions(data.suggestions || []);
-    } catch (error) {
-      console.error('Failed to load timeframe suggestions:', error);
-      // Create default suggestions based on technicals
+      const res = await api.get(`/timeframe-suggestions/${symbol}`);
+      setTimeframeSuggestions(res.data?.suggestions || []);
+    } catch (error: any) {
+      console.error('Failed to load timeframe suggestions:', error?.message || error);
+      // Create default suggestions
       setTimeframeSuggestions([
-        {
-          timeframe: '15m',
-          score: 75,
-          reason: 'Good for intraday momentum trades',
-          suitability: 'good'
-        },
-        {
-          timeframe: '1h',
-          score: 85,
-          reason: 'Optimal for swing trading entries',
-          suitability: 'excellent'
-        },
-        {
-          timeframe: '1d',
-          score: 70,
-          reason: 'Suitable for position trading',
-          suitability: 'good'
-        }
+        { timeframe: '15m', score: 75, reason: 'Good for intraday momentum trades', suitability: 'good' },
+        { timeframe: '1h', score: 85, reason: 'Optimal for swing trading entries', suitability: 'excellent' },
+        { timeframe: '1d', score: 70, reason: 'Suitable for position trading', suitability: 'good' }
       ]);
     }
   };
@@ -325,15 +281,19 @@ const StockDetailModal: React.FC<StockDetailModalProps> = ({
               {/* Overview Tab */}
               {activeTab === 'overview' && (
                 <div className="space-y-6">
-                  {/* Chart */}
-                  <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-                    <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                  {/* Chart - Using TradingView Lightweight Charts */}
+                  <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-4">
+                    <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
                       <BarChart3 size={16} className="text-blue-400" />
-                      Price Chart (15m)
+                      Price Chart
                     </h3>
-                    <div className="w-full" style={{ height: '450px' }}>
-                      <TechnicalChart symbol={symbol} timeframe="15m" height={450} />
-                    </div>
+                    <TradingChart 
+                      symbol={symbol} 
+                      defaultTimeframe="15m" 
+                      height={400} 
+                      showTimeframeSelector={true}
+                      showHeader={false}
+                    />
                   </div>
 
                   {/* ML Signal Card */}

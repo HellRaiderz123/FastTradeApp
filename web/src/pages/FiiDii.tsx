@@ -37,7 +37,7 @@ interface HistoryRecord {
 type Tab = 'cash' | 'fno' | 'chart' | 'history' | 'participant' | 'short' | '52week' | 'turnover';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-const _apiBase = (import.meta as any).env?.VITE_API_BASE || '';
+const _apiBase = (import.meta as any).env?.VITE_API_BASE || '/api';
 const api = axios.create({ baseURL: `${_apiBase}/fii-dii` });
 api.interceptors.request.use(c => {
   const t = authTokenStore.get(); if (t) c.headers['Authorization'] = `Bearer ${t}`; return c;

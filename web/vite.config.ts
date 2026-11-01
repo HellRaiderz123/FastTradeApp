@@ -23,6 +23,10 @@ export default defineConfig({
         ws: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       },
+      '/nse': {
+        target: BACKEND_ORIGIN,
+        changeOrigin: true,
+      },
       '/ws': {
         target: BACKEND_WS_ORIGIN,
         changeOrigin: true,
