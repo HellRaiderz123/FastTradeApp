@@ -7,7 +7,7 @@ class FiiDiiDaily(Base):
     __tablename__ = "fii_dii_daily"
 
     id = Column(Integer, primary_key=True)
-    date = Column(Date, nullable=False, unique=True, index=True)  # trade date
+    date = Column(Date, nullable=False, unique=True)  # trade date
 
     # Cash segment
     fii_buy  = Column(Float)
@@ -41,4 +41,4 @@ class FiiDiiDaily(Base):
     updated_at  = Column(DateTime(timezone=True), default=now_ist, onupdate=now_ist)
 
 
-Index("ix_fii_dii_daily_date", FiiDiiDaily.date, unique=True)
+# Index already created by unique=True on date column
