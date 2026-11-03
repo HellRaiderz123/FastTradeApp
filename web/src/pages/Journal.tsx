@@ -264,37 +264,37 @@ const filteredEntries = entries.filter((entry) => {
       <div className="terminal-panel terminal-pattern p-6">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
           <div>
-            <p className="terminal-title text-2xl text-white">Signal Diagnostics</p>
-            <p className="text-sm text-slate-400">
+            <p className="terminal-title text-2xl text-foreground">Signal Diagnostics</p>
+            <p className="text-sm text-muted-foreground">
               Loss drivers by signal bias, strategy, and regime for the selected window.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-400">Lookback (days)</label>
+              <label className="text-xs text-muted-foreground">Lookback (days)</label>
               <input
                 type="number"
                 min={1}
                 max={365}
                 value={diagnosticsLookback}
                 onChange={(event) => setDiagnosticsLookback(Math.max(1, Number(event.target.value) || 1))}
-                className="w-24 bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200"
+                className="w-24 bg-background border border-border rounded-md px-3 py-2 text-sm text-foreground"
               />
             </div>
             <div className="flex items-center gap-2">
-              <label className="text-xs text-slate-400">Limit</label>
+              <label className="text-xs text-muted-foreground">Limit</label>
               <input
                 type="number"
                 min={10}
                 max={1000}
                 value={diagnosticsLimit}
                 onChange={(event) => setDiagnosticsLimit(Math.max(10, Number(event.target.value) || 10))}
-                className="w-24 bg-slate-900/80 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200"
+                className="w-24 bg-background border border-border rounded-md px-3 py-2 text-sm text-foreground"
               />
             </div>
             <button
               onClick={fetchDiagnostics}
-              className="px-4 py-2 bg-slate-900/80 border border-slate-700 rounded-md text-sm text-slate-200 hover:text-white hover:border-slate-500 transition"
+              className="px-4 py-2 bg-card border border-border rounded-md text-sm text-foreground hover:bg-accent transition"
             >
               Refresh
             </button>
@@ -339,16 +339,16 @@ const filteredEntries = entries.filter((entry) => {
       {/* Journal */}
       <div className="card-glass p-6">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-bold text-white">Trade Journal</h2>
+          <h2 className="text-2xl font-bold text-foreground">Trade Journal</h2>
           <div className="flex items-center gap-2">
             <button
               onClick={handleClearClosed}
               disabled={clearing}
-              className="flex items-center gap-2 px-4 py-2 bg-rose-900/60 hover:bg-rose-800 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition text-rose-300 text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-destructive/10 hover:bg-destructive/20 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition text-destructive text-sm"
             >
               {clearing ? 'Clearing...' : '🗑 Clear Closed'}
             </button>
-            <button onClick={exportCSV} disabled={filteredEntries.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed">
+            <button onClick={exportCSV} disabled={filteredEntries.length === 0} className="flex items-center gap-2 px-4 py-2 bg-card border border-border rounded-lg hover:bg-accent transition text-muted-foreground disabled:opacity-40 disabled:cursor-not-allowed">
               <Download className="w-4 h-4" />
               Export CSV
             </button>
@@ -363,7 +363,7 @@ const filteredEntries = entries.filter((entry) => {
         <div className="space-y-4 mb-6">
           {/* P&L Filter */}
           <div>
-            <p className="text-xs text-slate-400 mb-2 font-semibold">P&L Filter</p>
+            <p className="text-xs text-muted-foreground mb-2 font-semibold">P&L Filter</p>
             <div className="flex gap-2">
               {(['all', 'profit', 'loss'] as const).map((f) => (
                 <button
@@ -371,8 +371,8 @@ const filteredEntries = entries.filter((entry) => {
                   onClick={() => setPnlFilter(f)}
                   className={`px-4 py-2 rounded-lg font-medium transition ${
                     pnlFilter === f
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-slate-900 text-slate-400 hover:text-white'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-card border border-border text-muted-foreground hover:text-foreground hover:bg-accent'
                   }`}
                 >
                   {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -388,14 +388,14 @@ const filteredEntries = entries.filter((entry) => {
         {loading ? (
           <div className="space-y-3 py-4">
             {[1,2,3].map(i => (
-              <div key={i} className="bg-slate-900 rounded-lg p-4 border border-slate-800 animate-pulse">
+              <div key={i} className="bg-card rounded-lg p-4 border border-border animate-pulse">
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 bg-slate-800 rounded-lg"></div>
+                  <div className="w-10 h-10 bg-muted rounded-lg"></div>
                   <div className="flex-1 space-y-2">
-                    <div className="h-4 bg-slate-800 rounded w-1/3"></div>
-                    <div className="h-3 bg-slate-800 rounded w-1/2"></div>
+                    <div className="h-4 bg-muted rounded w-1/3"></div>
+                    <div className="h-3 bg-muted rounded w-1/2"></div>
                   </div>
-                  <div className="w-20 h-6 bg-slate-800 rounded"></div>
+                  <div className="w-20 h-6 bg-muted rounded"></div>
                 </div>
               </div>
             ))}
@@ -435,8 +435,8 @@ const StatCard: React.FC<{ label: string; value: string; subtext?: string; color
 
   return (
     <div className="card-glass p-4">
-      <p className="text-xs text-slate-400 mb-1">{label}</p>
-      <p className={`text-2xl font-bold ${colorClass || 'text-white'}`}>{value}</p>
+      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+      <p className={`text-2xl font-bold ${colorClass || 'text-foreground'}`}>{value}</p>
       {subtext && <p className="text-xs text-slate-500 mt-1">{subtext}</p>}
     </div>
   );
@@ -474,16 +474,16 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
   const isProfitable = entry.pnl >= 0;
 
   return (
-    <div className="border border-slate-700 rounded-lg overflow-hidden">
+    <div className="border border-border rounded-lg overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full bg-slate-900/50 hover:bg-slate-900 p-4 flex items-center justify-between transition"
+        className="w-full bg-card hover:bg-accent/60 p-4 flex items-center justify-between transition"
       >
         <div className="flex items-center gap-4 flex-1 text-left">
           <div>
-            <p className="font-semibold text-white">{entry.strategy}</p>
+            <p className="font-semibold text-foreground">{entry.strategy}</p>
             <div className="flex items-center gap-2 mt-1">
-              <p className="text-xs text-slate-400">{entry.underlying}</p>
+              <p className="text-xs text-muted-foreground">{entry.underlying}</p>
               <span className={`inline-block px-2 py-0.5 rounded text-xs border ${getModeColor(entry.execution_mode)}`}>
                 {getModeLabel(entry.execution_mode)}
               </span>
@@ -493,17 +493,17 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
 
         <div className="flex items-center gap-8 text-right">
           <div>
-            <p className="text-xs text-slate-400">Created Time</p>
-            <p className="text-sm font-medium text-white">{new Date(entry.created_at).toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground">Created Time</p>
+            <p className="text-sm font-medium text-foreground">{new Date(entry.created_at).toLocaleString()}</p>
           </div>
           {entry.closed_at && (
             <div>
-              <p className="text-xs text-slate-400">Closed Time</p>
-              <p className="text-sm font-medium text-white">{new Date(entry.closed_at).toLocaleString()}</p>
+              <p className="text-xs text-muted-foreground">Closed Time</p>
+              <p className="text-sm font-medium text-foreground">{new Date(entry.closed_at).toLocaleString()}</p>
             </div>
           )}
           <div>
-            <p className="text-xs text-slate-400">P&L</p>
+            <p className="text-xs text-muted-foreground">P&L</p>
             <p className={`text-lg font-bold ${isProfitable ? 'text-green-400' : 'text-red-400'}`}>
               {isProfitable ? '+' : ''}₹{Math.abs(entry.pnl).toLocaleString()}
             </p>
@@ -518,14 +518,14 @@ const JournalEntryRow: React.FC<JournalEntryRowProps> = ({ entry, expanded, onTo
           >
             <Trash2 className="w-5 h-5" />
           </button>
-          <div className="w-6 h-6 text-slate-400">
+          <div className="w-6 h-6 text-muted-foreground">
             <ChevronDown className={`w-6 h-6 transition ${expanded ? 'rotate-180' : ''}`} />
           </div>
         </div>
       </button>
 
       {expanded && (
-        <div className="bg-slate-950/50 p-4 border-t border-slate-700 grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="bg-muted/30 p-4 border-t border-border grid grid-cols-2 md:grid-cols-5 gap-4">
           <DetailItem label="Entry Price" value={entry.entry_price ? `₹${entry.entry_price.toLocaleString()}` : 'N/A'} />
           <DetailItem label="Exit Price" value={entry.exit_price !== null && entry.exit_price !== undefined ? `₹${entry.exit_price.toLocaleString()}` : 'N/A'} />
           <DetailItem label="Return %" value={`${entry.pnl_percent.toFixed(2)}%`} color={isProfitable ? 'green' : 'red'} />
@@ -545,8 +545,8 @@ const DetailItem: React.FC<{ label: string; value: string; color?: string }> = (
 
   return (
     <div>
-      <p className="text-xs text-slate-400 mb-1">{label}</p>
-      <p className={`font-semibold ${colorClass || 'text-white'}`}>{value}</p>
+      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+      <p className={`font-semibold ${colorClass || 'text-foreground'}`}>{value}</p>
     </div>
   );
 };
@@ -554,7 +554,7 @@ const DetailItem: React.FC<{ label: string; value: string; color?: string }> = (
 const AnalysisCard: React.FC<{ title: string; value: string }> = ({ title, value }) => (
   <div className="card-glass p-6">
     <p className="text-slate-400 mb-2">{title}</p>
-    <p className="text-3xl font-bold text-white">{value}</p>
+    <p className="text-3xl font-bold text-foreground">{value}</p>
   </div>
 );
 
@@ -574,8 +574,8 @@ const formatCompactMoney = (value: number) => {
 const DiagnosticsPanel: React.FC<{ title: string; rows: DiagnosticsRow[] }> = ({ title, rows }) => (
   <div className="card-glass p-4">
     <div className="flex items-center justify-between mb-3">
-      <p className="text-sm font-semibold text-slate-200">{title}</p>
-      <span className="text-xs text-slate-500">{rows.length} buckets</span>
+      <p className="text-sm font-semibold text-foreground">{title}</p>
+      <span className="text-xs text-muted-foreground">{rows.length} buckets</span>
     </div>
     {rows.length === 0 ? (
       <p className="text-sm text-slate-500">No data yet</p>
@@ -584,8 +584,8 @@ const DiagnosticsPanel: React.FC<{ title: string; rows: DiagnosticsRow[] }> = ({
         {rows.map((row) => (
           <div key={row.key} className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-sm text-white">{row.key}</p>
-              <p className="text-xs text-slate-500">
+              <p className="text-sm text-foreground">{row.key}</p>
+              <p className="text-xs text-muted-foreground">
                 {row.trades} trades · Win {row.win_rate_pct.toFixed(1)}% · PF {row.profit_factor === null ? 'N/A' : row.profit_factor.toFixed(2)}
               </p>
             </div>

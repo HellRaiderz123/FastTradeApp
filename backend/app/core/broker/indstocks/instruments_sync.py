@@ -92,8 +92,11 @@ def sync_instruments(force: bool = False) -> int:
 
                 if source == "index":
                     sym = (row.get("SEGMENT") or "").strip().upper()
+                    # INDstocks uses NIDX_ for NSE indices, BIDX_ for BSE indices
+                    seg = "NIDX" if exch == "NSE" else ("BIDX" if exch == "BSE" else exch)
                 else:
                     sym = (row.get("TRADING_SYMBOL") or "").strip().upper()
+                    seg = exch
 
                 if not sym:
                     continue
@@ -102,7 +105,7 @@ def sync_instruments(force: bool = False) -> int:
                 if sym not in rows_by_sym or exch == "NSE":
                     rows_by_sym[sym] = {
                         "symbol":     sym,
-                        "scrip_code": f"{exch}_{sid}",
+                        "scrip_code": f"{seg}_{sid}",
                         "exchange":   exch,
                         "source":     source,
                     }
@@ -160,21 +163,28 @@ def get_scrip_code_from_db(symbol: str) -> str | None:
     sym = symbol.upper().strip()
     db = SessionLocal()
     try:
-        # Prefer NSE, then any exchange; prefer equity > index > fno
-        for source in ("equity", "index", "fno"):
-            # Try NSE first
-            row = db.query(IndstocksInstrument.scrip_code).filter(
-                IndstocksInstrument.symbol == sym,
-                IndstocksInstrument.source == source,
-                IndstocksInstrument.exchange == "NSE",
-            ).first()
-            if row:
-                return row[0]
-            # Fall back to any exchange for this source
-            row = db.query(IndstocksInstrument.scrip_code).filter(
-                IndstocksInstrument.symbol == sym,
-                IndstocksInstrument.source == source,
-            ).first()
+        # For index symbols, scrip_code uses NIDX_/BIDX_ prefix regardless of exchange column
+        # Check index source first for known index symbols, then equity, then fno
+        source_order = ("index", "equity", "fno") if sym in _INDEX_ALIASES or " " in sym else ("equity", "index", "fno")
+        for source in source_order:
+            if source == "index":
+                # Don't filter by exchange for index — scrip_code already has NIDX_/BIDX_ prefix
+                row = db.query(IndstocksInstrument.scrip_code).filter(
+                    IndstocksInstrument.symbol == sym,
+                    IndstocksInstrument.source == source,
+                ).first()
+            else:
+                # Try NSE first, then any exchange
+                row = db.query(IndstocksInstrument.scrip_code).filter(
+                    IndstocksInstrument.symbol == sym,
+                    IndstocksInstrument.source == source,
+                    IndstocksInstrument.exchange == "NSE",
+                ).first()
+                if not row:
+                    row = db.query(IndstocksInstrument.scrip_code).filter(
+                        IndstocksInstrument.symbol == sym,
+                        IndstocksInstrument.source == source,
+                    ).first()
             if row:
                 return row[0]
         return None

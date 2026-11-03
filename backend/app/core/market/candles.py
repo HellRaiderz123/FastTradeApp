@@ -1,18 +1,21 @@
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy import and_, text
 from app.core.market.provider import fetch_candles
 from app.db.models_candles import Candle1m, Candle5m, Candle15m, Candle1h, CandleDaily, CandleWeekly
 from app.db.session import engine
 from app.core.utils.time import now_ist
+import os
 
 import logging
 
 logger = logging.getLogger("candles")
 logger.setLevel(logging.INFO)
 
-_IS_POSTGRES = False
+# Detect if using PostgreSQL
+_IS_POSTGRES = "postgresql" in os.getenv("DATABASE_URL", "").lower()
 
 # Symbols that are indices — skip price sanity checks for these
 # (index values like 22000 would fail a stock-price sanity check)
@@ -24,10 +27,17 @@ _INDEX_SYMBOLS = {
 
 
 def _bulk_upsert(db: Session, model, rows: list[dict]) -> int:
-    """Insert rows with ON CONFLICT DO NOTHING."""
+    """Insert rows with ON CONFLICT DO NOTHING (works for both PostgreSQL and SQLite)."""
     if not rows:
         return 0
-    stmt = sqlite_insert(model).values(rows).prefix_with("OR IGNORE")
+    
+    if _IS_POSTGRES:
+        # PostgreSQL: use ON CONFLICT DO NOTHING
+        stmt = pg_insert(model).values(rows).on_conflict_do_nothing()
+    else:
+        # SQLite: use INSERT OR IGNORE
+        stmt = sqlite_insert(model).values(rows).prefix_with("OR IGNORE")
+    
     result = db.execute(stmt)
     db.commit()
     return result.rowcount if result.rowcount >= 0 else len(rows)

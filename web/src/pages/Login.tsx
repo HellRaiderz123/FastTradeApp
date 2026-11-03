@@ -119,21 +119,21 @@ function Login() {
     return (
       <div className="min-h-screen flex items-center justify-center terminal-shell p-4">
         <div className="w-full max-w-md">
-          <div className="panel p-8">
+          <div className="card-glass p-8">
             <div className="text-center mb-8">
-              <h1 className="text-3xl font-bold text-terminal-green mb-2">FastTrade Terminal</h1>
-              <p className="text-slate-400">Sign in to access your trading platform</p>
+              <h1 className="text-3xl font-bold text-primary mb-2">FastTrade Terminal</h1>
+              <p className="text-muted-foreground">Sign in to access your trading platform</p>
             </div>
 
             {loginError && (
-              <div className="mb-6 p-4 rounded-lg bg-red-500/10 border border-red-500/50">
-                <p className="text-red-400 text-sm">{loginError}</p>
+              <div className="mb-6 p-4 rounded-lg bg-destructive/10 border border-destructive/50">
+                <p className="text-destructive text-sm">{loginError}</p>
               </div>
             )}
 
             <form onSubmit={handleLogin} className="space-y-6">
               <div>
-                <label htmlFor="username" className="block text-sm font-medium text-slate-300 mb-2">
+                <label htmlFor="username" className="block text-sm font-medium text-foreground mb-2">
                   Username
                 </label>
                 <input
@@ -143,16 +143,16 @@ function Login() {
                   onChange={(e) => setUsername(e.target.value)}
                   required
                   autoFocus
-                  className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg
-                             text-white placeholder-slate-500 focus:outline-none focus:ring-2
-                             focus:ring-terminal-green focus:border-transparent"
+                  className="w-full px-4 py-2 bg-background border border-border rounded-lg
+                             text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2
+                             focus:ring-ring focus:border-transparent"
                   placeholder="Enter username"
                   disabled={loginLoading}
                 />
               </div>
 
               <div>
-                <label htmlFor="password" className="block text-sm font-medium text-slate-300 mb-2">
+                <label htmlFor="password" className="block text-sm font-medium text-foreground mb-2">
                   Password
                 </label>
                 <input
@@ -161,9 +161,9 @@ function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="w-full px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg
-                             text-white placeholder-slate-500 focus:outline-none focus:ring-2
-                             focus:ring-terminal-green focus:border-transparent"
+                  className="w-full px-4 py-2 bg-background border border-border rounded-lg
+                             text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2
+                             focus:ring-ring focus:border-transparent"
                   placeholder="Enter password"
                   disabled={loginLoading}
                 />
@@ -172,7 +172,7 @@ function Login() {
               <button
                 type="submit"
                 disabled={loginLoading}
-                className="w-full py-3 px-4 bg-terminal-green hover:bg-green-600 text-slate-900
+                className="w-full py-3 px-4 bg-primary hover:opacity-90 text-primary-foreground
                            font-semibold rounded-lg transition-colors disabled:opacity-50
                            disabled:cursor-not-allowed"
               >
@@ -180,7 +180,7 @@ function Login() {
               </button>
             </form>
 
-            <div className="mt-8 text-center text-sm text-slate-500">
+            <div className="mt-8 text-center text-sm text-muted-foreground">
               <p>Secured by FastTradeApp Authentication</p>
             </div>
           </div>
@@ -196,7 +196,7 @@ function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center terminal-shell p-4">
       <div className="w-full max-w-lg">
-        <div className="panel p-8">
+        <div className="card-glass p-8">
 
           {/* Header */}
           <div className="flex items-center gap-3 mb-2">
@@ -204,8 +204,8 @@ function Login() {
               <span className="text-emerald-400 text-sm font-bold">2</span>
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">Connect Your Broker</h2>
-              <p className="text-xs text-slate-400">
+              <h2 className="text-xl font-bold text-foreground">Connect Your Broker</h2>
+              <p className="text-xs text-muted-foreground">
                 Step 2 of 2 — Active broker:{' '}
                 <span className={`font-semibold ${meta.color}`}>{meta.label}</span>
               </p>
@@ -221,11 +221,11 @@ function Login() {
             {brokerStatus?.token_valid
               ? <CheckCircle size={16} className="text-emerald-400 mt-0.5 flex-shrink-0" />
               : <AlertTriangle size={16} className="text-amber-400 mt-0.5 flex-shrink-0" />}
-            <p className={`text-xs ${brokerStatus?.token_valid ? 'text-emerald-300' : 'text-amber-300'}`}>
+            <p className={`text-xs ${brokerStatus?.token_valid ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-300'}`}>
               {brokerStatus?.token_valid
                 ? <>Active <span className="font-semibold">{meta.label}</span> token found. You can continue or paste a fresh token to replace it.</>
                 : brokerStatus?.token_found
-                  ? <>Existing <span className="font-semibold">{meta.label}</span> token is <span className="font-semibold text-red-300">expired or invalid</span>. Please provide a fresh token.</>
+                  ? <>Existing <span className="font-semibold">{meta.label}</span> token is <span className="font-semibold text-destructive">expired or invalid</span>. Please provide a fresh token.</>
                   : <>No active <span className="font-semibold">{meta.label}</span> token found. Without it, schedulers, live quotes, and candle backfill will not work.</>
               }
             </p>
@@ -234,15 +234,15 @@ function Login() {
           {tokenSaved ? (
             <div className="flex flex-col items-center gap-3 py-6">
               <CheckCircle size={40} className="text-emerald-400" />
-              <p className="text-emerald-300 font-semibold">Broker token activated!</p>
-              <p className="text-xs text-slate-400">Redirecting to dashboard…</p>
+              <p className="text-emerald-500 font-semibold">Broker token activated!</p>
+              <p className="text-xs text-muted-foreground">Redirecting to dashboard…</p>
             </div>
           ) : (
             <>
               {/* Zerodha: show OAuth login button */}
               {broker === 'ZERODHA' && (
                 <div className="mb-5">
-                  <p className="text-sm font-medium text-slate-300 mb-2">
+                  <p className="text-sm font-medium text-foreground mb-2">
                     Step A — Log in to Zerodha and copy your access token
                   </p>
                   {brokerStatus?.login_url ? (
@@ -251,33 +251,33 @@ function Login() {
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg
-                                 bg-blue-500/20 border border-blue-500/40 text-blue-300
+                                 bg-blue-500/20 border border-blue-500/40 text-blue-500
                                  hover:bg-blue-500/30 transition text-sm font-medium"
                     >
                       <ExternalLink size={14} />
                       Open Zerodha Login
                     </a>
                   ) : (
-                    <p className="text-xs text-slate-500 italic">
+                    <p className="text-xs text-muted-foreground italic">
                       ZERODHA_API_KEY not set in .env — configure it and restart the backend.
                     </p>
                   )}
-                  <p className="text-xs text-slate-500 mt-2">{meta.tokenHint}</p>
+                  <p className="text-xs text-muted-foreground mt-2">{meta.tokenHint}</p>
                 </div>
               )}
 
               {/* INDMoney: no OAuth redirect, just paste */}
               {broker === 'INDMONEY' && (
                 <div className="mb-5">
-                  <p className="text-sm font-medium text-slate-300 mb-1">
+                  <p className="text-sm font-medium text-foreground mb-1">
                     Get your INDstocks access token
                   </p>
-                  <p className="text-xs text-slate-500 mb-2">{meta.tokenHint}</p>
+                  <p className="text-xs text-muted-foreground mb-2">{meta.tokenHint}</p>
                   <a
                     href={meta.docsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition"
+                    className="inline-flex items-center gap-1.5 text-xs text-emerald-500 hover:text-emerald-400 transition"
                   >
                     <ExternalLink size={12} />
                     INDstocks API docs
@@ -287,54 +287,54 @@ function Login() {
 
               {/* Paste token — same for both brokers */}
               <div className="mb-5">
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-foreground mb-2">
                   {broker === 'ZERODHA' ? 'Step B — ' : ''}Paste access token
                 </label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
-                    <Key size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <Key size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                     <input
                       type="text"
                       value={accessToken}
                       onChange={(e) => setAccessToken(e.target.value)}
                       placeholder={`Paste ${meta.label} access token…`}
-                      className="w-full pl-9 pr-4 py-2.5 bg-slate-800 border border-slate-700 rounded-lg
-                                 text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2
-                                 focus:ring-terminal-green focus:border-transparent font-mono"
+                      className="w-full pl-9 pr-4 py-2.5 bg-background border border-border rounded-lg
+                                 text-foreground placeholder:text-muted-foreground text-sm focus:outline-none focus:ring-2
+                                 focus:ring-ring focus:border-transparent font-mono"
                     />
                   </div>
                   <button
                     onClick={handleSaveToken}
                     disabled={tokenLoading || !accessToken.trim()}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-terminal-green
-                               hover:bg-green-600 text-slate-900 font-semibold text-sm transition
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary
+                               hover:opacity-90 text-primary-foreground font-semibold text-sm transition
                                disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ArrowRight size={14} />
                     {tokenLoading ? 'Saving…' : 'Activate'}
                   </button>
                 </div>
-                {tokenError && <p className="text-red-400 text-xs mt-2">{tokenError}</p>}
+                {tokenError && <p className="text-destructive text-xs mt-2">{tokenError}</p>}
               </div>
 
               {/* Divider */}
               <div className="flex items-center gap-3 my-4">
-                <div className="flex-1 h-px bg-slate-700/60" />
-                <span className="text-xs text-slate-500">or</span>
-                <div className="flex-1 h-px bg-slate-700/60" />
+                <div className="flex-1 h-px bg-border" />
+                <span className="text-xs text-muted-foreground">or</span>
+                <div className="flex-1 h-px bg-border" />
               </div>
 
               {/* Skip / Continue */}
               <button
                 onClick={() => navigate('/')}
                 className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg
-                           border border-slate-700/60 text-slate-400 hover:text-slate-200
-                           hover:border-slate-500/60 transition text-sm"
+                           border border-border text-muted-foreground hover:text-foreground
+                           hover:border-border/80 transition text-sm"
               >
                 <SkipForward size={14} />
                 {brokerStatus?.token_valid ? 'Continue with existing token' : 'Skip for now — I\'ll set it up in Settings'}
               </button>
-              <p className="text-[11px] text-slate-600 text-center mt-2">
+              <p className="text-[11px] text-muted-foreground/60 text-center mt-2">
                 {brokerStatus?.token_valid
                   ? 'Your existing token is active and schedulers are running.'
                   : 'Schedulers and live data will be unavailable until a token is set.'}

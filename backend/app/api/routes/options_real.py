@@ -13,7 +13,6 @@ import logging
 import math
 
 from app.services.market_data_service import get_market_data_service
-from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/options/real", tags=["options_real"])
@@ -160,17 +159,17 @@ async def get_real_option_chain(symbol: str, expiry: Optional[str] = None):
         atm_strike = round(spot / strike_step) * strike_step
         strikes_to_fetch = [atm_strike + i * strike_step for i in range(-10, 11)]
 
-        # 5. Build tradingsymbols for available strikes
+        # 5. Build tradingsymbols for available strikes (broker-native format)
         symbols_to_quote = []
         strike_map: Dict[str, tuple] = {}
         for strike in strikes_to_fetch:
             for opt_type in ("CE", "PE"):
                 if (int(strike), opt_type) in available_pairs:
-                    ts = build_zerodha_option_symbol(
+                    ts = active_adapter.build_option_symbol(
                         underlying=symbol,
                         expiry=expiry_date,
-                        strike=strike,
-                        option_type=opt_type,
+                        strike=int(strike),
+                        opt_type=opt_type,
                     )
                     symbols_to_quote.append(ts)
                     strike_map[ts] = (strike, opt_type)

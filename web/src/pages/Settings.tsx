@@ -556,17 +556,17 @@ const Settings: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <SettingsIcon className="w-8 h-8 text-blue-400" />
-        <h1 className="text-3xl font-bold text-white">Settings</h1>
+        <h1 className="text-3xl font-bold text-foreground">Settings</h1>
       </div>
 
       {/* Row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <SettingsCard title="Active Broker">
-          <div className="p-4 bg-slate-800 rounded-lg border border-slate-700">
+          <div className="p-4 bg-card rounded-lg border border-border">
             <div className="flex items-center justify-between">
               <div>
-                <span className="text-slate-300 font-medium">Currently Active for Orders:</span>
-                <p className="text-sm text-slate-400 mt-1">
+                <span className="text-foreground font-medium">Currently Active for Orders:</span>
+                <p className="text-sm text-muted-foreground mt-1">
                   {activeBroker === 'ZERODHA' && 'Orders will be placed via Zerodha API'}
                   {activeBroker === 'INDMONEY' && 'Orders will be placed via INDMoney/INDstocks API'}
                 </p>
@@ -575,21 +575,21 @@ const Settings: React.FC = () => {
                 activeBroker === 'ZERODHA' ? 'bg-orange-600 text-white' : 'bg-purple-600 text-white'
               }`}>{activeBroker}</div>
             </div>
-            <p className="text-xs text-slate-500 mt-3">💡 Change broker from the header dropdown. Market data always uses Zerodha.</p>
+            <p className="text-xs text-muted-foreground mt-3">💡 Change broker from the header dropdown. Market data always uses Zerodha.</p>
           </div>
         </SettingsCard>
 
         <SettingsCard title="Execution Mode">
-          <div className="p-4 bg-slate-800 rounded-lg border border-slate-700 mb-4">
+          <div className="p-4 bg-card rounded-lg border border-border mb-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-slate-300 font-medium">Current Mode:</span>
+              <span className="text-foreground font-medium">Current Mode:</span>
               <div className={`px-3 py-1 rounded-full font-semibold text-sm ${
                 zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
               }`}>
                 {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? '🟢 Dry Run' : '🔴 Live'}
               </div>
             </div>
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-muted-foreground">
               {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? 'Testing mode — no real money at risk.' : 'Live mode — real trades with actual funds.'}
             </p>
           </div>
@@ -597,7 +597,7 @@ const Settings: React.FC = () => {
             {['ZERODHA_DRY_RUN', 'ZERODHA_LIVE', 'PAPER_TRADING'].map((mode) => (
               <button key={mode} onClick={() => handleSetExecutionMode(mode)} disabled={zerodhaLoading}
                 className={`py-2 px-2 rounded-lg font-semibold transition text-xs ${
-                  zerodhaForm.executionMode === mode ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  zerodhaForm.executionMode === mode ? 'bg-green-600 text-white' : 'bg-muted text-foreground hover:bg-accent'
                 } disabled:opacity-50`}>
                 {mode.replace(/_/g, ' ')}
               </button>
@@ -648,7 +648,7 @@ const Settings: React.FC = () => {
             min="1"
             max="100"
           />
-          <div className="mt-2 p-3 bg-blue-900 bg-opacity-30 border border-blue-700 rounded text-sm text-blue-200">
+          <div className="mt-2 p-3 bg-blue-500/10 border border-blue-500/30 rounded text-sm text-blue-600 dark:text-blue-700 dark:text-blue-200">
             <strong>💡 Tip:</strong> In {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? <span className="text-blue-100">Dry Run mode</span> : <span className="text-orange-100">Live mode</span>}, set this higher to test more strategies.
             {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' && ' Recommended: 10-20 trades for testing.'}
             {zerodhaStatus.execution_mode === 'ZERODHA_LIVE' && ' Recommended: 2-5 trades for live trading.'}
@@ -658,13 +658,13 @@ const Settings: React.FC = () => {
 
       {/* IV Regime Limits */}
       <SettingsCard title="IV Regime Risk Limits">
-        <p className="text-sm text-slate-300">Tune how much risk each IV environment is allowed to take before a trade is blocked.</p>
+        <p className="text-sm text-muted-foreground">Tune how much risk each IV environment is allowed to take before a trade is blocked.</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {['LOW', 'NORMAL', 'HIGH'].map((regime) => (
-            <div key={regime} className="p-4 rounded-lg border border-slate-700 bg-slate-800/60 space-y-3">
+            <div key={regime} className="p-4 rounded-lg border border-border bg-muted/30 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-white">{regime} IV</span>
-                <span className="text-xs text-slate-400">caps</span>
+                <span className="font-semibold text-foreground">{regime} IV</span>
+                <span className="text-xs text-muted-foreground">caps</span>
               </div>
               <SettingItem
                 label="Min ATM Distance (%)"
@@ -726,10 +726,10 @@ const Settings: React.FC = () => {
       {/* Lower settings grid */}
       <SettingsCard title="Email Notifications (Gmail)">
         {/* Status */}
-        <div className="mb-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
+        <div className="mb-4 p-4 bg-card rounded-lg border border-border">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div className="flex items-center gap-2">
-              <span className="text-slate-400">Gmail Configured:</span>
+              <span className="text-muted-foreground">Gmail Configured:</span>
               {notificationStatus.gmail_configured ? (
                 <span className="flex items-center gap-1 text-green-400"><CheckCircle className="w-4 h-4" /> Yes</span>
               ) : (
@@ -737,7 +737,7 @@ const Settings: React.FC = () => {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-slate-400">Enabled:</span>
+              <span className="text-muted-foreground">Enabled:</span>
               <ToggleSetting label="" value={notificationStatus.gmail_enabled} onChange={async (val) => {
                 try {
                   setGmailLoading(true);
@@ -751,25 +751,25 @@ const Settings: React.FC = () => {
               }} />
             </div>
           </div>
-          <p className="text-xs text-slate-400 mt-2">User: <span className="text-slate-300">{notificationStatus.gmail_user || 'not set'}</span> • Alerts to: <span className="text-slate-300">{notificationStatus.alert_email || 'not set'}</span></p>
+          <p className="text-xs text-muted-foreground mt-2">User: <span className="text-foreground">{notificationStatus.gmail_user || 'not set'}</span> • Alerts to: <span className="text-foreground">{notificationStatus.alert_email || 'not set'}</span></p>
         </div>
 
         {/* Gmail Credentials */}
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Gmail User</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Gmail User</label>
             <input
               type="email"
               placeholder="your.email@gmail.com"
               value={gmailForm.gmail_user}
               onChange={(e) => setGmailForm({ ...gmailForm, gmail_user: e.target.value })}
               disabled={gmailLoading}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">App Password</label>
+            <label className="block text-sm font-medium text-foreground mb-2">App Password</label>
             <div className="relative">
               <input
                 type={showGmailPassword ? 'text' : 'password'}
@@ -777,27 +777,27 @@ const Settings: React.FC = () => {
                 value={gmailForm.gmail_app_password}
                 onChange={(e) => setGmailForm({ ...gmailForm, gmail_app_password: e.target.value })}
                 disabled={gmailLoading}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+                className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50 pr-10"
               />
               <button
                 onClick={() => setShowGmailPassword(!showGmailPassword)}
-                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+                className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground"
               >
                 {showGmailPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-            <p className="text-xs text-slate-500 mt-1">Use a Google App Password (2FA required). Do not use your regular password.</p>
+            <p className="text-xs text-muted-foreground mt-1">Use a Google App Password (2FA required). Do not use your regular password.</p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Alert Email</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Alert Email</label>
             <input
               type="email"
               placeholder="recipient email for alerts (defaults to Gmail user)"
               value={gmailForm.alert_email}
               onChange={(e) => setGmailForm({ ...gmailForm, alert_email: e.target.value })}
               disabled={gmailLoading}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
             />
           </div>
 
@@ -819,7 +819,7 @@ const Settings: React.FC = () => {
                 }
               }}
               disabled={gmailLoading}
-              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
             >
               <Save className="w-4 h-4" />
               {gmailLoading ? 'Saving...' : 'Save Gmail Settings'}
@@ -840,7 +840,7 @@ const Settings: React.FC = () => {
                 }
               }}
               disabled={gmailLoading}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
             >
               <Send className="w-4 h-4" />
               {gmailLoading ? 'Sending...' : 'Send Test Email'}
@@ -849,7 +849,7 @@ const Settings: React.FC = () => {
 
           {gmailMessage && (
             <div className={`mt-4 p-3 rounded-lg text-sm font-semibold ${
-              gmailMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+              gmailMessage.includes('✓') ? 'bg-green-500/10 text-green-700 dark:text-green-300 border border-green-500/30' : 'bg-destructive/10 text-destructive border border-destructive/30'
             }`}>
               {gmailMessage}
             </div>
@@ -859,9 +859,9 @@ const Settings: React.FC = () => {
 
       {/* Telegram Notification Settings */}
       <SettingsCard title="Telegram Notifications">
-        <div className="mb-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
+        <div className="mb-4 p-4 bg-card rounded-lg border border-border">
           <div className="flex items-center gap-2">
-            <span className="text-slate-400 text-sm">Status:</span>
+            <span className="text-muted-foreground text-sm">Status:</span>
             {telegramStatus.configured ? (
               <span className="flex items-center gap-1 text-green-400 text-sm"><CheckCircle className="w-4 h-4" /> Configured</span>
             ) : (
@@ -869,31 +869,31 @@ const Settings: React.FC = () => {
             )}
           </div>
           {telegramStatus.chat_id && (
-            <p className="text-xs text-slate-400 mt-1">Chat ID: {telegramStatus.chat_id}</p>
+            <p className="text-xs text-muted-foreground mt-1">Chat ID: {telegramStatus.chat_id}</p>
           )}
-          <p className="text-xs text-slate-500 mt-2">Create a bot via @BotFather on Telegram, then get your Chat ID from @userinfobot.</p>
+          <p className="text-xs text-muted-foreground mt-2">Create a bot via @BotFather on Telegram, then get your Chat ID from @userinfobot.</p>
         </div>
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Bot Token</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Bot Token</label>
             <input
               type="password"
               placeholder="123456789:ABCdef..."
               value={telegramForm.bot_token}
               onChange={(e) => setTelegramForm({ ...telegramForm, bot_token: e.target.value })}
               disabled={telegramLoading}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Chat ID</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Chat ID</label>
             <input
               type="text"
               placeholder="e.g. 123456789 or -100123456789 for groups"
               value={telegramForm.chat_id}
               onChange={(e) => setTelegramForm({ ...telegramForm, chat_id: e.target.value })}
               disabled={telegramLoading}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
             />
           </div>
           <div className="flex gap-3">
@@ -911,7 +911,7 @@ const Settings: React.FC = () => {
                 } finally { setTelegramLoading(false); }
               }}
               disabled={telegramLoading}
-              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+              className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
             >
               <Save className="w-4 h-4" />
               {telegramLoading ? 'Saving...' : 'Save Telegram Settings'}
@@ -928,7 +928,7 @@ const Settings: React.FC = () => {
                 } finally { setTelegramLoading(false); }
               }}
               disabled={telegramLoading || !telegramStatus.configured}
-              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+              className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
             >
               <Send className="w-4 h-4" />
               {telegramLoading ? 'Sending...' : 'Send Test Message'}
@@ -936,7 +936,7 @@ const Settings: React.FC = () => {
           </div>
           {telegramMessage && (
             <div className={`p-3 rounded-lg text-sm font-semibold ${
-              telegramMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+              telegramMessage.includes('✓') ? 'bg-green-500/10 text-green-700 dark:text-green-300 border border-green-500/30' : 'bg-destructive/10 text-destructive border border-destructive/30'
             }`}>{telegramMessage}</div>
           )}
         </div>
@@ -946,12 +946,12 @@ const Settings: React.FC = () => {
       {/* API Keys */}
       <SettingsCard title="Zerodha Configuration">
         {/* Status */}
-        <div className="mb-6 p-4 bg-slate-800 rounded-lg border border-slate-700">
+        <div className="mb-6 p-4 bg-card rounded-lg border border-border">
           <div className="flex justify-between items-start mb-4">
             <div className="flex-1">
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-400">API Key Status:</span>
+                  <span className="text-muted-foreground">API Key Status:</span>
                   <div className="flex items-center gap-1">
                     {zerodhaStatus?.api_key_set ? (
                       <>
@@ -967,7 +967,7 @@ const Settings: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-400">Access Token Status:</span>
+                  <span className="text-muted-foreground">Access Token Status:</span>
                   <div className="flex items-center gap-1">
                     {sessionStatus?.has_active_session ? (
                       <>
@@ -989,10 +989,10 @@ const Settings: React.FC = () => {
                 </div>
               </div>
               {sessionStatus?.user_id && (
-                <p className="text-xs text-slate-400 mt-3">🔐 Logged in as: <span className="text-slate-200 font-semibold">{sessionStatus.user_id}</span></p>
+                <p className="text-xs text-muted-foreground mt-3">🔐 Logged in as: <span className="text-foreground font-semibold">{sessionStatus.user_id}</span></p>
               )}
               {sessionStatus?.expires_at && (
-                <p className="text-xs text-slate-400 mt-1">expires: {new Date(sessionStatus.expires_at).toLocaleDateString()}</p>
+                <p className="text-xs text-muted-foreground mt-1">expires: {new Date(sessionStatus.expires_at).toLocaleDateString()}</p>
               )}
             </div>
             <button
@@ -1001,7 +1001,7 @@ const Settings: React.FC = () => {
                 loadZerodhaSettings();
                 loadSessionStatus();
               }}
-              className="ml-4 px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded transition"
+              className="ml-4 px-3 py-1 bg-muted hover:bg-accent text-muted-foreground text-xs rounded transition"
             >
               🔄 Refresh
             </button>
@@ -1010,36 +1010,36 @@ const Settings: React.FC = () => {
 
         {/* OAuth Login Section */}
         {sessionStatus?.has_active_session ? (
-          <div className="space-y-4 mb-6 p-4 bg-green-900/20 rounded-lg border border-green-700/50">
+          <div className="space-y-4 mb-6 p-4 bg-green-500/10 rounded-lg border border-green-500/30">
             <div className="flex items-center gap-2">
               <CheckCircle className="w-5 h-5 text-green-400" />
-              <p className="text-sm font-semibold text-green-300">Zerodha OAuth Session Active</p>
+              <p className="text-sm font-semibold text-green-600 dark:text-green-300">Zerodha OAuth Session Active</p>
             </div>
-            <p className="text-xs text-green-200">✓ Your Zerodha session is active and will be used automatically for trading.</p>
+            <p className="text-xs text-green-700 dark:text-green-200">✓ Your Zerodha session is active and will be used automatically for trading.</p>
             <button
               onClick={handleLogoutZerodha}
               disabled={oauthLoading}
-              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
             >
               {oauthLoading ? 'Logging out...' : 'Logout from Zerodha'}
             </button>
           </div>
         ) : (
-          <div className="space-y-4 mb-6 p-4 bg-blue-900/20 rounded-lg border border-blue-700/50">
+          <div className="space-y-4 mb-6 p-4 bg-blue-500/10 rounded-lg border border-blue-500/30">
             <div className="flex items-center gap-2">
               <Zap className="w-5 h-5 text-blue-400" />
-              <p className="text-sm font-semibold text-blue-300">Quick OAuth Login</p>
+              <p className="text-sm font-semibold text-blue-600 dark:text-blue-300">Quick OAuth Login</p>
             </div>
-            <p className="text-xs text-blue-200">Click below to login with your Zerodha account. No API keys or tokens needed!</p>
+            <p className="text-xs text-blue-700 dark:text-blue-200">Click below to login with your Zerodha account. No API keys or tokens needed!</p>
             <button
               onClick={handleLoginWithZerodha}
               disabled={oauthLoading || !zerodhaStatus.api_key_set}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 text-base"
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-muted text-white font-semibold py-3 rounded-lg transition flex items-center justify-center gap-2 text-base"
             >
               {oauthLoading ? 'Opening login...' : '🔐 Login with Zerodha'}
             </button>
             {!zerodhaStatus.api_key_set && (
-              <p className="text-xs text-yellow-400">⚠️ Please configure API Key first</p>
+              <p className="text-xs text-amber-500">⚠️ Please configure API Key first</p>
             )}
           </div>
         )}
@@ -1047,19 +1047,19 @@ const Settings: React.FC = () => {
         {/* Credentials Form */}
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Zerodha API Key</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Zerodha API Key</label>
             <input
               type="text"
               placeholder="Your API Key from Zerodha"
               value={zerodhaForm.apiKey}
               onChange={(e) => setZerodhaForm({ ...zerodhaForm, apiKey: e.target.value })}
               disabled={zerodhaLoading}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Zerodha API Secret</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Zerodha API Secret</label>
             <div className="relative">
               <input
                 type={showSecrets.apiSecret ? 'text' : 'password'}
@@ -1067,11 +1067,11 @@ const Settings: React.FC = () => {
                 value={zerodhaForm.apiSecret}
                 onChange={(e) => setZerodhaForm({ ...zerodhaForm, apiSecret: e.target.value })}
                 disabled={zerodhaLoading}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+                className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50 pr-10"
               />
               <button
                 onClick={() => setShowSecrets({ ...showSecrets, apiSecret: !showSecrets.apiSecret })}
-                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+                className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground"
               >
                 {showSecrets.apiSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -1081,7 +1081,7 @@ const Settings: React.FC = () => {
           <button
             onClick={handleSaveZerodhaCredentials}
             disabled={zerodhaLoading}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
           >
             <Save className="w-4 h-4" />
             {zerodhaLoading ? 'Saving...' : 'Save Credentials'}
@@ -1089,9 +1089,9 @@ const Settings: React.FC = () => {
         </div>
 
         {/* Access Token Generation */}
-        <div className="space-y-4 mt-6 pt-6 border-t border-slate-700">
-          <h3 className="text-sm font-semibold text-slate-300">Generate Access Token</h3>
-          <p className="text-xs text-slate-400">
+        <div className="space-y-4 mt-6 pt-6 border-t border-border">
+          <h3 className="text-sm font-semibold text-foreground">Generate Access Token</h3>
+          <p className="text-xs text-muted-foreground">
             1. Go to <a href="https://kite.zerodha.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">Zerodha login</a>
             <br />
             2. Check browser console or Network tab for "request_token"
@@ -1100,7 +1100,7 @@ const Settings: React.FC = () => {
           </p>
           
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Request Token (from Zerodha OAuth)</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Request Token (from Zerodha OAuth)</label>
             <div className="relative">
               <input
                 type={showSecrets.accessToken ? 'text' : 'password'}
@@ -1108,11 +1108,11 @@ const Settings: React.FC = () => {
                 value={zerodhaForm.requestToken}
                 onChange={(e) => setZerodhaForm({ ...zerodhaForm, requestToken: e.target.value })}
                 disabled={zerodhaLoading}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+                className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50 pr-10"
               />
               <button
                 onClick={() => setShowSecrets({ ...showSecrets, accessToken: !showSecrets.accessToken })}
-                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+                className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground"
               >
                 {showSecrets.accessToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -1122,25 +1122,25 @@ const Settings: React.FC = () => {
           <button
             onClick={handleGenerateAccessToken}
             disabled={zerodhaLoading}
-            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
           >
             <Save className="w-4 h-4" />
             {zerodhaLoading ? 'Generating & Saving...' : 'Generate & Save Access Token'}
           </button>
-          <p className="text-xs text-slate-400 bg-slate-800 p-2 rounded">
+          <p className="text-xs text-muted-foreground bg-muted/50 p-2 rounded">
             ✓ Access token will be automatically saved to .env when generated. If backend credentials are missing, the API will return the error.
           </p>
         </div>
 
         {/* Manual Access Token (Optional) */}
-        <div className="space-y-4 mt-6 pt-6 border-t border-slate-700">
-          <h3 className="text-sm font-semibold text-slate-300">Manual Token (Optional)</h3>
-          <p className="text-xs text-slate-400">
+        <div className="space-y-4 mt-6 pt-6 border-t border-border">
+          <h3 className="text-sm font-semibold text-foreground">Manual Token (Optional)</h3>
+          <p className="text-xs text-muted-foreground">
             Or paste an access token manually if you already have one
           </p>
           
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Access Token</label>
+            <label className="block text-sm font-medium text-foreground mb-2">Access Token</label>
             <div className="relative">
               <input
                 type={showSecrets.accessToken ? 'text' : 'password'}
@@ -1148,11 +1148,11 @@ const Settings: React.FC = () => {
                 value={zerodhaForm.accessToken}
                 onChange={(e) => setZerodhaForm({ ...zerodhaForm, accessToken: e.target.value })}
                 disabled={zerodhaLoading}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 disabled:opacity-50 pr-10"
+                className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50 pr-10"
               />
               <button
                 onClick={() => setShowSecrets({ ...showSecrets, accessToken: !showSecrets.accessToken })}
-                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300"
+                className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground"
               >
                 {showSecrets.accessToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -1162,7 +1162,7 @@ const Settings: React.FC = () => {
           <button
             onClick={handleSaveZerodhaToken}
             disabled={zerodhaLoading}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
           >
             <Save className="w-4 h-4" />
             {zerodhaLoading ? 'Saving...' : 'Save Manually'}
@@ -1170,8 +1170,8 @@ const Settings: React.FC = () => {
         </div>
 
         {/* Execution Mode */}
-        <div className="space-y-4 mt-6 pt-6 border-t border-slate-700">
-          <label className="block text-sm font-medium text-slate-300">Execution Mode</label>
+        <div className="space-y-4 mt-6 pt-6 border-t border-border">
+          <label className="block text-sm font-medium text-foreground">Execution Mode</label>
           <div className="grid grid-cols-3 gap-2">
             {['ZERODHA_DRY_RUN', 'ZERODHA_LIVE', 'PAPER_TRADING'].map((mode) => (
               <button
@@ -1181,14 +1181,14 @@ const Settings: React.FC = () => {
                 className={`py-2 px-3 rounded-lg font-semibold transition text-sm ${
                   zerodhaForm.executionMode === mode
                     ? 'bg-green-600 text-white'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    : 'bg-muted text-foreground hover:bg-accent'
                 } disabled:opacity-50`}
               >
                 {mode}
               </button>
             ))}
           </div>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-muted-foreground">
             {zerodhaForm.executionMode === 'ZERODHA_DRY_RUN' && 'Simulated trading - no real trades'}
             {zerodhaForm.executionMode === 'ZERODHA_LIVE' && '⚠️ Real trading - use with caution'}
             {zerodhaForm.executionMode === 'PAPER_TRADING' && 'Paper trading mode'}
@@ -1198,9 +1198,9 @@ const Settings: React.FC = () => {
         {/* Message */}
         {zerodhaMessage && (
           <div className={`mt-4 p-3 rounded-lg text-sm font-semibold ${
-            zerodhaMessage.includes('✓') 
-              ? 'bg-green-900 text-green-200' 
-              : 'bg-red-900 text-red-200'
+            zerodhaMessage.includes('✓')
+              ? 'bg-green-500/10 text-green-700 dark:text-green-300 border border-green-500/30'
+              : 'bg-destructive/10 text-destructive border border-destructive/30'
           }`}>
             {zerodhaMessage}
           </div>
@@ -1210,10 +1210,10 @@ const Settings: React.FC = () => {
       {/* INDMoney Configuration */}
       <SettingsCard title="INDMoney Configuration">
         {/* Session Status */}
-        <div className="mb-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
+        <div className="mb-4 p-4 bg-card rounded-lg border border-border">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-slate-400">Session:</span>
+              <span className="text-muted-foreground">Session:</span>
               {indmoneySession?.active ? (
                 <span className="flex items-center gap-1 text-green-400"><CheckCircle className="w-4 h-4" /> Active</span>
               ) : (
@@ -1221,50 +1221,50 @@ const Settings: React.FC = () => {
               )}
             </div>
             <button onClick={() => { loadINDMoneySession(); loadINDMoneySettings(); }}
-              className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded transition">
+              className="px-3 py-1 bg-muted hover:bg-accent text-muted-foreground text-xs rounded transition">
               🔄 Refresh
             </button>
           </div>
           {indmoneySession?.client_id && (
-            <p className="text-xs text-slate-400 mt-2">Client ID: <span className="text-slate-200">{indmoneySession.client_id}</span></p>
+            <p className="text-xs text-muted-foreground mt-2">Client ID: <span className="text-foreground">{indmoneySession.client_id}</span></p>
           )}
           {indmoneySession?.mobile && (
-            <p className="text-xs text-slate-400 mt-1">Mobile: <span className="text-slate-200">{indmoneySession.mobile}</span></p>
+            <p className="text-xs text-muted-foreground mt-1">Mobile: <span className="text-foreground">{indmoneySession.mobile}</span></p>
           )}
           {indmoneySession?.expires_at && (
-            <p className="text-xs text-slate-400 mt-1">Expires: {new Date(indmoneySession.expires_at).toLocaleString()}</p>
+            <p className="text-xs text-muted-foreground mt-1">Expires: {new Date(indmoneySession.expires_at).toLocaleString()}</p>
           )}
         </div>
 
         {/* Login with MPIN + TOTP */}
         {indmoneySession?.active ? (
-          <div className="p-4 bg-green-900/20 rounded-lg border border-green-700/50 space-y-3">
+          <div className="p-4 bg-green-500/10 rounded-lg border border-green-500/30 space-y-3">
             <div className="flex items-center gap-2">
               <CheckCircle className="w-5 h-5 text-green-400" />
-              <p className="text-sm font-semibold text-green-300">INDMoney Session Active</p>
+              <p className="text-sm font-semibold text-green-600 dark:text-green-300">INDMoney Session Active</p>
             </div>
-            <p className="text-xs text-green-200">Token is stored in DB and will be used automatically for trading and data.</p>
+            <p className="text-xs text-green-700 dark:text-green-200">Token is stored in DB and will be used automatically for trading and data.</p>
           </div>
         ) : (
-          <div className="p-4 bg-purple-900/20 rounded-lg border border-purple-700/50 space-y-4">
+          <div className="p-4 bg-purple-500/10 rounded-lg border border-purple-500/30 space-y-4">
             <div className="flex items-center gap-2">
               <Lock className="w-5 h-5 text-purple-400" />
-              <p className="text-sm font-semibold text-purple-300">Login with INDMoney</p>
+              <p className="text-sm font-semibold text-purple-600 dark:text-purple-300">Login with INDMoney</p>
             </div>
-            <p className="text-xs text-purple-200">Enter your INDMoney credentials. Nothing is stored in .env.</p>
+            <p className="text-xs text-purple-700 dark:text-purple-200">Enter your INDMoney credentials. Nothing is stored in .env.</p>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Client ID</label>
+              <label className="block text-sm font-medium text-foreground mb-1">Client ID</label>
               <input
                 type="text"
                 placeholder="Your INDstocks Client ID"
                 value={indmoneyLoginForm.client_id}
                 onChange={(e) => setIndmoneyLoginForm(f => ({ ...f, client_id: e.target.value }))}
                 disabled={indmoneyLoginLoading}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">MPIN</label>
+              <label className="block text-sm font-medium text-foreground mb-1">MPIN</label>
               <div className="relative">
                 <input
                   type={showIndmoneyPin ? 'text' : 'password'}
@@ -1272,16 +1272,16 @@ const Settings: React.FC = () => {
                   value={indmoneyLoginForm.mpin}
                   onChange={(e) => setIndmoneyLoginForm(f => ({ ...f, mpin: e.target.value }))}
                   disabled={indmoneyLoginLoading}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50 pr-10"
+                  className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50 pr-10"
                 />
                 <button onClick={() => setShowIndmoneyPin(!showIndmoneyPin)}
-                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300">
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-muted-foreground">
                   {showIndmoneyPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">TOTP (6-digit authenticator code)</label>
+              <label className="block text-sm font-medium text-foreground mb-1">TOTP (6-digit authenticator code)</label>
               <input
                 type="text"
                 placeholder="123456"
@@ -1289,13 +1289,13 @@ const Settings: React.FC = () => {
                 value={indmoneyLoginForm.totp}
                 onChange={(e) => setIndmoneyLoginForm(f => ({ ...f, totp: e.target.value }))}
                 disabled={indmoneyLoginLoading}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
               />
             </div>
             <button
               onClick={handleINDMoneyLogin}
               disabled={indmoneyLoginLoading}
-              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+              className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
             >
               <Lock className="w-4 h-4" />
               {indmoneyLoginLoading ? 'Logging in...' : '🔐 Login to INDMoney'}
@@ -1304,8 +1304,8 @@ const Settings: React.FC = () => {
         )}
 
         {/* Manual token fallback */}
-        <div className="space-y-3 mt-4 pt-4 border-t border-slate-700">
-          <h3 className="text-sm font-semibold text-slate-300">Or paste token manually</h3>
+        <div className="space-y-3 mt-4 pt-4 border-t border-border">
+          <h3 className="text-sm font-semibold text-foreground">Or paste token manually</h3>
           <div className="relative">
             <input
               type={showIndmoneyToken ? 'text' : 'password'}
@@ -1313,23 +1313,23 @@ const Settings: React.FC = () => {
               value={indmoneyForm.accessToken}
               onChange={(e) => setIndmoneyForm(prev => ({ ...prev, accessToken: e.target.value }))}
               disabled={indmoneyLoading}
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50 pr-10"
+              className="w-full bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50 pr-10"
             />
             <button onClick={() => setShowIndmoneyToken(!showIndmoneyToken)}
-              className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-300">
+              className="absolute right-3 top-2.5 text-slate-400 hover:text-muted-foreground">
               {showIndmoneyToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
           </div>
           <button onClick={handleSaveINDMoneyToken} disabled={indmoneyLoading}
-            className="w-full bg-slate-700 hover:bg-slate-600 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2">
+            className="w-full bg-muted hover:bg-accent disabled:bg-muted text-foreground font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2">
             <Save className="w-4 h-4" />
             {indmoneyLoading ? 'Saving...' : 'Save Token Manually'}
           </button>
         </div>
 
         {/* Symbol lookup */}
-        <div className="space-y-3 mt-4 pt-4 border-t border-slate-700">
-          <h3 className="text-sm font-semibold text-slate-300">Test Symbol Mapping</h3>
+        <div className="space-y-3 mt-4 pt-4 border-t border-border">
+          <h3 className="text-sm font-semibold text-foreground">Test Symbol Mapping</h3>
           <div className="flex gap-2">
             <input
               type="text"
@@ -1337,15 +1337,15 @@ const Settings: React.FC = () => {
               value={indmoneyForm.lookupSymbol}
               onChange={(e) => setIndmoneyForm({ ...indmoneyForm, lookupSymbol: e.target.value })}
               disabled={indmoneyLoading}
-              className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 disabled:opacity-50"
+              className="flex-1 bg-background border border-border rounded-lg px-4 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring disabled:opacity-50"
             />
             <button onClick={handleResolveINDMoneySecurity} disabled={indmoneyLoading}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-600 text-white font-semibold rounded-lg transition text-sm">
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-muted text-white font-semibold rounded-lg transition text-sm">
               Resolve
             </button>
           </div>
           {indmoneyLookup && (
-            <div className="p-3 bg-slate-800 border border-slate-700 rounded text-sm text-slate-200 space-y-1">
+            <div className="p-3 bg-card border border-border rounded text-sm text-foreground space-y-1">
               <p><strong>Symbol:</strong> {indmoneyLookup.symbol}</p>
               <p><strong>security_id:</strong> {indmoneyLookup.security_id}</p>
               <p><strong>Source:</strong> {indmoneyLookup.source}</p>
@@ -1353,13 +1353,13 @@ const Settings: React.FC = () => {
           )}
         </div>
 
-        <div className="mt-3 p-3 bg-blue-900/20 border border-blue-700/50 rounded text-xs text-blue-200">
+        <div className="mt-3 p-3 bg-blue-900/20 border border-blue-700/50 rounded text-xs text-blue-700 dark:text-blue-200">
           💡 INDMoney is used for order execution. Market data (charts, options chain) uses Zerodha.
         </div>
 
         {indmoneyMessage && (
           <div className={`mt-3 p-3 rounded-lg text-sm font-semibold ${
-            indmoneyMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+            indmoneyMessage.includes('✓') ? 'bg-green-500/10 text-green-700 dark:text-green-300 border border-green-500/30' : 'bg-destructive/10 text-destructive border border-destructive/30'
           }`}>{indmoneyMessage}</div>
         )}
       </SettingsCard>
@@ -1368,15 +1368,15 @@ const Settings: React.FC = () => {
       <SettingsCard title="Account">
         <div className="space-y-3">
           <div className="flex justify-between items-center">
-            <span className="text-slate-300">Account Type</span>
-            <span className="font-medium text-white">
+            <span className="text-muted-foreground">Account Type</span>
+            <span className="font-medium text-foreground">
               {zerodhaStatus.execution_mode === 'ZERODHA_LIVE' && 'Zerodha Live'}
               {zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' && 'Zerodha Dry Run'}
               {zerodhaStatus.execution_mode === 'PAPER_TRADING' && 'Paper Trading'}
             </span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-slate-300">Status</span>
+            <span className="text-muted-foreground">Status</span>
             <span className={`font-medium ${
               zerodhaStatus.execution_mode === 'ZERODHA_LIVE' ? 'text-red-400' :
               zerodhaStatus.execution_mode === 'ZERODHA_DRY_RUN' ? 'text-yellow-400' :
@@ -1388,8 +1388,8 @@ const Settings: React.FC = () => {
             </span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-slate-300">Joined</span>
-            <span className="font-medium text-white">January 5, 2026</span>
+            <span className="text-muted-foreground">Joined</span>
+            <span className="font-medium text-foreground">January 5, 2026</span>
           </div>
         </div>
       </SettingsCard>
@@ -1406,11 +1406,11 @@ const Settings: React.FC = () => {
       {/* AI/ML Settings */}
       <SettingsCard title="AI/ML Features">
         <div className="space-y-4">
-          <div className="flex items-center gap-3 pb-4 border-b border-slate-700">
+          <div className="flex items-center gap-3 pb-4 border-b border-border">
             <Brain className="w-6 h-6 text-purple-400" />
             <div className="flex-1">
-              <h3 className="font-semibold text-white">Machine Learning Signals</h3>
-              <p className="text-sm text-slate-400">Enhance stock suggestions with ML predictions</p>
+              <h3 className="font-semibold text-foreground">Machine Learning Signals</h3>
+              <p className="text-sm text-muted-foreground">Enhance stock suggestions with ML predictions</p>
             </div>
             <button
               onClick={() => setMlSettings(prev => ({ ...prev, enabled: !prev.enabled }))}
@@ -1442,7 +1442,7 @@ const Settings: React.FC = () => {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Zap className="w-4 h-4 text-yellow-400" />
-                <label className="text-slate-300">Auto-Train Weekly</label>
+                <label className="text-muted-foreground">Auto-Train Weekly</label>
               </div>
               <button
                 onClick={() => setMlSettings(prev => ({ ...prev, autoTrain: !prev.autoTrain }))}
@@ -1460,7 +1460,7 @@ const Settings: React.FC = () => {
               </button>
             </div>
 
-            <div className="p-3 bg-purple-900 bg-opacity-20 border border-purple-700 rounded text-sm text-purple-200">
+            <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded text-sm text-purple-700 dark:text-purple-200">
               <strong>💡 Info:</strong> ML model trains automatically every Sunday at 4 AM using accumulated daily candles. Requires 200+ candles per symbol.
             </div>
           </div>
@@ -1468,7 +1468,7 @@ const Settings: React.FC = () => {
           <button
             onClick={saveMlSettings}
             disabled={mlSaving}
-            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-muted text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2"
           >
             <Save className="w-4 h-4" />
             {mlSaving ? 'Saving...' : 'Save ML Settings'}
@@ -1476,7 +1476,7 @@ const Settings: React.FC = () => {
 
           {mlMessage && (
             <div className={`p-3 rounded-lg text-sm font-semibold ${
-              mlMessage.includes('✓') ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'
+              mlMessage.includes('✓') ? 'bg-green-500/10 text-green-700 dark:text-green-300 border border-green-500/30' : 'bg-destructive/10 text-destructive border border-destructive/30'
             }`}>
               {mlMessage}
             </div>
@@ -1487,7 +1487,7 @@ const Settings: React.FC = () => {
       {/* Coming Soon */}
       <div className="card-glass p-6 opacity-50 lg:col-span-2">
         <h3 className="font-semibold text-slate-300 mb-4">Advanced Settings (Coming Soon)</h3>
-        <div className="space-y-2 text-sm text-slate-400">
+        <div className="space-y-2 text-sm text-muted-foreground">
           <p>• Custom risk profiles</p>
           <p>• Strategy parameters tuning</p>
           <p>• Advanced alert rules</p>
@@ -1507,7 +1507,7 @@ interface SettingsCardProps {
 
 const SettingsCard: React.FC<SettingsCardProps> = ({ title, children }) => (
   <div className="card-glass p-6">
-    <h2 className="text-lg font-semibold text-white mb-4">{title}</h2>
+    <h2 className="text-lg font-semibold text-foreground mb-4">{title}</h2>
     <div className="space-y-4">{children}</div>
   </div>
 );
@@ -1524,7 +1524,7 @@ interface SettingItemProps {
 
 const SettingItem: React.FC<SettingItemProps> = ({ label, type = 'text', value, onChange, min, max, step }) => (
   <div className="flex items-center justify-between">
-    <label className="text-slate-300">{label}</label>
+    <label className="text-muted-foreground">{label}</label>
     <input
       type={type}
       value={value}
@@ -1533,7 +1533,7 @@ const SettingItem: React.FC<SettingItemProps> = ({ label, type = 'text', value, 
       max={max}
       step={step}
       title={typeof label === 'string' ? label : 'input'}
-      className="w-32 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+      className="w-32 bg-background border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:border-ring"
     />
   </div>
 );
@@ -1547,7 +1547,7 @@ interface ToggleSettingProps {
 
 const ToggleSetting: React.FC<ToggleSettingProps> = ({ label, value, onChange, disabled }) => (
   <div className="flex items-center justify-between">
-    <label className="text-slate-300">{label}</label>
+    <label className="text-muted-foreground">{label}</label>
     <button
       onClick={() => !disabled && onChange(!value)}
       disabled={disabled}

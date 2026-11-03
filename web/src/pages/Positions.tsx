@@ -370,13 +370,13 @@ const Positions: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Tab switcher */}
-      <div className="flex gap-2 border-b border-slate-700 pb-0">
+      <div className="flex gap-2 border-b border-border pb-0">
         <button
           onClick={() => setActiveTab('options')}
           className={`px-4 py-2 text-sm font-semibold rounded-t transition ${
             activeTab === 'options'
-              ? 'bg-slate-800 text-white border border-b-0 border-slate-600'
-              : 'text-slate-400 hover:text-white'
+              ? 'bg-card text-foreground border border-b-0 border-border'
+              : 'text-muted-foreground hover:text-foreground'
           }`}
         >
           Options / Spreads
@@ -385,8 +385,8 @@ const Positions: React.FC = () => {
           onClick={() => { setActiveTab('holdings'); fetchHoldings(); }}
           className={`px-4 py-2 text-sm font-semibold rounded-t transition flex items-center gap-2 ${
             activeTab === 'holdings'
-              ? 'bg-slate-800 text-white border border-b-0 border-slate-600'
-              : 'text-slate-400 hover:text-white'
+              ? 'bg-card text-foreground border border-b-0 border-border'
+              : 'text-muted-foreground hover:text-foreground'
           }`}
         >
           <Package className="w-4 h-4" />
@@ -482,7 +482,7 @@ const Positions: React.FC = () => {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs text-slate-500 uppercase tracking-wider px-1">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs text-muted-foreground uppercase tracking-wider px-1">
                   <span>Symbol</span><span className="text-right">Qty</span><span className="text-right">Avg Cost</span><span className="text-right">P&L</span>
                 </div>
                 <div className="space-y-2">
@@ -491,7 +491,7 @@ const Positions: React.FC = () => {
                     const pnl = Number(h.pnl ?? ((h.last_price - h.average_price) * h.quantity));
                     const isPnlPos = pnl >= 0;
                     return (
-                      <div key={i} className="flex items-center gap-3 bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700 hover:border-slate-600 transition">
+                      <div key={i} className="flex items-center gap-3 bg-card rounded-lg px-4 py-3 border border-border hover:border-border/80 transition">
                         <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-3 items-center">
                           <div>
                             <p className="font-semibold text-white text-sm">{sym}</p>
@@ -676,11 +676,11 @@ const Positions: React.FC = () => {
 
         {/* Breakeven Levels */}
         {spreadData?.spreads?.some((s: any) => s.breakeven_points?.length > 0) && (
-          <div className="mt-4 pt-4 border-t border-slate-700">
+          <div className="mt-4 pt-4 border-t border-border">
             <p className="text-xs text-slate-400 mb-2">Breakeven Levels</p>
             <div className="flex flex-wrap gap-3">
               {spreadData.spreads.filter((s: any) => s.breakeven_points?.length > 0).map((s: any, i: number) => (
-                <div key={i} className="bg-slate-800/50 px-3 py-1.5 rounded border border-slate-700">
+                <div key={i} className="bg-muted/40 px-3 py-1.5 rounded border border-border">
                   <span className="text-xs text-slate-400">{s.underlying} {s.spread_type.replace(/_/g, ' ')}: </span>
                   <span className="text-sm font-semibold text-blue-400">
                     {s.breakeven_points.map((b: number) => b.toFixed(1)).join(' / ')}
@@ -706,8 +706,8 @@ const SIG_COLOR: Record<string, string> = {
 const sigColor = (s?: string) => SIG_COLOR[String(s || '').toUpperCase()] ?? 'text-slate-300';
 
 const SignalBadge: React.FC<{ label: string; value?: string; sub?: string }> = ({ label, value, sub }) => (
-  <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700">
-    <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{label}</p>
+  <div className="bg-muted/40 rounded-lg p-3 border border-border">
+    <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{label}</p>
     <p className={`text-sm font-bold ${sigColor(value)}`}>{value ?? '—'}</p>
     {sub && <p className="text-[10px] text-slate-500 mt-0.5">{sub}</p>}
   </div>
@@ -809,20 +809,20 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
       <div
-        className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
+        className="bg-card border border-border rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-card z-10">
           <div>
-            <p className="text-lg font-bold text-white">{symbol}</p>
-            <p className="text-xs text-slate-400">{holding.exchange ?? 'NSE'} · Qty {holding.quantity} · Avg ₹{Number(holding.average_price ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+            <p className="text-lg font-bold text-foreground">{symbol}</p>
+            <p className="text-xs text-muted-foreground">{holding.exchange ?? 'NSE'} · Qty {holding.quantity} · Avg ₹{Number(holding.average_price ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
           </div>
           <div className="flex items-center gap-3">
             <span className={`text-sm font-bold ${isPnlPos ? 'text-green-400' : 'text-red-400'}`}>
               {isPnlPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </span>
-            <button onClick={onClose} className="p-1.5 hover:bg-slate-800 rounded-lg"><X className="w-4 h-4 text-slate-400" /></button>
+            <button onClick={onClose} className="p-1.5 hover:bg-accent rounded-lg"><X className="w-4 h-4 text-muted-foreground" /></button>
           </div>
         </div>
 
@@ -836,7 +836,7 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
             <>
               {/* ── ML Signal ── */}
               <section>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">ML Signal</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">ML Signal</p>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <SignalBadge label="ML Signal" value={mlSignal} sub={mlConf != null ? `${mlConf.toFixed(0)}% confidence` : undefined} />
                   <SignalBadge label="Technical Bias" value={techBias} />
@@ -848,11 +848,11 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
               {/* ── Price Targets ── */}
               {(nearestResistance || nearestSupport) && (
                 <section>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Price Targets</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Price Targets</p>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {nearestResistance && (
-                      <div className="bg-slate-800/60 rounded-lg p-3 border border-green-500/20">
-                        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Next Target</p>
+                      <div className="bg-muted/40 rounded-lg p-3 border border-green-500/20">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Next Target</p>
                         <p className="text-sm font-bold text-green-400">₹{nearestResistance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                         {potentialGainPct != null && potentialGainPct > 0 && (
                           <p className="text-[10px] text-green-500 mt-0.5">+{potentialGainPct.toFixed(2)}% upside</p>
@@ -861,8 +861,8 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
                       </div>
                     )}
                     {nearestSupport && (
-                      <div className="bg-slate-800/60 rounded-lg p-3 border border-red-500/20">
-                        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Support</p>
+                      <div className="bg-muted/40 rounded-lg p-3 border border-red-500/20">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Support</p>
                         <p className="text-sm font-bold text-red-400">₹{nearestSupport.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                         {downside != null && downside > 0 && (
                           <p className="text-[10px] text-red-500 mt-0.5">-{downside.toFixed(2)}% downside</p>
@@ -871,14 +871,14 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
                       </div>
                     )}
                     {ema50 && (
-                      <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700">
-                        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">EMA Trend</p>
-                        <p className="text-sm font-bold text-slate-300">₹{ema50.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                      <div className="bg-muted/40 rounded-lg p-3 border border-border">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">EMA Trend</p>
+                        <p className="text-sm font-bold text-foreground">₹{ema50.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
                         <p className={`text-[10px] mt-0.5 ${ltp > ema50 ? 'text-green-500' : 'text-red-500'}`}>{ltp > ema50 ? 'Above EMA ↑' : 'Below EMA ↓'}</p>
                       </div>
                     )}
-                    <div className="bg-slate-800/60 rounded-lg p-3 border border-slate-700">
-                      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Holding P&L</p>
+                    <div className="bg-muted/40 rounded-lg p-3 border border-border">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Holding P&L</p>
                       <p className={`text-sm font-bold ${isPnlPos ? 'text-green-400' : 'text-red-400'}`}>
                         {isPnlPos ? '+' : ''}₹{Math.abs(pnl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </p>
@@ -895,11 +895,11 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
               {/* ── Technical Indicators ── */}
               {Object.keys(indicators).length > 0 && (
                 <section>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Technical Indicators</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Technical Indicators</p>
                   <div className="flex flex-wrap gap-2">
                     {Object.entries(indicators).map(([k, v]) => (
-                      <span key={k} className="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300">
-                        <span className="text-slate-500">{k}:</span> {typeof v === 'number' ? v.toFixed(2) : typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? '')}
+                      <span key={k} className="px-2.5 py-1 rounded-lg bg-muted border border-border text-xs text-foreground">
+                        <span className="text-muted-foreground">{k}:</span> {typeof v === 'number' ? v.toFixed(2) : typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? '')}
                       </span>
                     ))}
                   </div>
@@ -909,11 +909,11 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
               {/* ── News Headlines ── */}
               {newsHeadlines.length > 0 && (
                 <section>
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Recent News</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Recent News</p>
                   <ul className="space-y-1.5">
                     {newsHeadlines.slice(0, 5).map((h, i) => (
-                      <li key={i} className="text-xs text-slate-300 flex gap-2">
-                        <span className="text-slate-600 flex-shrink-0">•</span>{h}
+                      <li key={i} className="text-xs text-foreground flex gap-2">
+                        <span className="text-muted-foreground flex-shrink-0">•</span>{h}
                       </li>
                     ))}
                   </ul>
@@ -923,7 +923,7 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
               {/* ── AI Deep Analysis ── */}
               <section>
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">AI Deep Analysis</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">AI Deep Analysis</p>
                   {!aiResult && (
                     <button
                       onClick={runAiAnalysis}
@@ -962,8 +962,8 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
                     <div className="space-y-4">
                       {/* Decision */}
                       {decision && (
-                        <div className="p-4 rounded-xl bg-slate-800/60 border border-slate-700">
-                          <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Final Decision</p>
+                        <div className="p-4 rounded-xl bg-muted/40 border border-border">
+                          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Final Decision</p>
                           <p className={`text-base font-bold ${sigColor(decision?.action ?? decision?.signal ?? decision)}`}>
                             {decision?.action ?? decision?.signal ?? String(decision)}
                           </p>
@@ -973,18 +973,18 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
                       )}
 
                       {/* Summary */}
-                      {summary && <p className="text-xs text-slate-300 leading-relaxed">{typeof summary === 'string' ? summary : JSON.stringify(summary)}</p>}
+                      {summary && <p className="text-xs text-foreground leading-relaxed">{typeof summary === 'string' ? summary : JSON.stringify(summary)}</p>}
 
                       {/* 4-column agent grid */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {[['📈 Technical', technical], ['💬 Sentiment', sentiment], ['📊 Fundamental', fundamental]].map(([title, agent]) =>
                           agent ? (
-                            <div key={String(title)} className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/60">
-                              <p className="text-xs font-semibold text-slate-300 mb-2">{String(title)}</p>
+                            <div key={String(title)} className="p-3 rounded-xl bg-muted/30 border border-border/60">
+                              <p className="text-xs font-semibold text-foreground mb-2">{String(title)}</p>
                               <p className={`text-sm font-bold mb-1 ${sigColor(agent?.signal ?? agent?.bias ?? agent?.action)}`}>
                                 {agent?.signal ?? agent?.bias ?? agent?.action ?? '—'}
                               </p>
-                              <p className="text-[11px] text-slate-400 leading-relaxed line-clamp-4">
+                              <p className="text-[11px] text-muted-foreground leading-relaxed line-clamp-4">
                                 {agent?.summary ?? agent?.reasoning ?? agent?.analysis ?? ''}
                               </p>
                             </div>
@@ -992,8 +992,8 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
                         )}
                         {/* Bull / Bear */}
                         {(bull || bear) && (
-                          <div className="p-3 rounded-xl bg-slate-800/40 border border-slate-700/60">
-                            <p className="text-xs font-semibold text-slate-300 mb-2">🐂 Bull / 🐻 Bear</p>
+                          <div className="p-3 rounded-xl bg-muted/30 border border-border/60">
+                            <p className="text-xs font-semibold text-foreground mb-2">🐂 Bull / 🐻 Bear</p>
                             {bull && <p className="text-[11px] text-green-400/80 leading-relaxed mb-1 line-clamp-3">{bull?.summary ?? bull?.case ?? String(bull)}</p>}
                             {bear && <p className="text-[11px] text-red-400/80 leading-relaxed line-clamp-3">{bear?.summary ?? bear?.case ?? String(bear)}</p>}
                           </div>
@@ -1004,7 +1004,7 @@ const ZerodhaHoldingInsightModal: React.FC<{ symbol: string; holding: any; onClo
                 })()}
 
                 {!aiResult && !aiLoading && !aiError && (
-                  <p className="text-xs text-slate-500">Click "Run Analysis" for a full multi-agent AI report including technical, sentiment, fundamentals, and bull/bear research.</p>
+                  <p className="text-xs text-muted-foreground">Click "Run Analysis" for a full multi-agent AI report including technical, sentiment, fundamentals, and bull/bear research.</p>
                 )}
               </section>
             </>
@@ -1032,7 +1032,7 @@ const HoldingCard: React.FC<HoldingCardProps> = ({ holding, onClose, onRefresh }
   const modeLabel = (holding.execution_mode || '').includes('LIVE') ? 'LIVE' : 'PAPER';
 
   return (
-    <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition">
+    <div className="bg-card rounded-lg p-4 border border-border hover:border-border/80 transition">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
           {isProfitable ? <TrendingUp className="w-5 h-5 text-green-400" /> : <TrendingDown className="w-5 h-5 text-red-400" />}
@@ -1053,7 +1053,7 @@ const HoldingCard: React.FC<HoldingCardProps> = ({ holding, onClose, onRefresh }
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 py-3 border-t border-b border-slate-700">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 py-3 border-t border-b border-border">
         <div><p className="text-xs text-slate-400">Qty</p><p className="font-semibold text-white">{holding.quantity}</p></div>
         <div><p className="text-xs text-slate-400">Entry</p><p className="font-semibold text-white">₹{Number(holding.entry_price).toLocaleString()}</p></div>
         <div><p className="text-xs text-slate-400">LTP</p><p className="font-semibold text-white">₹{Number(holding.current_price ?? holding.entry_price).toLocaleString()}</p></div>
@@ -1170,24 +1170,24 @@ const HedgeModal: React.FC<{ trade: any; onClose: () => void; onSuccess: () => v
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-full max-w-md space-y-4">
-        <h3 className="text-lg font-bold text-white">🛡️ Hedge Position</h3>
-        <p className="text-sm text-slate-300">Add protective legs to reduce risk</p>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-card border border-border rounded-lg p-6 w-full max-w-md space-y-4">
+        <h3 className="text-lg font-bold text-foreground">🛡️ Hedge Position</h3>
+        <p className="text-sm text-muted-foreground">Add protective legs to reduce risk</p>
         
         <div className="space-y-3">
-          <div className="p-3 bg-slate-800 rounded border border-slate-700">
-            <p className="text-xs text-slate-400 mb-1">Current Position</p>
-            <p className="text-sm font-semibold text-white">{trade.strategy} • {trade.underlying}</p>
-            <p className="text-xs text-slate-400">Unrealized P&L: <span className={Number(trade.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}>₹{Math.abs(Number(trade.pnl)).toLocaleString()}</span></p>
+          <div className="p-3 bg-muted/50 rounded border border-border">
+            <p className="text-xs text-muted-foreground mb-1">Current Position</p>
+            <p className="text-sm font-semibold text-foreground">{trade.strategy} • {trade.underlying}</p>
+            <p className="text-xs text-muted-foreground">Unrealized P&L: <span className={Number(trade.pnl) >= 0 ? 'text-green-500' : 'text-red-500'}>₹{Math.abs(Number(trade.pnl)).toLocaleString()}</span></p>
           </div>
 
           <div className="space-y-2">
-            <label className="block text-xs text-slate-300 font-semibold">Hedge Strategy</label>
+            <label className="block text-xs text-foreground font-semibold">Hedge Strategy</label>
             <select 
               value={hedgeType} 
               onChange={(e) => setHedgeType(e.target.value as any)}
-              className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+              className="w-full px-3 py-2 bg-background border border-border rounded text-foreground text-sm"
             >
               <option value="strangle">Short Strangle (Sell OTM Call & Put)</option>
               <option value="wing">Add Wings (Protect existing spread)</option>
@@ -1267,47 +1267,47 @@ const AdjustStrikesModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-full max-w-md space-y-4">
-        <h3 className="text-lg font-bold text-white">📊 Adjust Strikes</h3>
-        <p className="text-sm text-slate-300">Roll strikes up or down</p>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-card border border-border rounded-lg p-6 w-full max-w-md space-y-4">
+        <h3 className="text-lg font-bold text-foreground">📊 Adjust Strikes</h3>
+        <p className="text-sm text-muted-foreground">Roll strikes up or down</p>
         
         <div className="space-y-3">
-          <div className="p-3 bg-slate-800 rounded border border-slate-700">
-            <p className="text-xs text-slate-400 mb-2">Current Strikes</p>
+          <div className="p-3 bg-muted/50 rounded border border-border">
+            <p className="text-xs text-muted-foreground mb-2">Current Strikes</p>
             {legs.map((leg: any, idx: string) => (
-              <p key={idx} className="text-xs text-white mb-1">
-                <span className={leg.side === 'SELL' ? 'text-red-400' : 'text-green-400'}>{leg.side}</span> {leg.strike} {leg.type}
+              <p key={idx} className="text-xs text-foreground mb-1">
+                <span className={leg.side === 'SELL' ? 'text-red-500' : 'text-green-500'}>{leg.side}</span> {leg.strike} {leg.type}
               </p>
             ))}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-slate-300 mb-1">Direction</label>
+              <label className="block text-xs text-foreground mb-1">Direction</label>
               <select 
                 value={direction} 
                 onChange={(e) => setDirection(e.target.value as any)}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                className="w-full px-3 py-2 bg-background border border-border rounded text-foreground text-sm"
               >
                 <option value="up">Move Up ⬆️</option>
                 <option value="down">Move Down ⬇️</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs text-slate-300 mb-1">Adjustment</label>
+              <label className="block text-xs text-foreground mb-1">Adjustment</label>
               <input 
                 type="number" 
                 value={adjustment} 
                 onChange={(e) => setAdjustment(Number(e.target.value))}
                 step="50"
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+                className="w-full px-3 py-2 bg-background border border-border rounded text-foreground text-sm"
               />
             </div>
           </div>
 
-          <div className="p-3 bg-slate-800 rounded border border-slate-700">
-            <p className="text-xs text-slate-400 mb-2">New Strikes (Preview)</p>
+          <div className="p-3 bg-muted/50 rounded border border-border">
+            <p className="text-xs text-muted-foreground mb-2">New Strikes (Preview)</p>
             {legs.map((leg: any, idx: string) => {
               const newStrike = direction === 'up' ? leg.strike + adjustment : leg.strike - adjustment;
               return (
@@ -1373,32 +1373,32 @@ const AddToPositionModal: React.FC<{ trade: any; onClose: () => void; onSuccess:
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-full max-w-md space-y-4">
-        <h3 className="text-lg font-bold text-white">➕ Add to Position</h3>
-        <p className="text-sm text-slate-300">Scale into this position</p>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-card border border-border rounded-lg p-6 w-full max-w-md space-y-4">
+        <h3 className="text-lg font-bold text-foreground">➕ Add to Position</h3>
+        <p className="text-sm text-muted-foreground">Scale into this position</p>
         
         <div className="space-y-3">
-          <div className="p-3 bg-slate-800 rounded border border-slate-700">
-            <p className="text-xs text-slate-400">Current Position Size</p>
-            <p className="text-2xl font-bold text-white">{currentQty} Lot{currentQty > 1 ? 's' : ''}</p>
+          <div className="p-3 bg-muted/50 rounded border border-border">
+            <p className="text-xs text-muted-foreground">Current Position Size</p>
+            <p className="text-2xl font-bold text-foreground">{currentQty} Lot{currentQty > 1 ? 's' : ''}</p>
           </div>
 
           <div>
-            <label className="block text-xs text-slate-300 mb-1 font-semibold">Add Quantity</label>
+            <label className="block text-xs text-foreground mb-1 font-semibold">Add Quantity</label>
             <input 
               type="number" 
               value={quantity} 
               onChange={(e) => setQuantity(Number(e.target.value))}
               min="1"
-              className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-sm"
+              className="w-full px-3 py-2 bg-background border border-border rounded text-foreground text-sm"
             />
           </div>
 
-          <div className="p-3 bg-slate-800 rounded border border-slate-700">
-            <p className="text-xs text-slate-400">New Position Size</p>
-            <p className="text-2xl font-bold text-green-400">{currentQty + quantity} Lot{(currentQty + quantity) > 1 ? 's' : ''}</p>
-            <p className="text-xs text-slate-400 mt-1">+{((quantity / currentQty) * 100).toFixed(0)}% increase</p>
+          <div className="p-3 bg-muted/50 rounded border border-border">
+            <p className="text-xs text-muted-foreground">New Position Size</p>
+            <p className="text-2xl font-bold text-green-500">{currentQty + quantity} Lot{(currentQty + quantity) > 1 ? 's' : ''}</p>
+            <p className="text-xs text-muted-foreground mt-1">+{((quantity / currentQty) * 100).toFixed(0)}% increase</p>
           </div>
 
           <div className="p-3 bg-green-500/10 border border-green-500/30 rounded">
@@ -1451,23 +1451,23 @@ const ShareStrategyModal: React.FC<{ trade: any; onClose: () => void }> = ({ tra
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-full max-w-lg space-y-4">
-        <h3 className="text-lg font-bold text-white">📤 Share Strategy</h3>
-        <p className="text-sm text-slate-300">Export your position configuration</p>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-card border border-border rounded-lg p-6 w-full max-w-lg space-y-4">
+        <h3 className="text-lg font-bold text-foreground">📤 Share Strategy</h3>
+        <p className="text-sm text-muted-foreground">Export your position configuration</p>
         
         <div className="space-y-3">
-          <div className="p-3 bg-slate-800 rounded border border-slate-700">
-            <p className="text-xs text-slate-400 mb-1">Strategy</p>
-            <p className="text-sm font-semibold text-white">{trade.strategy}</p>
+          <div className="p-3 bg-muted/50 rounded border border-border">
+            <p className="text-xs text-muted-foreground mb-1">Strategy</p>
+            <p className="text-sm font-semibold text-foreground">{trade.strategy}</p>
           </div>
 
           <div>
-            <label className="block text-xs text-slate-300 mb-1 font-semibold">Configuration JSON</label>
+            <label className="block text-xs text-foreground mb-1 font-semibold">Configuration JSON</label>
             <textarea 
               readOnly 
               value={shareText}
-              className="w-full h-48 px-3 py-2 bg-slate-800 border border-slate-600 rounded text-white text-xs font-mono"
+              className="w-full h-48 px-3 py-2 bg-background border border-border rounded text-foreground text-xs font-mono"
             />
           </div>
 
@@ -1597,22 +1597,22 @@ const actionLabel =
 
             {expanded && (
               <div className="mt-2 space-y-2">
-                <p className="text-xs text-slate-400 leading-relaxed">{details}</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">{details}</p>
                 <div className="flex flex-wrap gap-2 mt-2">
-                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                  <span className="text-[10px] bg-muted text-muted-foreground px-2 py-0.5 rounded">
                     Now suggests: {currentStrategy}
                   </span>
-                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                  <span className="text-[10px] bg-muted text-muted-foreground px-2 py-0.5 rounded">
                     Market: {marketMode}
                   </span>
-                  <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                  <span className="text-[10px] bg-muted text-muted-foreground px-2 py-0.5 rounded">
                     IV: {ivRegime}
                   </span>
                 </div>
 
                 {/* Quick action buttons */}
                 {(action === 'CONSIDER_EXIT' || action === 'HEDGE_SUGGESTED') && (
-                  <div className="flex gap-2 mt-2 pt-2 border-t border-slate-700/50">
+                  <div className="flex gap-2 mt-2 pt-2 border-t border-border/50">
                     {action === 'CONSIDER_EXIT' && (
                       <button
                         onClick={onClose}
@@ -1792,7 +1792,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
   };
 
   return (
-    <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition">
+    <div className="bg-card rounded-lg p-4 border border-border hover:border-border/80 transition">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
           {isProfitable ? (
@@ -1817,7 +1817,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
             onClick={() => setEditOpen(true)}
             aria-label="Edit TP/SL/Trailing"
             title="Edit TP/SL/Trailing"
-            className="text-slate-400 hover:text-blue-400 transition border border-slate-600 rounded px-2 py-1 text-xs"
+            className="text-muted-foreground hover:text-blue-400 transition border border-border rounded px-2 py-1 text-xs"
           >
             Edit TP/SL
           </button>
@@ -1843,7 +1843,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
         />
       )}
 
-      <div className={`grid gap-4 py-3 border-t border-b border-slate-700 ${showMargin ? 'grid-cols-2 md:grid-cols-7' : 'grid-cols-2 md:grid-cols-6'}`}>
+      <div className={`grid gap-4 py-3 border-t border-b border-border ${showMargin ? 'grid-cols-2 md:grid-cols-7' : 'grid-cols-2 md:grid-cols-6'}`}>
         <div>
           <p className="text-xs text-slate-400">{isEquityBuy ? 'Entry Value' : `Premium ${isZerodhaMode ? 'Collected' : ''}`}</p>
           <p className="font-semibold text-white">₹{entryValue.toLocaleString()}</p>
@@ -1884,20 +1884,20 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
         </div>
             {/* Edit TP/SL/Trailing Modal */}
             {editOpen && (
-              <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-                <form onSubmit={handleEditSubmit} className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-80 space-y-4">
-                  <h3 className="text-lg font-bold text-white mb-2">Edit TP / SL / Trailing</h3>
+              <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                <form onSubmit={handleEditSubmit} className="bg-card border border-border rounded-lg p-6 w-80 space-y-4">
+                  <h3 className="text-lg font-bold text-foreground mb-2">Edit TP / SL / Trailing</h3>
                   <div className="space-y-2">
-                    <label className="block text-xs text-slate-300">Take Profit (TP)</label>
-                    <input type="number" className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm" value={editTp} onChange={e => setEditTp(e.target.value)} placeholder="e.g. 1000" />
+                    <label className="block text-xs text-muted-foreground">Take Profit (TP)</label>
+                    <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editTp} onChange={e => setEditTp(e.target.value)} placeholder="e.g. 1000" />
                   </div>
                   <div className="space-y-2">
-                    <label className="block text-xs text-slate-300">Stop Loss (SL)</label>
-                    <input type="number" className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm" value={editSl} onChange={e => setEditSl(e.target.value)} placeholder="e.g. -1000" />
+                    <label className="block text-xs text-muted-foreground">Stop Loss (SL)</label>
+                    <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editSl} onChange={e => setEditSl(e.target.value)} placeholder="e.g. -1000" />
                   </div>
                   <div className="space-y-2">
-                    <label className="block text-xs text-slate-300">Trailing Stop</label>
-                    <input type="number" className="w-full px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm" value={editTrailing} onChange={e => setEditTrailing(e.target.value)} placeholder="e.g. 500" />
+                    <label className="block text-xs text-muted-foreground">Trailing Stop</label>
+                    <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editTrailing} onChange={e => setEditTrailing(e.target.value)} placeholder="e.g. 500" />
                   </div>
                   <div className="flex gap-2 mt-4">
                     <button type="submit" disabled={editLoading} className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded font-semibold transition">{editLoading ? 'Saving...' : 'Save'}</button>
@@ -1910,7 +1910,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
 
       {/* Legs Section - Expandable */}
       {legs.length > 0 && (
-        <div className="mt-3 border-t border-slate-700 pt-3">
+        <div className="mt-3 border-t border-border pt-3">
           <button
             onClick={() => setShowLegs(!showLegs)}
             className="text-xs text-slate-400 hover:text-slate-300 transition flex items-center gap-2"
@@ -1922,13 +1922,12 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
           {showLegs && (
             <div className="mt-2 space-y-1">
               {legs.map((leg: any, idx: number) => {
-                const m = Array.isArray(legsMetrics) ? legsMetrics[idx] : undefined;
-                const legPnl = m?.pnl_total ?? null;
-                const legLtp = m?.ltp ?? null;
-                const legEntry = m?.entry ?? leg.price ?? null;
+                const legPnl = leg?.leg_pnl ?? null;
+                const legLtp = leg?.ltp ?? null;
+                const legEntry = leg?.price ?? leg?.premium ?? null;
                 const isLegProfit = typeof legPnl === 'number' ? legPnl >= 0 : null;
                 return (
-                  <div key={idx} className="text-xs bg-slate-800/50 p-2 rounded flex justify-between items-center">
+                  <div key={idx} className="text-xs bg-muted/40 p-2 rounded flex justify-between items-center">
                     <div className="flex items-center gap-3">
                       <span className={`px-2 py-0.5 rounded ${
                         leg.side === 'SELL' ? 'bg-red-500/20 text-red-300' : 'bg-green-500/20 text-green-300'
@@ -1969,7 +1968,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
 
       {/* Greeks Overlay */}
       {(trade?.ticket?.legs || []).length > 0 && (
-        <div className="mt-3 border-t border-slate-700 pt-3">
+        <div className="mt-3 border-t border-border pt-3">
           <button
             onClick={fetchGreeks}
             disabled={greeksLoading}
@@ -1993,12 +1992,12 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
                   if (val === undefined || val === null) return null;
                   const num = Number(val);
                   return (
-                    <div key={key} className="bg-slate-800/60 rounded-lg p-2 text-center border border-slate-700/60" title={hint}>
-                      <p className="text-[10px] text-slate-500 mb-1">{label}</p>
+                    <div key={key} className="bg-muted/40 rounded-lg p-2 text-center border border-border/60" title={hint}>
+                      <p className="text-[10px] text-muted-foreground mb-1">{label}</p>
                       <p className={`text-sm font-bold font-mono ${color(num)}`}>
                         {num >= 0 ? '' : ''}{num.toFixed(key === 'gamma' ? 4 : 3)}
                       </p>
-                      <p className="text-[9px] text-slate-600 mt-0.5">{hint}</p>
+                      <p className="text-[9px] text-muted-foreground/60 mt-0.5">{hint}</p>
                     </div>
                   );
                 })}
@@ -2006,10 +2005,10 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
               {/* Per-leg breakdown */}
               {Array.isArray(greeks?.legs_details) && greeks.legs_details.length > 0 && (
                 <div className="mt-2">
-                  <p className="text-[10px] text-slate-500 mb-1 uppercase tracking-wider">Per Leg</p>
+                  <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wider">Per Leg</p>
                   <div className="space-y-1">
                     {greeks.legs_details.map((lg: any, i: number) => (
-                      <div key={i} className="flex items-center gap-3 text-[11px] bg-slate-800/40 rounded px-2 py-1">
+                      <div key={i} className="flex items-center gap-3 text-[11px] bg-muted/30 rounded px-2 py-1">
                         <span className={`w-8 font-semibold ${lg.type === 'SELL' ? 'text-red-400' : 'text-green-400'}`}>{lg.type}</span>
                         <span className="text-slate-400 w-16">{lg.strike} {lg.option_type}</span>
                         <span className="text-slate-300">Δ <span className={Number(lg.delta) >= 0 ? 'text-green-400' : 'text-red-400'}>{Number(lg.delta).toFixed(3)}</span></span>
@@ -2027,7 +2026,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
       )}
 
       {/* Position Actions */}
-      <div className="mt-3 pt-3 border-t border-slate-700">
+      <div className="mt-3 pt-3 border-t border-border">
         <p className="text-xs text-slate-400 mb-2">Manage Position</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <button
@@ -2174,7 +2173,7 @@ const RiskMetric: React.FC<{ label: string; value: string; subtext?: string; sta
   }[status];
 
   return (
-    <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+    <div className="bg-card p-4 rounded-lg border border-border">
       <p className="text-xs text-slate-400 mb-2">{label}</p>
       <p className={`text-2xl font-bold ${statusColor}`}>{value}</p>
       {subtext && <p className="text-xs text-slate-500 mt-1">{subtext}</p>}

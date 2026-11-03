@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 def initialize_schedulers(engine: "Engine") -> None:
     """
     Initialize all background schedulers.
-    
-    Args:
-        engine: SQLAlchemy engine for DB operations
+
+    Auto-trader, auto-exit, expiry-exit, and holdings-auto-exit always start
+    regardless of SCHEDULERS_ENABLED so trading jobs are never silently skipped.
     """
     from app.core.market.scheduler import (
         start_candle_scheduler,
@@ -48,10 +48,21 @@ def initialize_schedulers(engine: "Engine") -> None:
         scheduler as _apscheduler,
     )
 
+    # ── Always-on trading jobs (ignore SCHEDULERS_ENABLED) ────────────────
+    # These must run at all times: auto-trader scan, TP/SL exit monitor,
+    # expiry-day force-exit, and holdings auto-exit.
+    _start_always_on_scheduler(
+        _apscheduler,
+        start_auto_exit_scheduler,
+        start_expiry_exit_scheduler,
+        start_holdings_auto_exit_scheduler,
+        engine,
+    )
+
     schedulers_enabled = os.getenv("SCHEDULERS_ENABLED", "true").lower() == "true"
-    
+
     if not schedulers_enabled:
-        logger.info("⏭️ Schedulers DISABLED (SCHEDULERS_ENABLED=false)")
+        logger.info("⏭️ Optional schedulers DISABLED (SCHEDULERS_ENABLED=false) — trading jobs still active")
         return
 
     broker_ready = _broker_token_available()
@@ -70,13 +81,10 @@ def initialize_schedulers(engine: "Engine") -> None:
         logger.info("✅ APScheduler started")
 
     # Always start broker-independent schedulers
-    start_auto_exit_scheduler()
-    start_expiry_exit_scheduler()
     start_strategy_discovery_scheduler()
     start_strategy_decay_scheduler()
     start_watchlist_analysis_scheduler()
     start_scalp_trading_scheduler()
-    start_holdings_auto_exit_scheduler()
     start_nse_filing_alerts_scheduler()
     start_nse_snapshot_scheduler()
     logger.info("✅ Broker-independent schedulers started")
@@ -97,9 +105,6 @@ def initialize_schedulers(engine: "Engine") -> None:
     else:
         logger.warning("⏭️  Broker-dependent schedulers SKIPPED (no valid token)")
 
-    # Resume auto-trader if it was running
-    _resume_auto_trader(engine)
-
     # Resume condition scanner
     _resume_condition_scanner()
 
@@ -111,6 +116,28 @@ def initialize_schedulers(engine: "Engine") -> None:
 
     # Schedule INDstocks instruments sync
     _schedule_instruments_sync()
+
+
+def _start_always_on_scheduler(apscheduler, start_auto_exit_fn, start_expiry_exit_fn, start_holdings_exit_fn, engine):
+    """
+    Start the APScheduler instance and register the 4 trading-critical jobs
+    that must always run regardless of SCHEDULERS_ENABLED:
+      - auto_exit_job       : TP/SL/trailing-stop monitor (every 10s, market hours)
+      - expiry_exit_job     : force-exit on expiry day (every 1min, market hours)
+      - holdings_auto_exit  : scanner/AI holding TP/SL (every 1min, market hours)
+      - auto_trader_scan    : auto-trader engine (interval, resumed from DB state)
+    """
+    if not apscheduler.running:
+        apscheduler.start()
+        logger.info("✅ APScheduler started (always-on trading jobs)")
+
+    start_auto_exit_fn()
+    start_expiry_exit_fn()
+    start_holdings_exit_fn()
+    logger.info("✅ Always-on trading jobs registered: auto-exit, expiry-exit, holdings-exit")
+
+    # Resume auto-trader immediately (before optional schedulers block)
+    _resume_auto_trader(engine)
 
 
 def _broker_token_available() -> bool:

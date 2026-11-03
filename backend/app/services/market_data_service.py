@@ -112,6 +112,12 @@ class BrokerDataAdapter(ABC):
         """Returns list of (strike, option_type) tuples available for the expiry."""
         ...
 
+    def build_option_symbol(self, underlying: str, expiry: date, strike: int, opt_type: str) -> str:
+        """Build a broker-native tradingsymbol for an option contract."""
+        from app.core.broker.zerodha_symbols import build_zerodha_option_symbol
+        return build_zerodha_option_symbol(underlying=underlying, expiry=expiry,
+                                           strike=strike, option_type=opt_type)
+
 
 # ── Zerodha adapter ────────────────────────────────────────────────────────
 
@@ -340,20 +346,25 @@ class INDMoneyDataAdapter(BrokerDataAdapter):
 
     def get_spot_quote(self, symbol: str) -> Optional[SpotQuote]:
         try:
-            from app.core.broker.indstocks.market_data import fetch_full_quotes, get_scrip_code
+            from app.core.broker.indstocks.market_data import fetch_full_quotes, fetch_ltp, get_scrip_code
             scrip = get_scrip_code(symbol)
             data = fetch_full_quotes([scrip])
             q = data.get(scrip)
-            if not q or not q.get("ltp"):
+            ltp = float(q["ltp"]) if q else 0.0
+            # fetch_full_quotes normalises live_price -> ltp; if still zero try LTP endpoint
+            if not ltp:
+                ltp_map = fetch_ltp([scrip])
+                ltp = float(ltp_map.get(scrip, 0))
+            if not ltp:
                 return None
             return SpotQuote(
                 symbol=symbol,
-                last_price=float(q["ltp"]),
-                open=float(q.get("open", 0)),
-                high=float(q.get("high", 0)),
-                low=float(q.get("low", 0)),
-                close=float(q.get("close", 0)),
-                volume=int(q.get("volume", 0)),
+                last_price=ltp,
+                open=float((q or {}).get("open", 0)),
+                high=float((q or {}).get("high", 0)),
+                low=float((q or {}).get("low", 0)),
+                close=float((q or {}).get("close", 0)),
+                volume=int((q or {}).get("volume", 0)),
             )
         except Exception as e:
             logger.warning("INDMoneyDataAdapter.get_spot_quote failed for %s: %s", symbol, e)
@@ -538,6 +549,9 @@ class INDMoneyDataAdapter(BrokerDataAdapter):
         except Exception as e:
             logger.warning("INDMoneyDataAdapter.get_option_strikes failed: %s", e)
             return []
+
+    def build_option_symbol(self, underlying: str, expiry: date, strike: int, opt_type: str) -> str:
+        return f"{underlying.upper()}|{expiry}|{strike}|{opt_type.upper()}"
 
 
 # ── Service with automatic broker selection + fallback ────────────────────

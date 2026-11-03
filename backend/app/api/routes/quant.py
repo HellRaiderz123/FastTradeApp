@@ -368,10 +368,9 @@ async def check_trade_risk(
         # Get current VIX
         current_vix = None
         try:
-            kite = KiteConnectService()
-            vix_quote = kite.get_full_quote("INDIA VIX")
-            if vix_quote:
-                current_vix = float(vix_quote.get("last_price", 0))
+            from app.core.market.provider import fetch_ltp as _fetch_ltp
+            _vix_prices = _fetch_ltp(["NIFTYVIX"])
+            current_vix = float(_vix_prices.get("NIFTYVIX") or 0) or None
         except Exception:
             pass
         

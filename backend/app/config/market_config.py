@@ -41,7 +41,7 @@ MARKET_SYMBOLS = {
         "AUROPHARMA", "BALKRISIND", "BANDHANBNK", "BANKBARODA", "BHARATFORG",
         "BHEL", "BIOCON", "CANBK", "CHOLAFIN", "COFORGE",
         "CONCOR", "CROMPTON", "CUMMINSIND", "DELHIVERY", "DIXON",
-        "FEDERALBNK", "GMRINFRA", "GODREJPROP", "HDFCAMC", "HINDPETRO",
+        "FEDERALBNK", "GMRPINFRA", "GODREJPROP", "HDFCAMC", "HINDPETRO",
         "IDFCFIRSTB", "INDHOTEL", "INDUSTOWER", "IRCTC", "JINDALSTEL",
         "JUBLFOOD", "KPITTECH", "LICHSGFIN", "LUPIN", "MFSL",
         "MPHASIS", "MRF", "NMDC", "OBEROIRLTY", "OFSS",
@@ -53,7 +53,7 @@ MARKET_SYMBOLS = {
         "AUROPHARMA", "BALKRISIND", "BANDHANBNK", "BANKBARODA", "BHARATFORG",
         "BHEL", "BIOCON", "CANBK", "CHOLAFIN", "COFORGE",
         "CONCOR", "CROMPTON", "CUMMINSIND", "DELHIVERY", "DIXON",
-        "FEDERALBNK", "GMRINFRA", "GODREJPROP", "HDFCAMC", "HINDPETRO",
+        "FEDERALBNK", "GMRPINFRA", "GODREJPROP", "HDFCAMC", "HINDPETRO",
         "IDFCFIRSTB", "INDHOTEL", "INDUSTOWER", "IRCTC", "JINDALSTEL",
         "JUBLFOOD", "KPITTECH", "LICHSGFIN", "LUPIN", "MFSL",
         "MPHASIS", "MRF", "NMDC", "OBEROIRLTY", "OFSS",
@@ -76,7 +76,7 @@ MARKET_SYMBOLS = {
         "ABCAPITAL", "ASHOKLEY", "ASTRAL", "AUROPHARMA", "BALKRISIND",
         "BANDHANBNK", "BANKBARODA", "BHARATFORG", "BHEL", "BIOCON",
         "CANBK", "CHOLAFIN", "COFORGE", "CONCOR", "CUMMINSIND",
-        "DELHIVERY", "DIXON", "FEDERALBNK", "GMRINFRA", "GODREJPROP",
+        "DELHIVERY", "DIXON", "FEDERALBNK", "GMRPINFRA", "GODREJPROP",
         "HDFCAMC", "HINDPETRO", "IDFCFIRSTB", "INDHOTEL", "INDUSTOWER",
         "IRCTC", "JINDALSTEL", "JUBLFOOD", "KPITTECH", "LICHSGFIN",
         "LUPIN", "MPHASIS", "MRF", "NMDC", "OBEROIRLTY",
@@ -90,7 +90,7 @@ MARKET_SYMBOLS = {
         "IOC", "LTIM", "MARICO", "MAXHEALTH", "MOTHERSON",
         "MUTHOOTFIN", "NAUKRI", "NATIONALUM", "PIDILITIND", "SIEMENS",
         "SRF", "TATACHEM", "TATAPOWER", "TORNTPHARM", "UNIONBANK",
-        "VEDL", "VOLTAS", "ZOMATO",
+        "VEDL", "VOLTAS", "ETERNAL",
     ],
     "NIFTY SMALLCAP 50": [
         "APLAPOLLO", "APTUS", "BALAMINES", "BASF", "BSOFT",
@@ -251,6 +251,9 @@ INDICATOR_DEFAULTS = {
 def get_symbols(universe: str = "NIFTY50") -> List[str]:
     """Get symbol list for a market universe. Returns NIFTY50 as fallback with a warning."""
     import logging
+    # Guard: FastAPI Query() objects can leak in when called outside request context (e.g. scheduler)
+    if not isinstance(universe, str):
+        universe = "NIFTY50"
     symbols = MARKET_SYMBOLS.get(universe)
     if symbols is None:
         logging.getLogger(__name__).warning(

@@ -208,7 +208,9 @@ def _refresh_instruments_cache() -> None:
                     sid = (row.get("SECURITY_ID") or "").strip()
                     sym = (row.get("SEGMENT") or "").strip().upper()
                     if sym and sid:
-                        merged[sym] = f"{exch}_{sid}"
+                        # INDstocks uses NIDX/BIDX segment prefix for index instruments
+                        seg = "NIDX" if exch == "NSE" else ("BIDX" if exch == "BSE" else exch)
+                        merged[sym] = f"{seg}_{sid}"
                         rows_loaded += 1
                 else:
                     exch = (row.get("EXCH") or "NSE").strip().upper()
@@ -250,6 +252,7 @@ def _refresh_instruments_cache() -> None:
         merged.setdefault(sym, scrip)
 
     if merged:
+        _sym_cache.clear()  # clear stale entries (e.g. old NSE_ index codes)
         _sym_cache.update(merged)
         _cache_loaded_at = time.time()
         logger.info("INDstocks instruments cache: %d symbols (%d from API, %d from fallback)",
@@ -272,19 +275,20 @@ _INDEX_ALIASES: Dict[str, str] = {
 # Security IDs sourced from INDstocks instrument CSV (NSE equity segment).
 _INDEX_FALLBACK_SCRIP: Dict[str, str] = {
     # ── Indices (SECURITY_IDs from INDstocks /market/instruments?source=index) ──
-    "NIFTY 50":          "NSE_40000001",
-    "NIFTY":             "NSE_40000001",
-    "BANK NIFTY":        "NSE_40000003",  # exact CSV name
-    "NIFTY BANK":        "NSE_40000003",  # legacy alias
-    "BANKNIFTY":         "NSE_40000003",
-    "NIFTY IT":          "NSE_40000004",
-    "NIFTYFINSRV25 50":  "NSE_40000076",  # exact CSV name (uppercased)
-    "NIFTY FIN SERVICE": "NSE_40000076",  # legacy alias
-    "FINNIFTY":          "NSE_40000076",
-    "INDIA VIX":         "NSE_40000107",
-    "NIFTYVIX":          "NSE_40000107",
+    # INDstocks uses NIDX_ prefix for NSE indices, BIDX_ for BSE indices
+    "NIFTY 50":          "NIDX_40000001",
+    "NIFTY":             "NIDX_40000001",
+    "BANK NIFTY":        "NIDX_40000003",  # exact CSV name
+    "NIFTY BANK":        "NIDX_40000003",  # legacy alias
+    "BANKNIFTY":         "NIDX_40000003",
+    "NIFTY IT":          "NIDX_40000004",
+    "NIFTYFINSRV25 50":  "NIDX_40000076",  # exact CSV name (uppercased)
+    "NIFTY FIN SERVICE": "NIDX_40000076",  # legacy alias
+    "FINNIFTY":          "NIDX_40000076",
+    "INDIA VIX":         "NIDX_40000107",
+    "NIFTYVIX":          "NIDX_40000107",
     # ── Indices (BSE) ─────────────────────────────────────────────────────
-    "SENSEX":            "BSE_1",
+    "SENSEX":            "BIDX_1",
     # ── NIFTY 50 / top weights ────────────────────────────────────────────
     "RELIANCE":    "NSE_2885",
     "TCS":         "NSE_11536",
@@ -411,10 +415,12 @@ _INDEX_FALLBACK_SCRIP: Dict[str, str] = {
     "DMART":       "NSE_21780",
     "TRENT":       "NSE_3519",
     # ZOMATO/ETERNAL, IRCTC, PAYTM - use live instruments API (IDs change frequently)
+    "ETERNAL":     "NSE_4717",   # Zomato rebranded to Eternal Ltd
     "TATAMOTORS":  "NSE_3456",
     "SHRIRAMFIN":  "NSE_4306",
     # ── Real Estate ───────────────────────────────────────────────────────
     "DLF":         "NSE_14732",
+    "GMRPINFRA":   "NSE_25780",   # GMR Power & Urban Infra (formerly GMRINFRA)
     # OBEROIRLTY - use live instruments API
     # ── Telecom ───────────────────────────────────────────────────────────
     "IDEA":        "NSE_14366",

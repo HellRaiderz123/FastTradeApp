@@ -1808,10 +1808,11 @@ async def execute_signal(body: dict, db: Session = Depends(get_db)):
     mode = get_execution_mode()
 
     # Get current price
-    quote = kite_service.get_quote(symbol)
-    ltp = None
-    if quote:
-        ltp = quote.get("last_price", 0)
+    try:
+        from app.core.market.provider import fetch_ltp as _fetch_ltp
+        ltp = _fetch_ltp([symbol]).get(symbol)
+    except Exception:
+        ltp = None
 
     if not ltp or ltp == 0:
         # Try from DB
@@ -3531,8 +3532,11 @@ async def execute_exit(
         return {"message": "Already closed", "holding": h.to_dict()}
 
     mode = get_execution_mode()
-    quote = kite_service.get_quote(h.symbol)
-    ltp = float((quote or {}).get("last_price") or 0) or h.current_price or h.entry_price
+    try:
+        from app.core.market.provider import fetch_ltp as _fetch_ltp
+        ltp = float(_fetch_ltp([h.symbol]).get(h.symbol) or 0) or h.current_price or h.entry_price
+    except Exception:
+        ltp = h.current_price or h.entry_price
 
     exit_direction = "SELL" if h.direction == "BUY" else "BUY"
     order_id = None
@@ -3712,7 +3716,11 @@ async def backfill_candles_manual(
     if symbols.strip():
         sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     else:
-        sym_list = get_symbols("NIFTY500")
+        try:
+            from app.core.market.scheduler import _get_daily_symbols
+            sym_list = _get_daily_symbols()
+        except Exception:
+            sym_list = get_symbols("NIFTY500")
 
     success = 0
     failed = 0

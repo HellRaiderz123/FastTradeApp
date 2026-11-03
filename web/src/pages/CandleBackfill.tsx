@@ -148,7 +148,7 @@ export default function CandleBackfill() {
             className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500"
           />
           <p className="text-xs text-slate-500 mt-1">
-            Comma-separated symbols. Keep blank for default NIFTY500 backfill.
+            Comma-separated symbols. Keep blank for full NIFTY200+ backfill (~200 symbols).
           </p>
         </div>
 

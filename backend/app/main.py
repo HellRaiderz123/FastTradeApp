@@ -156,8 +156,10 @@ def _start_instruments_sync() -> None:
     try:
         from app.core.broker.indstocks.instruments_sync import sync_instruments
 
+        # force=True overwrites any stale scrip codes (e.g. old NSE_ index codes)
         threading.Thread(
             target=sync_instruments,
+            kwargs={"force": True},
             name="instruments-sync",
             daemon=True
         ).start()

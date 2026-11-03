@@ -470,8 +470,7 @@ const Terminal: React.FC = () => {
     <div className="h-full flex flex-col gap-4 terminal-pattern overflow-y-auto pb-6">
 
       {/* Index Bar */}
-      {(indices.length > 0 || vix || atmSnapshot) && (
-        <div className="terminal-panel rounded-xl px-4 py-2 flex flex-wrap items-center gap-6">
+      <div className="terminal-panel rounded-xl px-4 py-2 flex flex-wrap items-center gap-6">
           {indices.map(idx => (
             <div key={idx.symbol} className="flex items-center gap-2">
               <span className="text-xs font-semibold text-slate-400 uppercase">{idx.symbol}</span>
@@ -517,7 +516,6 @@ const Terminal: React.FC = () => {
             )}
           </div>
         </div>
-      )}
 
       {/* Command Palette Overlay */}
       {showCommandPalette && (

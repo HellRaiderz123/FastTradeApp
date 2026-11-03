@@ -174,7 +174,9 @@ html.light-mode .sidebar-root {
 html.light-mode .text-slate-400 { color: #64748b !important; }
 html.light-mode .text-slate-300 { color: #475569 !important; }
 html.light-mode .text-slate-200 { color: #334155 !important; }
-html.light-mode .text-white { color: #0f172a !important; }
+/* text-white on plain text nodes (headings, labels) — but NOT on buttons or elements
+   that sit inside a colored background, so button labels stay white */
+html.light-mode :not(button):not(a):not([class*='bg-green']):not([class*='bg-blue']):not([class*='bg-red']):not([class*='bg-purple']):not([class*='bg-amber']):not([class*='bg-emerald']):not([class*='bg-indigo']):not([class*='bg-orange']):not([class*='bg-violet']).text-white { color: #0f172a !important; }
 html.light-mode .bg-slate-950 { background: #f8fafc !important; }
 html.light-mode .bg-slate-900 { background: #f1f5f9 !important; }
 html.light-mode .bg-slate-800 { background: #e8edf4 !important; }
@@ -289,6 +291,7 @@ html.light-mode input.bg-transparent {
 html.light-mode .bg-slate-800\/50 { background: rgba(226, 232, 240, 0.6) !important; }
 html.light-mode .bg-slate-900\/70 { background: rgba(248, 250, 252, 0.95) !important; }
 html.light-mode .bg-slate-950\/80 { background: rgba(241, 245, 249, 0.98) !important; }
+html.light-mode .bg-slate-900\/80 { background: rgba(241, 245, 249, 0.97) !important; }
 html.light-mode .bg-slate-950\/40 { background: rgba(241, 245, 249, 0.6) !important; }
 html.light-mode .bg-slate-900\/50 { background: rgba(241, 245, 249, 0.8) !important; }
 html.light-mode .bg-slate-900\/60 { background: rgba(241, 245, 249, 0.9) !important; }
@@ -407,6 +410,7 @@ html.light-mode .bg-slate-950 { background: #f8fafc !important; }
 
 /* Hover states */
 html.light-mode .hover\:bg-slate-900\/50:hover { background: rgba(241, 245, 249, 0.8) !important; }
+html.light-mode .hover\:bg-slate-900:hover { background: #f1f5f9 !important; }
 html.light-mode .hover\:bg-slate-800:hover { background: #e2e8f0 !important; }
 html.light-mode .hover\:bg-slate-700:hover { background: #cbd5e1 !important; }
 

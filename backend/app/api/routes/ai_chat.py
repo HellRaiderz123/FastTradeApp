@@ -2164,9 +2164,9 @@ def _execute_tool(name: str, args: dict, db: Session, auth_token: str | None = N
 
                 if order_type == "MARKET" and AI_MARKET_PROTECTION_PCT > 0:
                     try:
-                        from app.services.zerodha import KiteConnectService
-                        _svc = KiteConnectService()
-                        ltp = _svc.get_ltp(symbol)
+                        from app.core.market.provider import fetch_ltp as _fetch_ltp
+                        _ltp_map = _fetch_ltp([symbol])
+                        ltp = _ltp_map.get(symbol)
                         if ltp and ltp > 0:
                             pct = AI_MARKET_PROTECTION_PCT / 100.0
                             if action == "BUY":
@@ -2306,12 +2306,13 @@ def _execute_tool(name: str, args: dict, db: Session, auth_token: str | None = N
                 return {"success": False, "error": "symbol is required"}
             exchange = str(args.get("exchange") or "NSE").upper()
             try:
-                from app.services.zerodha import KiteConnectService
-                svc = KiteConnectService()
-                # Try full quote first (OHLC + volume)
-                data = svc.get_full_quote(raw_symbol)
+                from app.services.market_data_service import get_market_data_service as _get_mds
+                _mds = _get_mds()
+                # Try full quote via active broker (Zerodha or INDMoney)
+                _spot = _mds.get_spot_quote(raw_symbol)
+                data = {"last_price": _spot.last_price, "ohlc": {"open": _spot.open, "high": _spot.high, "low": _spot.low, "close": _spot.close}, "volume": _spot.volume} if _spot else None
                 if data is None:
-                    return {"success": False, "error": f"Could not fetch quote for {raw_symbol}. Check Zerodha connection and symbol."}
+                    return {"success": False, "error": f"Could not fetch quote for {raw_symbol}. Check broker connection and symbol."}
                 return {
                     "success": True,
                     "symbol": raw_symbol,

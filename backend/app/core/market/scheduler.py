@@ -340,7 +340,7 @@ def _get_daily_symbols() -> list[str]:
         # NIFTY 200 — Banks & Finance
         "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA", "MAHABANK",
         "MUTHOOTFIN", "BAJAJHLDNG", "LICHSGFIN", "RECLTD", "PFC",
-        "HDFCAMC", "NIPPONLIFE", "ICICIGI", "NIACL",
+        "HDFCAMC", "NIPPONLIFE", "ICICIGI",
         # NIFTY 200 — IT & Tech
         "LTIM", "COFORGE", "OFSS", "KPITTECH", "TATAELXSI",
         "HEXAWARE", "CYIENT",
@@ -366,7 +366,7 @@ def _get_daily_symbols() -> list[str]:
         "AIAENG", "GRINDWELL", "SCHAEFFLER",
         # NIFTY 200 — Consumer Durables & Retail
         "WHIRLPOOL", "BLUESTARCO", "CROMPTON", "VGUARD",
-        "TATACOMM", "ZOMATO", "NYKAA", "POLICYBZR",
+        "TATACOMM", "ETERNAL", "NYKAA", "POLICYBZR",
         # NIFTY 200 — Chemicals & Specialty
         "SRF", "AARTIIND", "DEEPAKNTR", "NAVINFLUOR",
         "ALKYLAMINE", "CLEAN", "TATACHEM", "GNFC",
