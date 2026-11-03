@@ -82,7 +82,6 @@ def register_all_routers(app: "FastAPI") -> None:
         simple_ai,
         ai_analysis,
         holdings as holdings_routes,
-        scalp,
         quant,
         fundamentals as fundamentals_routes,
         fii_dii as fii_dii_routes,
@@ -166,7 +165,6 @@ def register_all_routers(app: "FastAPI") -> None:
     app.include_router(simple_ai.router, dependencies=auth_dep)
     app.include_router(ai_analysis.router, dependencies=auth_dep)
     app.include_router(holdings_routes.router, dependencies=auth_dep)
-    app.include_router(scalp.router, dependencies=auth_dep)
     app.include_router(quant.router, dependencies=auth_dep)
     app.include_router(fundamentals_routes.router, dependencies=auth_dep)
     app.include_router(fii_dii_routes.router, dependencies=auth_dep)

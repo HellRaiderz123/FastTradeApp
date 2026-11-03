@@ -40,7 +40,6 @@ def initialize_schedulers(engine: "Engine") -> None:
         start_strategy_discovery_scheduler,
         start_strategy_decay_scheduler,
         start_watchlist_analysis_scheduler,
-        start_scalp_trading_scheduler,
         start_holdings_auto_exit_scheduler,
         start_nse_filing_alerts_scheduler,
         start_nse_snapshot_scheduler,
@@ -84,7 +83,6 @@ def initialize_schedulers(engine: "Engine") -> None:
     start_strategy_discovery_scheduler()
     start_strategy_decay_scheduler()
     start_watchlist_analysis_scheduler()
-    start_scalp_trading_scheduler()
     start_nse_filing_alerts_scheduler()
     start_nse_snapshot_scheduler()
     logger.info("✅ Broker-independent schedulers started")

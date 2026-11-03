@@ -557,8 +557,8 @@ class NotificationService:
         """Store notification in database for in-app display"""
         from app.db.models_notification import Notification
         from app.core.utils.time import now_ist
-        
-        try:
+
+        def _insert():
             notification = Notification(
                 type=type.value,
                 title=title,
@@ -568,15 +568,29 @@ class NotificationService:
                 read=False,
                 created_at=now_ist()
             )
-            
             self.db.add(notification)
             self.db.commit()
-            
+
+        try:
+            _insert()
             logger.debug(f"Stored in-app notification: {title}")
-            
         except Exception as e:
-            logger.error(f"Failed to store in-app notification: {e}")
             self.db.rollback()
+            # Sequence drift on PostgreSQL — advance sequence and retry once
+            if "duplicate key" in str(e).lower() or "uniqueviolation" in type(e).__name__.lower():
+                try:
+                    self.db.execute(
+                        "SELECT setval(pg_get_serial_sequence('notifications', 'id'), "
+                        "(SELECT MAX(id) FROM notifications))"
+                    )
+                    self.db.commit()
+                    _insert()
+                    logger.info("Notification sequence reset and retried successfully")
+                except Exception as retry_e:
+                    logger.error(f"Failed to store in-app notification after sequence reset: {retry_e}")
+                    self.db.rollback()
+            else:
+                logger.error(f"Failed to store in-app notification: {e}")
     
     def _send_telegram(self, message: str):
         """Send message via Telegram Bot API"""

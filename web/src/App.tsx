@@ -42,7 +42,6 @@ const AIAnalysis = lazy(() => import('./pages/AIAnalysis'));
 const SignalReconciliation = lazy(() => import('./pages/SignalReconciliation'));
 const CandleBackfill = lazy(() => import('./pages/CandleBackfill'));
 const ScheduledJobs = lazy(() => import('./pages/ScheduledJobs'));
-const ScalpTrading = lazy(() => import('./pages/ScalpTrading'));
 const QuantBot = lazy(() => import('./pages/QuantBot'));
 const FiiDii = lazy(() => import('./pages/FiiDii'));
 const StockResearch = lazy(() => import('./pages/StockResearch'));
@@ -167,7 +166,6 @@ function AppInner() {
                       <Route path="/journal" element={<Journal />} />
                       <Route path="/trade-costs" element={<TradeCostTracker />} />
                       <Route path="/auto-trader" element={<AutoTrader />} />
-                      <Route path="/scalp-trading" element={<ScalpTrading />} />
                       <Route path="/watchlists" element={<CustomWatchlists />} />
                       <Route path="/multi-timeframe" element={<MultiTimeframe />} />
                       <Route path="/calendar" element={<Calendar />} />

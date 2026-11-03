@@ -166,6 +166,53 @@ def auto_trader_scan():
         _scan_lock.release()
 
 
+# Track last backfill time per symbol to avoid hammering the broker API
+# on every 30s scan. Backfill at most once per 10 minutes per symbol.
+_last_backfill: dict[str, datetime] = {}
+_BACKFILL_COOLDOWN_MIN = 10
+_STALE_THRESHOLD_MIN = 30  # candles older than 30 min = stale during market hours
+
+
+def _ensure_fresh_candles(db: Session, symbol: str) -> None:
+    """
+    Check if 15m candles for symbol are fresh enough for TA.
+    If stale (last candle > 30 min old during market hours), backfill inline.
+    Skips backfill if already attempted within the last 10 minutes.
+    """
+    from app.db.models_candles import Candle15m
+    from app.core.market.candles import fetch_15m_candles
+
+    now = now_ist()
+    # Only matters during market hours
+    if now.weekday() >= 5 or not (MARKET_OPEN <= now.time() <= MARKET_CLOSE):
+        return
+
+    # Cooldown — don't retry within 10 min of last backfill
+    last = _last_backfill.get(symbol)
+    if last and (now - last).total_seconds() < _BACKFILL_COOLDOWN_MIN * 60:
+        return
+
+    # Check latest candle timestamp
+    latest = (
+        db.query(Candle15m.timestamp)
+        .filter(Candle15m.symbol == symbol)
+        .order_by(Candle15m.timestamp.desc())
+        .first()
+    )
+    if latest:
+        age_min = (now - latest[0].replace(tzinfo=now.tzinfo if latest[0].tzinfo is None else None)).total_seconds() / 60
+        if age_min <= _STALE_THRESHOLD_MIN:
+            return  # fresh enough
+
+    logger.info("Auto-trader: 15m candles for %s are stale — backfilling now", symbol)
+    _last_backfill[symbol] = now
+    try:
+        fetch_15m_candles(db, symbol, days=5)  # last 5 days is enough for 100+ candles
+        logger.info("Auto-trader: 15m candle backfill complete for %s", symbol)
+    except Exception as e:
+        logger.warning("Auto-trader: 15m candle backfill failed for %s: %s", symbol, e)
+
+
 def _run_scan(db: Session):
     """Core scan logic — runs inside a DB session."""
 
@@ -231,6 +278,7 @@ def _run_scan(db: Session):
 
     for underlying in underlyings:
         try:
+            _ensure_fresh_candles(db, underlying)
             _scan_underlying(db, cfg, underlying, executor)
         except Exception as exc:
             logger.warning("Auto-trader scan error for %s: %s", underlying, exc)
