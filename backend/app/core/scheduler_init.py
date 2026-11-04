@@ -74,10 +74,8 @@ def initialize_schedulers(engine: "Engine") -> None:
     daily_backfill_delay = int(os.getenv("DAILY_BACKFILL_DELAY_MINUTES", "5"))
     vix_backfill_delay = int(os.getenv("VIX_BACKFILL_DELAY_MINUTES", "2"))
 
-    # Start the APScheduler instance first
-    if not _apscheduler.running:
-        _apscheduler.start()
-        logger.info("✅ APScheduler started")
+    # Scheduler is already running (started by _start_always_on_scheduler above)
+    # No need to call _apscheduler.start() again
 
     # Always start broker-independent schedulers
     start_strategy_discovery_scheduler()
@@ -125,10 +123,12 @@ def _start_always_on_scheduler(apscheduler, start_auto_exit_fn, start_expiry_exi
       - holdings_auto_exit  : scanner/AI holding TP/SL (every 1min, market hours)
       - auto_trader_scan    : auto-trader engine (interval, resumed from DB state)
     """
+    # Start scheduler FIRST so all subsequent add_job calls succeed
     if not apscheduler.running:
         apscheduler.start()
         logger.info("✅ APScheduler started (always-on trading jobs)")
 
+    # These functions guard on `if not scheduler.running` internally — scheduler is running now
     start_auto_exit_fn()
     start_expiry_exit_fn()
     start_holdings_exit_fn()

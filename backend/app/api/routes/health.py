@@ -204,6 +204,29 @@ def get_cache_stats():
         raise HTTPException(status_code=500, detail="Failed to fetch cache stats")
 
 
+@router.get("/schedulers")
+def scheduler_status():
+    """List all registered APScheduler jobs and their next run times."""
+    try:
+        from app.core.market.scheduler import scheduler
+        jobs = []
+        for job in scheduler.get_jobs():
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+                "trigger": str(job.trigger),
+                "paused": job.next_run_time is None,
+            })
+        return {
+            "scheduler_running": scheduler.running,
+            "job_count": len(jobs),
+            "jobs": sorted(jobs, key=lambda j: j["id"]),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/run-migrations")
 def run_migrations():
     """Manually run DB column migrations + ensure all tables exist. Safe to call multiple times."""

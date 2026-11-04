@@ -524,9 +524,11 @@ def _train_ml_model():
 
 
 def start_candle_scheduler():
-    if scheduler.running:
-        logger.warning("Candle scheduler already running")
-        return
+    # Scheduler is always started before this is called (by _start_always_on_scheduler).
+    # Do NOT guard on scheduler.running — just add/replace the job.
+    if not scheduler.running:
+        scheduler.start()
+        logger.info("Candle scheduler started (fresh start)")
 
     scheduler.add_job(
         func=_update,
@@ -539,9 +541,7 @@ def start_candle_scheduler():
         max_instances=1,
         coalesce=True,
     )
-
-    scheduler.start()
-    logger.info("Candle scheduler started")
+    logger.info("Candle scheduler registered (candle_15m_job)")
 
     # Defer initial run to avoid blocking startup (prevents 504)
     from datetime import datetime, timedelta

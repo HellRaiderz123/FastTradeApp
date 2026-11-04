@@ -200,7 +200,11 @@ def _ensure_fresh_candles(db: Session, symbol: str) -> None:
         .first()
     )
     if latest:
-        age_min = (now - latest[0].replace(tzinfo=now.tzinfo if latest[0].tzinfo is None else None)).total_seconds() / 60
+        latest_ts = latest[0]
+        # Normalise to naive IST for comparison (strip tzinfo from both sides)
+        now_naive = now.replace(tzinfo=None)
+        latest_naive = latest_ts.replace(tzinfo=None) if latest_ts.tzinfo else latest_ts
+        age_min = (now_naive - latest_naive).total_seconds() / 60
         if age_min <= _STALE_THRESHOLD_MIN:
             return  # fresh enough
 
@@ -433,6 +437,7 @@ def _scan_underlying(db: Session, cfg: AutoTraderConfig, underlying: str, execut
     # Run full strategy engine
     payload = {
         "underlying": underlying,
+        "interval": "15minute",
         "use_ml": False,
         "min_confidence": cfg.min_confidence or 70,
         "risk_mode": cfg.risk_mode or "BALANCED",

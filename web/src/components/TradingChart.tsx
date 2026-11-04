@@ -26,7 +26,7 @@ import {
   type MouseEventParams,
   ColorType,
 } from 'lightweight-charts';
-import { TrendingUp, TrendingDown, Activity, RefreshCw, AlertTriangle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, RefreshCw, AlertTriangle, Radio } from 'lucide-react';
 import { marketAPI } from '../lib/api';
 import api from '../lib/api';
 import { cn } from '@/lib/utils';
@@ -58,6 +58,15 @@ interface OhlcvLegend {
   up: boolean;
 }
 
+export interface LiveQuote {
+  ltp: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  volume?: number;
+  live?: boolean;
+}
+
 export interface TradingChartProps {
   symbol: string;
   defaultTimeframe?: Timeframe;
@@ -67,6 +76,8 @@ export interface TradingChartProps {
   /** Hide the symbol/price header */
   showHeader?: boolean;
   className?: string;
+  /** Live quote from WebSocket — updates the last candle in real-time */
+  liveQuote?: LiveQuote | null;
 }
 
 function isDarkMode() {
@@ -102,6 +113,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
   showTimeframeSelector = true,
   showHeader = true,
   className,
+  liveQuote,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -115,6 +127,7 @@ const TradingChart: React.FC<TradingChartProps> = ({
   const [lastBar, setLastBar] = useState<{ price: number; change: number } | null>(null);
   const [staleDate, setStaleDate] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const lastCandleRef = useRef<CandlestickData | null>(null);
 
   // Build / rebuild chart when container mounts
   useEffect(() => {
@@ -325,6 +338,10 @@ const TradingChart: React.FC<TradingChartProps> = ({
       if (last && prev) {
         setLastBar({ price: last.close, change: ((last.close - prev.close) / prev.close) * 100 });
       }
+      // Store last candle for live tick updates
+      if (candles.length > 0) {
+        lastCandleRef.current = candles[candles.length - 1];
+      }
     } catch (e: any) {
       setError(e?.message || 'Failed to load chart data');
     } finally {
@@ -345,6 +362,31 @@ const TradingChart: React.FC<TradingChartProps> = ({
   }, [symbol, timeframe, loadData]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Live tick: update last candle when liveQuote changes
+  useEffect(() => {
+    if (!liveQuote?.ltp || !candleRef.current || !volRef.current || !lastCandleRef.current) return;
+    const base = lastCandleRef.current;
+    const dark = isDarkMode();
+    const c = buildChartColors(dark);
+    const updated: CandlestickData = {
+      time: base.time,
+      open: base.open,
+      high: Math.max(base.high, liveQuote.ltp),
+      low: Math.min(base.low, liveQuote.ltp),
+      close: liveQuote.ltp,
+    };
+    candleRef.current.update(updated);
+    if (liveQuote.volume != null) {
+      volRef.current.update({
+        time: base.time,
+        value: liveQuote.volume,
+        color: updated.close >= updated.open ? c.upVol : c.downVol,
+      });
+    }
+    lastCandleRef.current = updated;
+    setLastBar(prev => prev ? { ...prev, price: liveQuote.ltp } : null);
+  }, [liveQuote]);
 
   const up = (lastBar?.change ?? 0) >= 0;
 
@@ -368,6 +410,13 @@ const TradingChart: React.FC<TradingChartProps> = ({
                   {up ? '+' : ''}{lastBar.change.toFixed(2)}%
                 </span>
               </>
+            )}
+            {/* Live indicator */}
+            {liveQuote?.live && (
+              <span className="flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 rounded px-1.5 py-0.5">
+                <Radio className="h-2.5 w-2.5 animate-pulse" />
+                LIVE
+              </span>
             )}
             {/* Stale data warning + refresh */}
             {staleDate && (

@@ -91,6 +91,7 @@ def register_all_routers(app: "FastAPI") -> None:
     from app.api.routes.exit import router as exit_router
     from app.api.routes.auto_exit import router as auto_exit_router
     from app.api.routes.finance import router as finance_router
+    from app.api.routes.scalp_trading import router as scalp_router
 
     # Auth dependency for protected routes
     auth_dep = [Depends(require_authenticated_user)]
@@ -134,6 +135,7 @@ def register_all_routers(app: "FastAPI") -> None:
     app.include_router(exit_router, dependencies=auth_dep)
     app.include_router(auto_exit_router, dependencies=auth_dep)
     app.include_router(system_router, dependencies=auth_dep)
+    app.include_router(scalp_router, dependencies=auth_dep)
     app.include_router(ml.router, dependencies=auth_dep)
     app.include_router(notifications.router, dependencies=auth_dep)
     app.include_router(finance_router, dependencies=auth_dep)

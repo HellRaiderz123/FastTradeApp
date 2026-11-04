@@ -162,28 +162,39 @@ const OptionsChain: React.FC = () => {
     const totalPutVolume = chainData.strikes.reduce((sum, item) => sum + (item.put?.volume || 0), 0);
     const callOis = chainData.strikes.map((item) => item.call?.oi || 0).filter((oi) => oi > 0);
     const putOis = chainData.strikes.map((item) => item.put?.oi || 0).filter((oi) => oi > 0);
+    const callVols = chainData.strikes.map((item) => item.call?.volume || 0).filter((v) => v > 0);
+    const putVols = chainData.strikes.map((item) => item.put?.volume || 0).filter((v) => v > 0);
     const avgCallOi = callOis.length ? callOis.reduce((sum, oi) => sum + oi, 0) / callOis.length : 0;
     const avgPutOi = putOis.length ? putOis.reduce((sum, oi) => sum + oi, 0) / putOis.length : 0;
+    const avgCallVol = callVols.length ? callVols.reduce((sum, v) => sum + v, 0) / callVols.length : 0;
+    const avgPutVol = putVols.length ? putVols.reduce((sum, v) => sum + v, 0) / putVols.length : 0;
     const atmIndex = chainData.strikes.findIndex((item) => item.strike === chainData.atm_strike);
+    const isExpiryDay = chainData.days_to_expiry === 0;
 
     const buildSignal = (option: OptionData | null, side: 'CE' | 'PE', strike: number): OptionSignal | null => {
       if (!option) return null;
 
       const oi = option.oi || 0;
+      const vol = option.volume || 0;
       const changePercent = option.change_percent ?? 0;
       const avgOi = side === 'CE' ? avgCallOi : avgPutOi;
+      const avgVol = side === 'CE' ? avgCallVol : avgPutVol;
 
-      if (oi <= 0 || Math.abs(changePercent) < 0.5 || avgOi <= 0) {
-        return null;
-      }
+      // Need meaningful price move
+      if (Math.abs(changePercent) < 0.5) return null;
 
-      const oiRatio = oi / avgOi;
+      // On expiry day, call/put premiums decay regardless of direction — skip pure premium signals
+      if (isExpiryDay && oi === 0) return null;
+
+      // Use OI ratio if available, else volume ratio as fallback
+      const ratio = oi > 0 && avgOi > 0 ? oi / avgOi : vol > 0 && avgVol > 0 ? vol / avgVol : 0;
+      if (ratio === 0) return null;
+
       let label: BuildupLabel | null = null;
-
-      if (changePercent >= 0.5 && oiRatio >= 1.15) label = 'Long Buildup';
-      else if (changePercent <= -0.5 && oiRatio >= 1.15) label = 'Short Buildup';
-      else if (changePercent >= 0.5 && oiRatio <= 0.9) label = 'Short Covering';
-      else if (changePercent <= -0.5 && oiRatio <= 0.9) label = 'Long Unwinding';
+      if (changePercent >= 0.5 && ratio >= 1.15) label = 'Long Buildup';
+      else if (changePercent <= -0.5 && ratio >= 1.15) label = 'Short Buildup';
+      else if (changePercent >= 0.5 && ratio <= 0.9) label = 'Short Covering';
+      else if (changePercent <= -0.5 && ratio <= 0.9) label = 'Long Unwinding';
 
       if (!label) return null;
 
@@ -198,7 +209,7 @@ const OptionsChain: React.FC = () => {
 
       const strikeIndex = chainData.strikes.findIndex((item) => item.strike === strike);
       const proximityBoost = atmIndex >= 0 && strikeIndex >= 0 ? Math.max(0, 4 - Math.abs(strikeIndex - atmIndex)) : 0;
-      const score = Math.abs(changePercent) * 2 + Math.max(0, oiRatio - 1) * 8 + proximityBoost;
+      const score = Math.abs(changePercent) * 2 + Math.max(0, ratio - 1) * 8 + proximityBoost;
 
       return { strike, side, label, tone, score, changePercent, oi };
     };
@@ -235,19 +246,34 @@ const OptionsChain: React.FC = () => {
       { strike: chainData.atm_strike, payout: Number.POSITIVE_INFINITY }
     ).strike;
 
+    // PCR: only meaningful when OI data is available
+    const hasOiData = totalCallOi > 0 || totalPutOi > 0;
     const pcr = totalCallOi > 0 ? totalPutOi / totalCallOi : 0;
+
+    // Only count OI-based signals for bias (exclude pure premium-move signals on expiry day)
+    const validSignals = isExpiryDay
+      ? signals.filter((s) => s.oi > 0)
+      : signals;
+
     const bullishScore =
-      signals.filter((item) => item.tone === 'bullish').reduce((sum, item) => sum + item.score, 0) +
-      (pcr > 1 ? Math.min((pcr - 1) * 12, 8) : 0);
+      validSignals.filter((item) => item.tone === 'bullish').reduce((sum, item) => sum + item.score, 0) +
+      (hasOiData && pcr > 1.2 ? Math.min((pcr - 1) * 12, 10) : 0);
     const bearishScore =
-      signals.filter((item) => item.tone === 'bearish').reduce((sum, item) => sum + item.score, 0) +
-      (pcr < 1 ? Math.min((1 - pcr) * 12, 8) : 0);
+      validSignals.filter((item) => item.tone === 'bearish').reduce((sum, item) => sum + item.score, 0) +
+      (hasOiData && pcr < 0.8 ? Math.min((1 - pcr) * 12, 10) : 0);
 
     let biasLabel = 'Balanced Setup';
     let biasTone = 'text-foreground';
-    let biasNote = `PCR ${pcr.toFixed(2)} with support near ${supportStrike ?? '—'} and resistance near ${resistanceStrike ?? '—'}.`;
+    let biasNote = hasOiData
+      ? `PCR ${pcr.toFixed(2)} — support near ${supportStrike ?? '—'}, resistance near ${resistanceStrike ?? '—'}.`
+      : `OI data unavailable — showing volume-based signals only. Support near ${supportStrike ?? '—'}.`;
 
-    if (bullishScore - bearishScore > 4) {
+    if (!hasOiData && isExpiryDay) {
+      // Expiry day + no OI = can't determine bias reliably
+      biasLabel = 'Expiry Day — OI Unavailable';
+      biasTone = 'text-muted-foreground';
+      biasNote = 'OI data not available from broker on expiry day. Premium moves reflect time decay, not direction.';
+    } else if (bullishScore - bearishScore > 4) {
       biasLabel = 'Bullish Bias';
       biasTone = 'text-emerald-300';
       biasNote = `Call short covering / put writing is stronger. Support is building near ${supportStrike ?? '—'}.`;
@@ -255,14 +281,14 @@ const OptionsChain: React.FC = () => {
       biasLabel = 'Bearish Bias';
       biasTone = 'text-red-300';
       biasNote = `Call writing / put long buildup dominates. Resistance is clustered near ${resistanceStrike ?? '—'}.`;
-    } else if (pcr >= 1.15) {
+    } else if (hasOiData && pcr >= 1.15) {
       biasLabel = 'Supportive PCR';
       biasTone = 'text-blue-300';
-      biasNote = `Put OI is heavier than call OI. Dips may find support near ${supportStrike ?? '—'}.`;
-    } else if (pcr <= 0.85) {
+      biasNote = `Put OI is heavier than call OI (PCR ${pcr.toFixed(2)}). Dips may find support near ${supportStrike ?? '—'}.`;
+    } else if (hasOiData && pcr <= 0.85) {
       biasLabel = 'Resistance Heavy';
       biasTone = 'text-orange-300';
-      biasNote = `Call OI is dominating overhead. Watch ${resistanceStrike ?? '—'} for supply pressure.`;
+      biasNote = `Call OI is dominating overhead (PCR ${pcr.toFixed(2)}). Watch ${resistanceStrike ?? '—'} for supply pressure.`;
     }
 
     return {

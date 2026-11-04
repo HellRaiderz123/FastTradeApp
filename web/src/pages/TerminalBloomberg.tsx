@@ -816,7 +816,7 @@ const Terminal: React.FC = () => {
               </div>
             )}
             <ErrorBoundary>
-              <CandleChart symbol={selectedSymbol} defaultTimeframe={candleTimeframe} height={560} showTimeframeSelector={true} />
+              <CandleChart symbol={selectedSymbol} defaultTimeframe={candleTimeframe} height={560} showTimeframeSelector={true} liveQuote={quotes[selectedSymbol] ?? null} />
             </ErrorBoundary>
           </div>
 

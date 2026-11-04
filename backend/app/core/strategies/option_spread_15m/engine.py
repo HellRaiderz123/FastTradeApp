@@ -154,11 +154,20 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # =====================================================
     # 5️⃣ STRIKE SELECTION (CALCULATE FOR ALL CASES)
     # =====================================================
+    # Normalise risk_mode to title-case expected by compute_spread_strikes
+    _raw_risk_mode = str(payload.get("risk_mode") or "Conservative")
+    _risk_mode_map = {
+        "CONSERVATIVE": "Conservative",
+        "BALANCED": "Balanced",
+        "AGGRESSIVE": "Aggressive",
+    }
+    _normalised_risk_mode = _risk_mode_map.get(_raw_risk_mode.upper(), _raw_risk_mode)
+
     strikes = compute_spread_strikes(
         underlying=underlying,
         spot=spot,
         atm=atm,
-        risk_mode=payload.get("risk_mode", "Conservative"),
+        risk_mode=_normalised_risk_mode,
         iv_regime=str(ctx.get("iv_regime") or "LOW"),
         recommendation=str(sig.get("recommendation") or "NO_TRADE"),
     )
