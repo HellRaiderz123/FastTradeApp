@@ -213,22 +213,25 @@ def _build_rf_pipeline(y_train: pd.Series) -> Pipeline:
 
 
 def _build_xgb_pipeline(y_train: pd.Series) -> Pipeline:
-    XGBClassifier = _get_xgb()
     n_pos = int(y_train.sum())
     n_neg = len(y_train) - n_pos
-    # Cap scale_pos_weight to prevent over-correction
     scale_pos_weight = min(n_neg / max(n_pos, 1), 2.5)
-    
-    return Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", XGBClassifier(
+    try:
+        XGBClassifier = _get_xgb()
+        clf = XGBClassifier(
             n_estimators=150, max_depth=3, learning_rate=0.08,
             subsample=0.8, colsample_bytree=0.8,
             min_child_weight=15, reg_alpha=0.3, reg_lambda=1.5,
             scale_pos_weight=scale_pos_weight,
             eval_metric="logloss", random_state=42, n_jobs=-1, verbosity=0,
-        )),
-    ])
+        )
+    except ImportError:
+        logger.warning("XGBoost not installed — using GradientBoosting as XGB substitute in ensemble")
+        clf = GradientBoostingClassifier(
+            n_estimators=150, max_depth=3, learning_rate=0.08,
+            subsample=0.8, min_samples_leaf=15, random_state=43,
+        )
+    return Pipeline([("scaler", StandardScaler()), ("clf", clf)])
 
 
 

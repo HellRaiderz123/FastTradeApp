@@ -20,16 +20,19 @@ from app.core.ml.overfitting import check_overfitting
 
 logger = logging.getLogger(__name__)
 
-try:
-    import tensorflow as tf
-    from tensorflow.keras.models import Sequential, load_model as keras_load
-    from tensorflow.keras.layers import LSTM, Dense, Dropout, LayerNormalization, Input
-    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-    from tensorflow.keras.optimizers import Adam
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
-    logger.warning("TensorFlow not installed. LSTM model unavailable.")
+TF_AVAILABLE: bool = False
+
+def _check_tf() -> bool:
+    global TF_AVAILABLE
+    try:
+        import tensorflow  # noqa: F401
+        TF_AVAILABLE = True
+    except ImportError:
+        pass
+    return TF_AVAILABLE
+
+# Check TF availability at import time so TF_AVAILABLE is correct immediately
+_check_tf()
 
 
 def _create_sequences(X: np.ndarray, y: np.ndarray, seq_length: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -116,8 +119,12 @@ def _per_symbol_split_lstm(
     )
 
 
-def _build_lstm_model(seq_length: int, n_features: int) -> "Sequential":
+def _build_lstm_model(seq_length: int, n_features: int):
     """Regularised LSTM architecture to reduce overfitting."""
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, LayerNormalization, Input
+    from tensorflow.keras.optimizers import Adam
     from tensorflow.keras.regularizers import l2
     model = Sequential([
         Input(shape=(seq_length, n_features)),
@@ -166,17 +173,12 @@ def _optimize_threshold_on_val(y_val: np.ndarray, y_proba_val: np.ndarray) -> fl
     return round(float(best_t), 3)
 
 
-def train_lstm_model(
-    db: Session, 
-    symbols: List[str], 
-    config: StockMLConfig,
-    seq_length: int = 15,
-    epochs: int = 40,
-    batch_size: int = 256
-) -> Dict:
+def train_lstm_model(db, symbols, config, seq_length=15, epochs=40, batch_size=256):
     """Train and evaluate the LSTM model."""
-    if not TF_AVAILABLE:
-        raise ImportError("TensorFlow is required.")
+    if not _check_tf():
+        raise ImportError("TensorFlow is required for LSTM training.")
+    import tensorflow as tf
+    from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
         
     x, y = build_stock_ml_dataset(db, symbols, config)
     if x.empty or len(x) < config.min_rows:
@@ -286,10 +288,11 @@ def train_lstm_model(
     return metadata
 
 
-def load_lstm_model(config: StockMLConfig) -> Optional[Tuple]:
+def load_lstm_model(config: StockMLConfig):
     """Load the saved model, scaler, and metadata configuration."""
-    if not TF_AVAILABLE:
+    if not _check_tf():
         return None
+    from tensorflow.keras.models import load_model as keras_load
         
     model_path = config.model_dir / "lstm_model.keras"
     scaler_path = config.model_dir / "lstm_scaler.joblib"

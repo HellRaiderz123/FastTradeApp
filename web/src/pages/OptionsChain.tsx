@@ -67,6 +67,7 @@ interface OptionAnalytics {
   totalCallVolume: number;
   totalPutVolume: number;
   pcr: number;
+  pcrBasis: 'OI' | 'Vol' | null;
   supportStrike: number | null;
   resistanceStrike: number | null;
   maxPain: number | null;
@@ -246,9 +247,15 @@ const OptionsChain: React.FC = () => {
       { strike: chainData.atm_strike, payout: Number.POSITIVE_INFINITY }
     ).strike;
 
-    // PCR: only meaningful when OI data is available
+    // PCR: use OI when available, fall back to volume-based PCR
     const hasOiData = totalCallOi > 0 || totalPutOi > 0;
-    const pcr = totalCallOi > 0 ? totalPutOi / totalCallOi : 0;
+    const hasVolumeData = totalCallVolume > 0 || totalPutVolume > 0;
+    const pcr = totalCallOi > 0
+      ? totalPutOi / totalCallOi
+      : totalCallVolume > 0
+        ? totalPutVolume / totalCallVolume
+        : 0;
+    const pcrBasis = hasOiData ? 'OI' : hasVolumeData ? 'Vol' : null;
 
     // Only count OI-based signals for bias (exclude pure premium-move signals on expiry day)
     const validSignals = isExpiryDay
@@ -257,22 +264,22 @@ const OptionsChain: React.FC = () => {
 
     const bullishScore =
       validSignals.filter((item) => item.tone === 'bullish').reduce((sum, item) => sum + item.score, 0) +
-      (hasOiData && pcr > 1.2 ? Math.min((pcr - 1) * 12, 10) : 0);
+      (pcrBasis && pcr > 1.2 ? Math.min((pcr - 1) * 12, 10) : 0);
     const bearishScore =
       validSignals.filter((item) => item.tone === 'bearish').reduce((sum, item) => sum + item.score, 0) +
-      (hasOiData && pcr < 0.8 ? Math.min((1 - pcr) * 12, 10) : 0);
+      (pcrBasis && pcr < 0.8 ? Math.min((1 - pcr) * 12, 10) : 0);
 
+    const pcrLabel = pcrBasis ? `PCR (${pcrBasis}) ${pcr.toFixed(2)}` : 'PCR —';
     let biasLabel = 'Balanced Setup';
     let biasTone = 'text-foreground';
-    let biasNote = hasOiData
-      ? `PCR ${pcr.toFixed(2)} — support near ${supportStrike ?? '—'}, resistance near ${resistanceStrike ?? '—'}.`
-      : `OI data unavailable — showing volume-based signals only. Support near ${supportStrike ?? '—'}.`;
+    let biasNote = pcrBasis
+      ? `${pcrLabel} — support near ${supportStrike ?? '—'}, resistance near ${resistanceStrike ?? '—'}.`
+      : `No OI or volume data — support near ${supportStrike ?? '—'}.`;
 
-    if (!hasOiData && isExpiryDay) {
-      // Expiry day + no OI = can't determine bias reliably
-      biasLabel = 'Expiry Day — OI Unavailable';
+    if (!hasOiData && !hasVolumeData && isExpiryDay) {
+      biasLabel = 'Expiry Day — Data Unavailable';
       biasTone = 'text-muted-foreground';
-      biasNote = 'OI data not available from broker on expiry day. Premium moves reflect time decay, not direction.';
+      biasNote = 'No OI or volume data from broker on expiry day.';
     } else if (bullishScore - bearishScore > 4) {
       biasLabel = 'Bullish Bias';
       biasTone = 'text-emerald-300';
@@ -281,14 +288,14 @@ const OptionsChain: React.FC = () => {
       biasLabel = 'Bearish Bias';
       biasTone = 'text-red-300';
       biasNote = `Call writing / put long buildup dominates. Resistance is clustered near ${resistanceStrike ?? '—'}.`;
-    } else if (hasOiData && pcr >= 1.15) {
+    } else if (pcrBasis && pcr >= 1.15) {
       biasLabel = 'Supportive PCR';
       biasTone = 'text-blue-300';
-      biasNote = `Put OI is heavier than call OI (PCR ${pcr.toFixed(2)}). Dips may find support near ${supportStrike ?? '—'}.`;
-    } else if (hasOiData && pcr <= 0.85) {
+      biasNote = `Put ${pcrBasis} is heavier than call (${pcrLabel}). Dips may find support near ${supportStrike ?? '—'}.`;
+    } else if (pcrBasis && pcr <= 0.85) {
       biasLabel = 'Resistance Heavy';
       biasTone = 'text-orange-300';
-      biasNote = `Call OI is dominating overhead (PCR ${pcr.toFixed(2)}). Watch ${resistanceStrike ?? '—'} for supply pressure.`;
+      biasNote = `Call ${pcrBasis} dominating overhead (${pcrLabel}). Watch ${resistanceStrike ?? '—'} for supply pressure.`;
     }
 
     return {
@@ -297,6 +304,7 @@ const OptionsChain: React.FC = () => {
       totalCallVolume,
       totalPutVolume,
       pcr,
+      pcrBasis,
       supportStrike,
       resistanceStrike,
       maxPain,
@@ -415,8 +423,8 @@ const OptionsChain: React.FC = () => {
             <p className="text-sm text-muted-foreground mt-1">{analytics.biasNote}</p>
             <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
               <div className="rounded-lg bg-muted p-3 border border-border">
-                <div className="text-muted-foreground text-xs">PCR</div>
-                <div className="text-foreground font-semibold mt-1">{analytics.pcr.toFixed(2)}</div>
+                <div className="text-muted-foreground text-xs">PCR {analytics.pcrBasis ? `(${analytics.pcrBasis})` : ''}</div>
+                <div className="text-foreground font-semibold mt-1">{analytics.pcr > 0 ? analytics.pcr.toFixed(2) : '—'}</div>
               </div>
               <div className="rounded-lg bg-muted p-3 border border-border">
                 <div className="text-muted-foreground text-xs">Max Pain</div>

@@ -30,6 +30,9 @@ def register_all_routers(app: "FastAPI") -> None:
     # Import all routers
     from app.api.option_spread import router as option_spread_router
     from app.api.system_control import router as system_router
+    import os as _os
+    _ml_enabled = _os.getenv("ML_ENABLED", "true").lower() != "false"
+
     from app.api.routes import (
         journal,
         intent,
@@ -63,7 +66,6 @@ def register_all_routers(app: "FastAPI") -> None:
         timeframe_suggestions,
         peer_comparison,
         safety,
-        ml,
         candles,
         zerodha_broker,
         indmoney_broker,
@@ -86,7 +88,10 @@ def register_all_routers(app: "FastAPI") -> None:
         fundamentals as fundamentals_routes,
         fii_dii as fii_dii_routes,
         nse_data as nse_data_routes,
+        filing_analysis as filing_analysis_routes,
     )
+    if _ml_enabled:
+        from app.api.routes import ml
     from app.api.routes.paper_mtm import router as paper_mtm_router
     from app.api.routes.exit import router as exit_router
     from app.api.routes.auto_exit import router as auto_exit_router
@@ -136,7 +141,8 @@ def register_all_routers(app: "FastAPI") -> None:
     app.include_router(auto_exit_router, dependencies=auth_dep)
     app.include_router(system_router, dependencies=auth_dep)
     app.include_router(scalp_router, dependencies=auth_dep)
-    app.include_router(ml.router, dependencies=auth_dep)
+    if _ml_enabled:
+        app.include_router(ml.router, dependencies=auth_dep)
     app.include_router(notifications.router, dependencies=auth_dep)
     app.include_router(finance_router, dependencies=auth_dep)
     app.include_router(market_dashboard.router, dependencies=auth_dep)
@@ -171,6 +177,7 @@ def register_all_routers(app: "FastAPI") -> None:
     app.include_router(fundamentals_routes.router, dependencies=auth_dep)
     app.include_router(fii_dii_routes.router, dependencies=auth_dep)
     app.include_router(nse_data_routes.router, dependencies=auth_dep)
+    app.include_router(filing_analysis_routes.router, dependencies=auth_dep)
 
     # ─── Alexa (uses its own auth) ────────────────────────────────────────────
     app.include_router(alexa.router)

@@ -23,6 +23,7 @@ from app.api.schemas.finance import (
     BudgetCreate, SavingsGoalCreate, BillReminderCreate, FinanceTransactionCreate
 )
 from app.services.llm_service import get_model_candidates, request_chat_completion
+from app.db.models_ai_memory import AIConversationMemory
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,23 @@ def _preferred_tool_choice(message: str, history: list | None = None):
         normalized,
     ):
         return {"type": "function", "function": {"name": "review_trade_journal"}}
+
+    # NSE news → watchlist (must come before generic NSE actions check)
+    if re.search(
+        r"\b(add|put|save|move).{0,30}\b(nse|corporate|news|filing|announcement).{0,30}\b(watchlist|watch list)\b",
+        normalized,
+    ) or re.search(
+        r"\b(nse|corporate).{0,20}\b(news|filing|announcement).{0,20}\b(add|watchlist|watch list)\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "add_nse_news_to_watchlist"}}
+
+    # NSE actions / corporate filings
+    if re.search(
+        r"\b(nse|corporate action|dividend|bonus|split|board meeting|announcement|insider|sast|promoter|filing|ex.?date|record date)\b",
+        normalized,
+    ):
+        return {"type": "function", "function": {"name": "get_nse_actions"}}
 
     return "auto"
 
@@ -654,7 +672,8 @@ ACTIONS YOU CAN PERFORM (use your tools — do not say you cannot do these):
 ✅ get_stock_quote — "What is WIPRO trading at?" / "Price of RELIANCE" / "HDFC Bank LTP"
 ✅ get_portfolio_summary — "What's my portfolio?" / "How much am I up today?" / "Show my open positions"
 ✅ set_position_sl_tp — "Set SL on my WIPRO at 280" / "Put a 2% trailing stop on RELIANCE" / "Set TP at 1500"
-✅ get_orders_today — "What orders did I place today?" / "Show today's order book"
+✅ get_nse_actions — "What are the latest NSE announcements for RELIANCE?" / "Any dividends or board meetings coming up?" / "Show insider trading for TCS" / "NSE corporate actions today"
+✅ add_nse_news_to_watchlist — "Add high-impact NSE news stocks to my watchlist" / "NSE corporate news watchlist" / "Add stocks with high-impact filings to watchlist"
 ✅ get_market_sentiment — "What is NIFTY prediction today?" / "Is market bullish or bearish now?"
 ✅ get_market_news_summary — "Today's market news" / "Top headlines right now"
 ✅ get_recent_scanner_signals — "What scanner signals fired this week?"
@@ -679,6 +698,7 @@ ANALYSIS YOU CAN DO:
 ✅ Indian market specifics — NIFTY, BANKNIFTY, F&O, NSE/BSE rules
 ✅ NIFTY outlook — sentiment score, fear-greed, momentum, and directional bias
 ✅ News intelligence — today's market headlines, sentiment tilt, and top themes
+✅ NSE corporate filings — always categorize each announcement as HIGH / MEDIUM / LOW impact based on the `impact` field returned by get_nse_actions; present HIGH first, then MEDIUM, then LOW; for add_nse_news_to_watchlist summarize how many HIGH vs MEDIUM symbols were added
 ✅ Geopolitical briefings — summarize wars/conflicts/headlines from available feeds and explain market impact (oil, risk sentiment, sectors)
 
 CRITICAL RULES:
@@ -1110,6 +1130,62 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_nse_news_to_watchlist",
+            "description": (
+                "Fetch high-impact NSE corporate announcements (results, dividends, acquisitions, "
+                "board meetings, SEBI orders, order wins, etc.) and add those stock symbols to a watchlist. "
+                "Use when user asks to add NSE news stocks, high-impact filings, or corporate action stocks to watchlist."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "impact_filter": {
+                        "type": "string",
+                        "enum": ["HIGH", "HIGH_AND_MEDIUM"],
+                        "description": "HIGH = only highest-impact filings; HIGH_AND_MEDIUM = include medium-impact too. Default HIGH_AND_MEDIUM.",
+                    },
+                    "watchlist_name": {
+                        "type": "string",
+                        "description": "Optional watchlist name. If omitted, uses default/most recent active watchlist.",
+                    },
+                    "max_symbols": {
+                        "type": "integer",
+                        "description": "Max symbols to add. Default 10, max 25.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_nse_actions",
+            "description": (
+                "Fetch NSE corporate actions, board meetings, announcements, and insider trading disclosures. "
+                "Use when user asks about dividends, splits, bonus, board meetings, corporate filings, "
+                "NSE announcements, SAST disclosures, promoter buying/selling, or any NSE action for a stock."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Optional stock symbol to filter (e.g. RELIANCE, TCS). Leave empty for all recent actions.",
+                    },
+                    "data_type": {
+                        "type": "string",
+                        "enum": ["announcements", "corporate_actions", "insider_trading", "all"],
+                        "description": "Which NSE data to fetch. Default 'all'.",
+                    },
+                },
                 "required": [],
             },
         },
@@ -2421,6 +2497,192 @@ def _execute_tool(name: str, args: dict, db: Session, auth_token: str | None = N
                 "trailing_sl_pct": intent.trailing_sl_pct,
             }
 
+        elif name == "add_nse_news_to_watchlist":
+            from app.core.market.scheduler import _classify_filing_impact
+            from app.api.routes.nse_data import _nse_get as _nse_fetch
+
+            impact_filter = str(args.get("impact_filter") or "HIGH_AND_MEDIUM").upper()
+            max_symbols = max(1, min(int(args.get("max_symbols") or 10), 25))
+            allowed_impacts = {"HIGH"} if impact_filter == "HIGH" else {"HIGH", "MEDIUM"}
+
+            # Fetch NSE announcements
+            try:
+                data = _nse_fetch(
+                    "/api/corporate-announcements",
+                    "/companies-listing/corporate-filings-announcements",
+                    params={"index": "equities"},
+                )
+            except Exception as e:
+                return {"success": False, "error": f"NSE fetch failed: {e}"}
+
+            rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
+            if not rows:
+                return {"success": False, "error": "No NSE announcements available right now."}
+
+            # Collect unique high-impact symbols
+            seen: set[str] = set()
+            matched: list[dict] = []
+            for row in rows[:100]:
+                symbol = (row.get("symbol") or "").strip().upper()
+                if not symbol or symbol in seen:
+                    continue
+                headline = (
+                    row.get("desc") or row.get("attchmntText") or
+                    row.get("subject") or row.get("purpose") or ""
+                ).strip()
+                category = (row.get("attchmntType") or row.get("category") or "").strip()
+                impact = _classify_filing_impact(headline, category)
+                if impact not in allowed_impacts:
+                    continue
+                seen.add(symbol)
+                matched.append({
+                    "symbol": symbol,
+                    "headline": headline[:120],
+                    "impact": impact,
+                    "category": category,
+                })
+                if len(matched) >= max_symbols:
+                    break
+
+            if not matched:
+                return {
+                    "success": True,
+                    "action": "nse_news_watchlist",
+                    "added": [],
+                    "skipped": [],
+                    "message": "No high-impact NSE filings found right now.",
+                }
+
+            # Resolve watchlist
+            wl_name = (args.get("watchlist_name") or "").strip()
+            watchlist = None
+            if wl_name:
+                watchlist = (
+                    db.query(Watchlist)
+                    .filter(Watchlist.name.ilike(f"%{wl_name}%"), Watchlist.is_active == True)
+                    .order_by(Watchlist.is_default.desc(), Watchlist.updated_at.desc())
+                    .first()
+                )
+            if not watchlist:
+                watchlist = (
+                    db.query(Watchlist)
+                    .filter(Watchlist.is_active == True)
+                    .order_by(Watchlist.is_default.desc(), Watchlist.updated_at.desc())
+                    .first()
+                )
+            if not watchlist:
+                return {"success": False, "error": "No active watchlist found. Create one first."}
+
+            existing = list(watchlist.symbols or [])
+            added, skipped = [], []
+            for item in matched:
+                sym = item["symbol"]
+                if sym in existing:
+                    skipped.append(sym)
+                else:
+                    existing.append(sym)
+                    added.append({"symbol": sym, "headline": item["headline"], "impact": item["impact"]})
+
+            if added:
+                watchlist.symbols = sorted(set(existing))
+                db.commit()
+                db.refresh(watchlist)
+
+            return {
+                "success": True,
+                "action": "nse_news_watchlist",
+                "watchlist": watchlist.name,
+                "added_count": len(added),
+                "skipped_count": len(skipped),
+                "added": added,
+                "skipped": skipped,
+                "message": (
+                    f"Added {len(added)} symbol(s) from high-impact NSE news to '{watchlist.name}'."
+                    if added else
+                    f"All {len(skipped)} symbol(s) were already in '{watchlist.name}'."
+                ),
+            }
+
+        elif name == "get_nse_actions":
+            symbol = str(args.get("symbol") or "").strip().upper()
+            data_type = str(args.get("data_type") or "all").strip().lower()
+            try:
+                from app.api.routes.nse_data import _nse_get
+                results: dict = {"success": True, "action": "nse_actions", "symbol": symbol or None}
+
+                if data_type in ("announcements", "all"):
+                    params = {"index": "equities"}
+                    if symbol:
+                        params["symbol"] = symbol
+                    raw = _nse_get("/api/corporate-announcements", "/companies-listing/corporate-filings-announcements", params=params)
+                    rows = raw if isinstance(raw, list) else (raw.get("data") or [] if raw else [])
+                    announcements = []
+                    from app.core.market.scheduler import _classify_filing_impact as _cfi
+                    for row in rows[:20]:
+                        sym = (row.get("symbol") or "").strip()
+                        if symbol and sym.upper() != symbol:
+                            continue
+                        headline = (row.get("desc") or row.get("attchmntText") or row.get("subject") or "").strip()
+                        category = (row.get("attchmntType") or "Announcement").strip()
+                        if headline:
+                            announcements.append({
+                                "symbol": sym or symbol,
+                                "company": row.get("sm_name") or row.get("companyName") or sym,
+                                "headline": headline,
+                                "category": category,
+                                "impact": _cfi(headline, category),
+                                "date": row.get("sort_date") or row.get("date") or "",
+                                "pdf_url": row.get("attchmntFile") or "",
+                            })
+                    results["announcements"] = announcements
+                    results["announcement_count"] = len(announcements)
+
+                if data_type in ("corporate_actions", "all"):
+                    raw = _nse_get("/api/corporates-corporateActions", "/companies-listing/corporate-filings-corporate-actions", params={"index": "equities"})
+                    rows = raw if isinstance(raw, list) else (raw.get("data") or [] if raw else [])
+                    corp_actions = []
+                    for row in rows[:20]:
+                        sym = (row.get("symbol") or "").strip().upper()
+                        if symbol and sym != symbol:
+                            continue
+                        corp_actions.append({
+                            "symbol": sym,
+                            "company": row.get("companyName") or row.get("name") or sym,
+                            "action_type": row.get("purpose") or row.get("subject") or "Corporate Action",
+                            "ex_date": row.get("exDate") or row.get("exDt") or "",
+                            "record_date": row.get("recordDate") or "",
+                            "details": row.get("remarks") or "",
+                        })
+                    results["corporate_actions"] = corp_actions
+                    results["corporate_action_count"] = len(corp_actions)
+
+                if data_type in ("insider_trading", "all"):
+                    raw = _nse_get("/api/corporate-announcements", "/companies-listing/corporate-filings-announcements", params={"index": "sast"})
+                    rows = raw if isinstance(raw, list) else (raw.get("data") or [] if raw else [])
+                    insider = []
+                    for row in rows[:15]:
+                        sym = (row.get("symbol") or "").strip().upper()
+                        if symbol and sym != symbol:
+                            continue
+                        headline = (row.get("desc") or row.get("attchmntText") or row.get("subject") or "").strip()
+                        if not sym or not headline:
+                            continue
+                        hl_lower = headline.lower()
+                        direction = "BUY" if any(w in hl_lower for w in ["acqui", "purchas", "bought", "buy", "increase"]) else "SELL" if any(w in hl_lower for w in ["sell", "sold", "decreas", "dispos"]) else "CHANGE"
+                        insider.append({
+                            "symbol": sym,
+                            "company": row.get("sm_name") or row.get("companyName") or sym,
+                            "headline": headline,
+                            "direction": direction,
+                            "date": row.get("sort_date") or "",
+                        })
+                    results["insider_trading"] = insider
+                    results["insider_count"] = len(insider)
+
+                return results
+            except Exception as e:
+                return {"success": False, "error": f"NSE actions fetch failed: {e}"}
+
         elif name == "get_orders_today":
             try:
                 from app.core.broker.zerodha.client import get_kite_client
@@ -2464,6 +2726,63 @@ def _execute_tool(name: str, args: dict, db: Session, auth_token: str | None = N
 
 # ── Agentic LLM call with function-calling loop ────────────────────────────
 
+_MEMORY_MAX_TURNS = int(os.getenv("AI_MEMORY_MAX_TURNS", "40"))
+_MEMORY_CONTEXT_TURNS = int(os.getenv("AI_MEMORY_CONTEXT_TURNS", "20"))
+
+
+def _load_memory(db: Session, user_id: str) -> list[dict]:
+    rows = (
+        db.query(AIConversationMemory)
+        .filter(AIConversationMemory.user_id == user_id)
+        .order_by(AIConversationMemory.created_at.desc())
+        .limit(_MEMORY_CONTEXT_TURNS)
+        .all()
+    )
+    return [{"role": r.role, "content": r.content} for r in reversed(rows)]
+
+
+def _save_memory(db: Session, user_id: str, role: str, content: str) -> None:
+    try:
+        db.add(AIConversationMemory(user_id=user_id, role=role, content=content))
+        db.commit()
+        keep_ids = (
+            db.query(AIConversationMemory.id)
+            .filter(AIConversationMemory.user_id == user_id)
+            .order_by(AIConversationMemory.created_at.desc())
+            .limit(_MEMORY_MAX_TURNS)
+            .subquery()
+        )
+        db.query(AIConversationMemory).filter(
+            AIConversationMemory.user_id == user_id,
+            ~AIConversationMemory.id.in_(keep_ids),
+        ).delete(synchronize_session=False)
+        db.commit()
+    except Exception as exc:
+        logger.warning("AI memory save failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _clear_memory(db: Session, user_id: str) -> int:
+    try:
+        count = (
+            db.query(AIConversationMemory)
+            .filter(AIConversationMemory.user_id == user_id)
+            .delete()
+        )
+        db.commit()
+        return count
+    except Exception as exc:
+        logger.warning("AI memory clear failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return 0
+
+
 def _call_llm(
     message: str,
     history: list,
@@ -2471,6 +2790,7 @@ def _call_llm(
     voice_mode: bool = False,
     assistant_style: str | None = None,
     auth_token: str | None = None,
+    user_id: str = "default",
 ) -> tuple[str, list]:
     """
     Run the LLM with agentic tool support.
@@ -2501,8 +2821,15 @@ JARVIS VOICE MODE:
 - Avoid filler, markdown, bullet points, or verbose explanations in voice mode.
 """
 
-    messages = [{"role": "system", "content": system}]
+    # Load persistent memory and merge with in-session history
+    persistent = _load_memory(db, user_id)
+    merged_history = persistent
+    seen = {(h["role"], h["content"]) for h in persistent}
     for h in history[-20:]:
+        if (h.get("role"), h.get("content")) not in seen:
+            merged_history.append(h)
+    messages = [{"role": "system", "content": system}]
+    for h in merged_history[-20:]:
         # Skip malformed history entries (e.g. empty assistant messages from
         # previous failed turns) — Groq 400s if content='' with no tool_calls.
         if not h.get("content") and h.get("role") == "assistant":
@@ -2572,6 +2899,8 @@ JARVIS VOICE MODE:
             messages.append(safe_message)
             if voice_mode or requested_style == "jarvis":
                 final_text = _normalize_voice_answer(final_text)
+            _save_memory(db, user_id, "user", message)
+            _save_memory(db, user_id, "assistant", final_text)
             return final_text, actions_taken
 
         # Empty content + no tool calls: provider ignored forced tool_choice.
@@ -2618,6 +2947,7 @@ def chat_query(req: ChatRequest, request: Request, db: Session = Depends(get_db)
             answer = _summarize_direct_action(tool_name, result, voice_mode=voice_mode)
             return {"ok": True, "answer": answer, "actions": actions}
 
+        user_id = request.headers.get("x-user-id") or "default"
         answer, actions = _call_llm(
             req.message,
             req.history,
@@ -2625,7 +2955,27 @@ def chat_query(req: ChatRequest, request: Request, db: Session = Depends(get_db)
             voice_mode=voice_mode,
             assistant_style=req.assistant_style,
             auth_token=auth_token,
+            user_id=user_id,
         )
         return {"ok": True, "answer": answer, "actions": actions}
     except Exception as e:
         return {"ok": False, "answer": f"Error: {str(e)}", "actions": []}
+
+@router.delete("/memory")
+def clear_chat_memory(request: Request, db: Session = Depends(get_db)):
+    """Clear all stored conversation memory for the calling user."""
+    user_id = request.headers.get("x-user-id") or "default"
+    count = _clear_memory(db, user_id)
+    return {"ok": True, "cleared_turns": count, "user_id": user_id}
+
+
+@router.get("/memory/count")
+def get_memory_count(request: Request, db: Session = Depends(get_db)):
+    """Return how many turns are stored for the calling user."""
+    user_id = request.headers.get("x-user-id") or "default"
+    count = (
+        db.query(AIConversationMemory)
+        .filter(AIConversationMemory.user_id == user_id)
+        .count()
+    )
+    return {"ok": True, "stored_turns": count, "user_id": user_id}

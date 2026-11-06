@@ -26,6 +26,7 @@ export interface SchedulerJob {
   trigger: string;
   next_run_time?: string | null;
   pending: boolean;
+  paused: boolean;
   max_instances?: number | null;
   coalesce?: boolean | null;
   manual_run_allowed: boolean;
@@ -249,6 +250,8 @@ export const autoTraderAPI = {
 export const schedulerAPI = {
   listJobs: () => api.get<SchedulerJobsResponse>('/system/scheduler/jobs'),
   runNow: (jobId: string) => api.post(`/system/scheduler/jobs/${jobId}/run-now`),
+  pause: (jobId: string) => api.post(`/system/scheduler/jobs/${jobId}/pause`),
+  resume: (jobId: string) => api.post(`/system/scheduler/jobs/${jobId}/resume`),
 };
 
 // Market Data APIs

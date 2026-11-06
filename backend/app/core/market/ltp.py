@@ -119,10 +119,21 @@ def _fetch_ltp_indmoney_options(symbols: List[str]) -> Dict[str, float]:
                 else:
                     still_missing.append(sym)
             if still_missing:
-                logger.warning(
-                    "INDMoney: option symbols not found in instruments cache after refresh: %s",
-                    still_missing,
-                )
+                # Last resort: try direct tradingsymbol lookup (symbol may be stored
+                # under its own key in the cache, e.g. NIFTY26N1024000PE directly)
+                cache_after = _instruments_cache()
+                truly_missing: List[str] = []
+                for sym in still_missing:
+                    direct = cache_after.get(sym.upper())
+                    if direct:
+                        sym_to_scrip[sym] = direct
+                    else:
+                        truly_missing.append(sym)
+                if truly_missing:
+                    logger.warning(
+                        "INDMoney: option symbols not found in instruments cache after refresh: %s",
+                        truly_missing,
+                    )
         except Exception as exc:
             logger.warning("INDMoney: instruments cache refresh failed: %s", exc)
 

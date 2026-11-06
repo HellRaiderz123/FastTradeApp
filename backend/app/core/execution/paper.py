@@ -117,16 +117,22 @@ class PaperExecutionAdapter(ExecutionAdapter):
                     hedges = [b for b in buys if b >= sell_strike] if opt_type == "CE" else [b for b in buys if b <= sell_strike]
                     if hedges:
                         width = min(abs(h - sell_strike) for h in hedges)
+                        # SEBI requires full spread-width margin for short spreads.
+                        # Multiply by lot_size separately (qty already = lot_size * lots).
                         protected_risk += width * qty
                 if protected_risk > 0:
                     side_widths.append(protected_risk)
 
             if side_widths:
                 estimated = max(side_widths) if len(side_widths) >= 2 else sum(side_widths)
-                return round(max(float(estimated), entry_value), 2)
+                # SEBI SPAN margin for short spreads ≈ spread_width * qty.
+                # Add ~20% exposure margin on top (conservative estimate).
+                sebi_estimate = estimated * 1.20
+                return round(max(float(sebi_estimate), entry_value), 2)
 
             if short_count > 0:
-                return round(max(entry_value * 8.0, entry_value), 2)
+                # Naked short: use 15% of notional as SPAN estimate
+                return round(max(entry_value * 15.0, entry_value), 2)
 
             return round(entry_value, 2)
         except Exception:
@@ -219,10 +225,22 @@ class PaperExecutionAdapter(ExecutionAdapter):
         pnl = 0.0
         for leg in ticket["legs"]:
             symbol = leg.get("symbol") or f'{leg["strike"]}{leg["type"]}'
-            current = ltp_map.get(symbol)
-            entry = leg.get("price") or leg.get("premium")
-            if entry is None or current is None or float(current) <= 0:
+            raw_current = ltp_map.get(symbol)
+            # Reject 0 and negative LTP — brokers send 0 for "no trade yet".
+            # A zero current price would produce a phantom P&L spike (entry × qty).
+            try:
+                current = float(raw_current) if raw_current is not None else None
+            except (TypeError, ValueError):
+                current = None
+            if current is None or current <= 0:
                 continue
+            entry = leg.get("price") if leg.get("price") is not None else leg.get("premium")
+            if entry is None:
+                continue
+            # If entry was stored as 0 (LTP unavailable at execution), backfill it now
+            if float(entry) == 0.0:
+                leg["price"] = round(current, 2)
+                entry = current
             m = int(leg.get("lots_multiplier", 1) or 1)
             leg_qty = self._resolve_leg_qty(leg, ticket_qty) * m if leg.get("qty") is None else self._resolve_leg_qty(leg, ticket_qty)
             side = (leg.get("side") or leg.get("action") or "").upper()

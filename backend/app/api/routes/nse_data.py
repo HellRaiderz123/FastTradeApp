@@ -13,7 +13,7 @@ from datetime import datetime, date as _date
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/nse", tags=["nse_data"])
@@ -97,6 +97,7 @@ async def get_vix():
 
     def _fetch_vix():
         vix_value = None
+        prev_close = None
         try:
             data = _nse_get("/api/allIndices", "/market-data-pre-open/")
             if data and isinstance(data, dict):
@@ -104,6 +105,7 @@ async def get_vix():
                     name = (idx.get("indexSymbol") or idx.get("index") or "").upper()
                     if "VIX" in name:
                         vix_value = float(idx.get("last") or idx.get("previousClose") or 0) or None
+                        prev_close = float(idx.get("previousClose") or 0) or None
                         break
         except Exception as e:
             logger.warning("vix allIndices fetch error: %s", e)
@@ -119,16 +121,19 @@ async def get_vix():
                     gd = data.get("grapthData") or data.get("graphData") or []
                     if gd:
                         vix_value = float(gd[-1][1]) if isinstance(gd[-1], list) else None
+                        if len(gd) >= 2:
+                            prev_close = float(gd[-2][1]) if isinstance(gd[-2], list) else None
             except Exception as e:
                 logger.warning("vix chart fallback error: %s", e)
-        return vix_value
+        return vix_value, prev_close
 
     loop = asyncio.get_running_loop()
-    vix_value = await loop.run_in_executor(_nse_executor, _fetch_vix)
+    vix_value, prev_close = await loop.run_in_executor(_nse_executor, _fetch_vix)
 
     if not vix_value:
         return {
             "current": None,
+            "prev_close": None,
             "regime": "UNKNOWN",
             "implications": "VIX data temporarily unavailable",
             "timestamp": datetime.now().isoformat(),
@@ -147,6 +152,7 @@ async def get_vix():
 
     result = {
         "current": round(vix_value, 2),
+        "prev_close": round(prev_close, 2) if prev_close else None,
         "regime": regime,
         "implications": implications,
         "timestamp": datetime.now().isoformat(),
@@ -167,36 +173,48 @@ async def get_block_deals():
 
     def _fetch():
         results: Dict[str, List] = {"block_deals": [], "bulk_deals": []}
-        try:
-            data = _nse_get("/api/block-deal", "/market-data-pre-open/block-deal")
-            if data and isinstance(data, dict):
-                for row in (data.get("data") or data.get("blockDeal") or []):
-                    results["block_deals"].append({
-                        "symbol":     row.get("symbol") or row.get("Symbol", ""),
-                        "company":    row.get("name") or row.get("companyName", ""),
-                        "client":     row.get("clientName") or row.get("client", ""),
-                        "deal_type":  row.get("buySell") or row.get("dealType", ""),
-                        "quantity":   row.get("quantity") or row.get("qty", 0),
-                        "price":      row.get("price") or row.get("tradePrice", 0),
-                        "trade_date": row.get("tradeDate") or row.get("date", ""),
-                    })
-        except Exception as e:
-            logger.warning("block deals fetch error: %s", e)
-        try:
-            data = _nse_get("/api/bulk-deals", "/market-data-pre-open/bulk-deals")
-            if data and isinstance(data, dict):
-                for row in (data.get("data") or data.get("bulkDeal") or []):
-                    results["bulk_deals"].append({
-                        "symbol":     row.get("symbol") or row.get("Symbol", ""),
-                        "company":    row.get("name") or row.get("companyName", ""),
-                        "client":     row.get("clientName") or row.get("client", ""),
-                        "deal_type":  row.get("buySell") or row.get("dealType", ""),
-                        "quantity":   row.get("quantity") or row.get("qty", 0),
-                        "price":      row.get("price") or row.get("tradePrice", 0),
-                        "trade_date": row.get("tradeDate") or row.get("date", ""),
-                    })
-        except Exception as e:
-            logger.warning("bulk deals fetch error: %s", e)
+        # Block deals — try both known NSE paths
+        for bd_path, bd_ref in [
+            ("/api/block-deal", "/market-data-pre-open/block-deal"),
+            ("/api/blockdeals", "/market-data-pre-open/block-deal"),
+        ]:
+            try:
+                data = _nse_get(bd_path, bd_ref)
+                if data and isinstance(data, dict):
+                    for row in (data.get("data") or data.get("blockDeal") or []):
+                        results["block_deals"].append({
+                            "symbol":     row.get("symbol") or row.get("Symbol", ""),
+                            "company":    row.get("name") or row.get("companyName", ""),
+                            "client":     row.get("clientName") or row.get("client", ""),
+                            "deal_type":  row.get("buySell") or row.get("dealType", ""),
+                            "quantity":   row.get("quantity") or row.get("qty", 0),
+                            "price":      row.get("price") or row.get("tradePrice", 0),
+                            "trade_date": row.get("tradeDate") or row.get("date", ""),
+                        })
+                    break
+            except Exception as e:
+                logger.warning("block deals fetch %s error: %s", bd_path, e)
+        # Bulk deals — try both known NSE paths
+        for bk_path, bk_ref in [
+            ("/api/bulk-deals", "/market-data-pre-open/bulk-deals"),
+            ("/api/bulkdeals", "/market-data-pre-open/bulk-deals"),
+        ]:
+            try:
+                data = _nse_get(bk_path, bk_ref)
+                if data and isinstance(data, dict):
+                    for row in (data.get("data") or data.get("bulkDeal") or []):
+                        results["bulk_deals"].append({
+                            "symbol":     row.get("symbol") or row.get("Symbol", ""),
+                            "company":    row.get("name") or row.get("companyName", ""),
+                            "client":     row.get("clientName") or row.get("client", ""),
+                            "deal_type":  row.get("buySell") or row.get("dealType", ""),
+                            "quantity":   row.get("quantity") or row.get("qty", 0),
+                            "price":      row.get("price") or row.get("tradePrice", 0),
+                            "trade_date": row.get("tradeDate") or row.get("date", ""),
+                        })
+                    break
+            except Exception as e:
+                logger.warning("bulk deals fetch %s error: %s", bk_path, e)
         return results
 
     loop = asyncio.get_running_loop()
@@ -217,11 +235,19 @@ async def get_fo_ban():
     if cached:
         return cached
 
+    def _fetch_fo_ban():
+        for path, ref in [
+            ("/api/fo-sec-ban", "/market-data-pre-open/fo-sec-ban"),
+            ("/api/foBanList", "/market-data-pre-open/fo-sec-ban"),
+            ("/api/fo-ban-list", "/market-data-pre-open/fo-sec-ban"),
+        ]:
+            d = _nse_get(path, ref)
+            if d is not None:
+                return d
+        return None
+
     loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(
-        _nse_executor,
-        lambda: _nse_get("/api/fo-sec-ban", "/market-data-pre-open/fo-sec-ban"),
-    )
+    data = await loop.run_in_executor(_nse_executor, _fetch_fo_ban)
 
     banned: List[str] = []
     if data:
@@ -353,7 +379,7 @@ async def get_announcements(symbol: str = ""):
         })
 
     result = {"data": items, "count": len(items), "symbol": sym, "timestamp": datetime.now().isoformat()}
-    _cache_set(cache_key, result, ttl_seconds=600)
+    _cache_set(cache_key, result, ttl_seconds=90)
     if not sym:  # only persist the "all announcements" snapshot, not per-symbol
         _persist_nse_snapshot("announcements", result)
     return result
@@ -434,11 +460,19 @@ async def get_short_selling():
     if cached:
         return cached
 
+    def _fetch_short_selling():
+        for path, ref in [
+            ("/api/short-selling", "/market-data-pre-open/short-selling"),
+            ("/api/shortselling", "/market-data-pre-open/short-selling"),
+            ("/api/short-sell", "/market-data-pre-open/short-selling"),
+        ]:
+            d = _nse_get(path, ref)
+            if d is not None:
+                return d
+        return None
+
     loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(
-        _nse_executor,
-        lambda: _nse_get("/api/short-selling", "/market-data-pre-open/short-selling"),
-    )
+    data = await loop.run_in_executor(_nse_executor, _fetch_short_selling)
 
     items: List[Dict] = []
     rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
@@ -471,17 +505,22 @@ async def get_participant_oi():
 
     def _fetch():
         results = {}
+        _PARTICIPANT_OI_PATHS = [
+            "/api/participant-wise-trading-data",
+            "/api/participant-wise-open-interest",
+            "/api/participantWiseTradingData",
+        ]
         for key, params in [
             ("index_futures",  {"type": "index",  "instrument": "FUTSTK"}),
             ("stock_futures",  {"type": "equity", "instrument": "FUTSTK"}),
             ("index_options",  {"type": "index",  "instrument": "OPTSTK"}),
         ]:
             try:
-                data = _nse_get(
-                    "/api/participant-wise-trading-data",
-                    "/market-data-pre-open/derivatives",
-                    params=params,
-                )
+                data = None
+                for _poi_path in _PARTICIPANT_OI_PATHS:
+                    data = _nse_get(_poi_path, "/market-data-pre-open/derivatives", params=params)
+                    if data is not None:
+                        break
                 if data:
                     rows = data if isinstance(data, list) else (data.get("data") or [])
                     results[key] = [
@@ -518,15 +557,19 @@ async def get_forthcoming_actions():
     if cached:
         return cached
 
-    loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(
-        _nse_executor,
-        lambda: _nse_get(
+    def _fetch_forthcoming():
+        for path in [
             "/api/corporates-forthcoming",
-            "/companies-listing/corporate-filings-corporate-actions",
-            params={"index": "equities"},
-        ),
-    )
+            "/api/corporates-forthcomingActions",
+            "/api/corporatesForthcoming",
+        ]:
+            d = _nse_get(path, "/companies-listing/corporate-filings-corporate-actions", params={"index": "equities"})
+            if d is not None:
+                return d
+        return None
+
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(_nse_executor, _fetch_forthcoming)
 
     items: List[Dict] = []
     rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
@@ -561,13 +604,19 @@ async def get_52week_movers():
 
     def _fetch():
         highs, lows = [], []
+        _52W_PATHS = [
+            ("/api/live-analysis-data", {"index": "{cat}"}),
+            ("/api/live-analysis-data", {"index": "{cat}".replace("52W_", "")}),  # HIGH / LOW
+            ("/api/liveanalysis", {"index": "{cat}"}),
+        ]
         for category, bucket in [("52W_HIGH", highs), ("52W_LOW", lows)]:
             try:
-                data = _nse_get(
-                    "/api/live-analysis-data",
-                    "/market-data-pre-open/",
-                    params={"index": category},
-                )
+                data = None
+                for _path, _p in _52W_PATHS:
+                    _params = {k: v.replace("{cat}", category) for k, v in _p.items()}
+                    data = _nse_get(_path, "/market-data-pre-open/", params=_params)
+                    if data is not None:
+                        break
                 rows = data if isinstance(data, list) else (data.get("data") or [] if data else [])
                 for r in rows[:50]:
                     symbol = (r.get("symbol") or r.get("Symbol") or "").strip().upper()
@@ -638,11 +687,19 @@ async def get_ban_history():
     if cached:
         return cached
 
+    def _fetch_ban_history():
+        for path, ref in [
+            ("/api/fo-sec-ban", "/market-data-pre-open/fo-sec-ban"),
+            ("/api/foBanList", "/market-data-pre-open/fo-sec-ban"),
+            ("/api/fo-ban-list", "/market-data-pre-open/fo-sec-ban"),
+        ]:
+            d = _nse_get(path, ref)
+            if d is not None:
+                return d
+        return None
+
     loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(
-        _nse_executor,
-        lambda: _nse_get("/api/fo-sec-ban", "/market-data-pre-open/fo-sec-ban"),
-    )
+    data = await loop.run_in_executor(_nse_executor, _fetch_ban_history)
 
     current: List[str] = []
     if data:
@@ -810,5 +867,180 @@ async def run_filing_alerts_now():
         "high_medium_count": len(high_medium),
         "high_medium_filings": high_medium,
         "job_triggered": True,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+# ── NSE Flash Alerts — SSE stream ─────────────────────────────────────────
+
+import threading as _threading
+
+# Per-process dedup: key = "SYMBOL|headline[:80]", value = epoch when first streamed
+_FLASH_SEEN: dict[str, float] = {}
+_FLASH_DEDUP_TTL = 3600 * 4  # 4 hours
+
+
+def _enrich_with_market_data(symbol: str) -> dict:
+    """Fetch live LTP, % change, and volume for a symbol. Returns empty dict on failure."""
+    try:
+        from app.services.market_data import get_spot
+        ltp = get_spot(symbol)
+        if ltp:
+            return {"ltp": round(float(ltp), 2)}
+    except Exception:
+        pass
+    # Fallback: try NSE quote endpoint
+    try:
+        data = _nse_get(
+            "/api/quote-equity",
+            "/get-quotes/equity",
+            params={"symbol": symbol},
+        )
+        if data and isinstance(data, dict):
+            pi = data.get("priceInfo") or {}
+            ltp = pi.get("lastPrice")
+            prev_close = pi.get("previousClose")
+            change_pct = pi.get("pChange")
+            if change_pct is None and ltp and prev_close and float(prev_close) != 0:
+                change_pct = round((float(ltp) - float(prev_close)) / float(prev_close) * 100, 2)
+            return {
+                "ltp": ltp,
+                "change_pct": change_pct,
+                "volume": (data.get("marketDeptOrderBook") or {}).get("tradeInfo", {}).get("totalTradedVolume"),
+                "open": pi.get("open"),
+                "high": (pi.get("intraDayHighLow") or {}).get("max"),
+                "low": (pi.get("intraDayHighLow") or {}).get("min"),
+                "prev_close": prev_close,
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def _fetch_flash_alerts() -> list[dict]:
+    """Fetch NSE announcements, classify, deduplicate, enrich with market data."""
+    import time
+    now = time.time()
+
+    # Prune stale dedup entries
+    stale = [k for k, v in _FLASH_SEEN.items() if now - v > _FLASH_DEDUP_TTL]
+    for k in stale:
+        _FLASH_SEEN.pop(k, None)
+
+    try:
+        data = _nse_get(
+            "/api/corporate-announcements",
+            "/companies-listing/corporate-filings-announcements",
+            params={"index": "equities"},
+        )
+    except Exception:
+        return []
+
+    if not data:
+        return []
+
+    from app.core.market.scheduler import _classify_filing_impact
+
+    rows = data if isinstance(data, list) else (data.get("data") or [])
+    alerts = []
+
+    for row in rows[:60]:
+        symbol = (row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        headline = (
+            row.get("desc") or row.get("attchmntText") or
+            row.get("subject") or row.get("purpose") or ""
+        ).strip()
+        if not headline:
+            continue
+
+        category = (row.get("attchmntType") or row.get("category") or "Announcement").strip()
+        impact = _classify_filing_impact(headline, category)
+        if impact == "LOW":
+            continue
+
+        dedup_key = f"{symbol}|{headline[:80]}"
+        if dedup_key in _FLASH_SEEN:
+            continue
+
+        _FLASH_SEEN[dedup_key] = now
+        market = _enrich_with_market_data(symbol)
+
+        alerts.append({
+            "symbol": symbol,
+            "company": (row.get("sm_name") or row.get("companyName") or symbol).strip(),
+            "headline": headline[:160],
+            "category": category,
+            "impact": impact,
+            "pdf_url": row.get("attchmntFile") or "",
+            "published_at": row.get("sort_date") or row.get("date") or "",
+            "ltp": market.get("ltp"),
+            "change_pct": market.get("change_pct"),
+            "volume": market.get("volume"),
+            "open": market.get("open"),
+            "high": market.get("high"),
+            "low": market.get("low"),
+            "prev_close": market.get("prev_close"),
+            "ts": now,
+        })
+
+        if len(alerts) >= 8:
+            break
+
+    return alerts
+
+
+@router.get("/flash-alerts")
+async def nse_flash_alerts_sse(request: Request):
+    """
+    SSE stream of HIGH/MEDIUM NSE corporate filings enriched with live price data.
+    Polls every 30 seconds. Each new (deduped) filing is pushed as a JSON event.
+    Connect from the frontend with EventSource('/api/nse/flash-alerts').
+    """
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    import json as _json_mod
+
+    async def event_generator():
+        # Send a heartbeat immediately so the browser knows the connection is alive
+        yield "event: heartbeat\ndata: {}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            loop = asyncio.get_event_loop()
+            alerts = await loop.run_in_executor(_nse_executor, _fetch_flash_alerts)
+
+            for alert in alerts:
+                payload = _json_mod.dumps(alert, default=str)
+                yield f"event: flash\ndata: {payload}\n\n"
+
+            # Heartbeat every poll cycle to keep connection alive
+            yield "event: heartbeat\ndata: {}\n\n"
+            await asyncio.sleep(30)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/flash-alerts/poll")
+async def nse_flash_alerts_poll():
+    """
+    REST fallback for environments where SSE is not available.
+    Returns current batch of new HIGH/MEDIUM filings with market data.
+    """
+    loop = asyncio.get_running_loop()
+    alerts = await loop.run_in_executor(_nse_executor, _fetch_flash_alerts)
+    return {
+        "alerts": alerts,
+        "count": len(alerts),
         "timestamp": datetime.now().isoformat(),
     }

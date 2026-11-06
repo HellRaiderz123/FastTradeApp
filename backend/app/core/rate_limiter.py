@@ -230,20 +230,20 @@ class RequestCache:
         }
 
 
-class ZerodhaRateLimiter:
+class BrokerRateLimiter:
     """
-    Zerodha-specific rate limiter with per-method limits
+    Broker-agnostic rate limiter with per-method limits.
+    Default: 3 req/s (Zerodha). Override max_requests for other brokers.
     """
-    
-    def __init__(self):
-        # Zerodha has 3 requests per second globally
-        self.global_limiter = RateLimiter(max_requests=3, window_seconds=1.0)
-        
-        # Method-specific limiters (optional)
+
+    def __init__(self, max_requests: int = 3, window_seconds: float = 1.0):
+        self.global_limiter = RateLimiter(max_requests=max_requests, window_seconds=window_seconds)
+
+        # Method-specific limiters (share global by default)
         self.quote_limiter = self.global_limiter
         self.bulk_quote_limiter = self.global_limiter
         self.option_chain_limiter = self.global_limiter
-        
+
         # Response cache
         self.cache = RequestCache(ttl_seconds=2)
     
@@ -268,8 +268,11 @@ class ZerodhaRateLimiter:
         return self.global_limiter.get_wait_time()
 
 
-# Global rate limiter instance
-zerodha_limiter = ZerodhaRateLimiter()
+# Global rate limiter instance (broker-agnostic)
+broker_limiter = BrokerRateLimiter()
+
+# Backward-compat alias — zerodha.py imports this name directly
+zerodha_limiter = broker_limiter
 
 
 def rate_limited(func: Callable) -> Callable:
@@ -281,6 +284,6 @@ def rate_limited(func: Callable) -> Callable:
             ...
     """
     def wrapper(*args, **kwargs):
-        zerodha_limiter.acquire_for_quote()
+        broker_limiter.acquire_for_quote()
         return func(*args, **kwargs)
     return wrapper

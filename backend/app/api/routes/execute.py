@@ -223,6 +223,14 @@ def execute_paper(
         intent.pnl = 0.0  # type: ignore
 
     margin_required = result.get("margin_required")
+    # If margin came back as 0 (broker API failed + entry_credit=0), re-estimate
+    # from spread width so the UI shows a realistic figure.
+    if not margin_required or float(margin_required) == 0.0:
+        try:
+            from app.core.execution.paper import PaperExecutionAdapter
+            margin_required = PaperExecutionAdapter().estimate_margin_required(intent, entry_credit)
+        except Exception:
+            pass
     if margin_required is not None:
         intent.margin_required = margin_required  # pyright: ignore[reportAttributeAccessIssue]
 

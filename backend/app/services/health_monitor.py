@@ -74,40 +74,30 @@ class HealthMonitor:
     def check_candle_freshness(self) -> Dict[str, Any]:
         """Check if candle data is fresh (< 1 hour old)"""
         try:
-            from app.db.models import Candle
-            
-            # Get latest candle
+            from app.db.models_candles import Candle15m
+
             latest = (
-                self.db.query(Candle)
-                .order_by(Candle.timestamp.desc())
+                self.db.query(Candle15m)
+                .order_by(Candle15m.timestamp.desc())
                 .first()
             )
-            
+
             if not latest:
-                return {
-                    "status": "warning",
-                    "message": "No candle data found"
-                }
-            
-            # Check age
+                return {"status": "warning", "message": "No candle data found"}
+
             age = now_ist() - latest.timestamp
             age_minutes = age.total_seconds() / 60
-            
-            is_fresh = age_minutes < 60
-            
+
             return {
-                "status": "fresh" if is_fresh else "stale",
+                "status": "fresh" if age_minutes < 60 else "stale",
                 "latest_candle": latest.timestamp.isoformat(),
                 "age_minutes": round(age_minutes, 1),
-                "symbol": latest.symbol
+                "symbol": latest.symbol,
             }
-            
+
         except Exception as e:
             logger.error(f"Candle freshness check failed: {e}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            return {"status": "error", "error": str(e)}
     
     def check_api_latency(self) -> Dict[str, Any]:
         """Check API response latency"""

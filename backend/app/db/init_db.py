@@ -27,6 +27,8 @@ from app.db.models_ai_decisions import AIDecision  # noqa: F401
 from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog  # noqa: F401
 from app.db.models_signal_outcome import SignalOutcome  # noqa: F401 (already imported, safe)
 from app.db.models_indmoney import INDMoneySession  # noqa: F401 (already imported, safe)
+from app.db.models_filing_analysis import NseFilingAnalysis  # noqa: F401
+from app.db.models_ai_memory import AIConversationMemory  # noqa: F401
 
 _MIGRATIONS_COMMON = [
     "ALTER TABLE execution_intents ADD COLUMN execution_mode VARCHAR;",

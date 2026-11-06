@@ -1242,8 +1242,31 @@ _FILING_DEDUP_TTL = 3600 * 6  # 6 hours
 # Initialised to (now - 10 min) so the very first run picks up recent filings
 # but not the entire historical backlog.
 import time as _time
-_LAST_FILING_POLL_AT: float = _time.time() - 86400  # 24 hours ago on startup — catches all of today's filings
+
+def _load_last_poll_at() -> float:
+    """Load persisted poll timestamp so restarts don't miss overnight filings."""
+    try:
+        p = Path(__file__).resolve().parents[2] / "data" / "nse_filing_last_poll.txt"
+        if p.exists():
+            val = float(p.read_text().strip())
+            # Cap lookback at 18 hours (covers overnight + weekend gap)
+            return max(val, _time.time() - 18 * 3600)
+    except Exception:
+        pass
+    return _time.time() - 600  # fallback: 10 min
+
+def _save_last_poll_at(ts: float) -> None:
+    try:
+        p = Path(__file__).resolve().parents[2] / "data" / "nse_filing_last_poll.txt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(ts))
+    except Exception:
+        pass
+
+_LAST_FILING_POLL_AT: float = _load_last_poll_at()
 _IS_FIRST_FILING_RUN: bool = True  # cap alerts on first run to avoid flood
+
+import re as _re
 
 # Categories that are always treated as HIGH impact regardless of keyword match
 _HIGH_IMPACT_CATEGORIES = {
@@ -1251,30 +1274,48 @@ _HIGH_IMPACT_CATEGORIES = {
     "buyback", "delisting", "rights issue", "qip", "fpo", "ipo",
     "board meeting", "dividend", "bonus", "stock split", "results",
     "quarterly results", "annual results", "financial results",
-    "change in management", "ceo", "md", "director", "resignation",
+    "change in management", "ceo", "resignation",
     "regulatory", "sebi", "nclt", "insolvency", "fraud", "penalty",
-    "litigation", "court order", "fir", "arrest",
-    # Order wins / contracts — NSE desc field uses these exact phrases
+    "litigation", "court order", "arrest",
+    # Order wins / contracts
     "bagging", "receiving of orders", "order win", "order receipt",
-    "letter of award", "loa", "letter of intent", "loi",
+    "letter of award", "letter of intent",
     "new order", "work order", "project award",
+    "order received", "order bagged", "order secured",
+    "award of contract", "contract awarded", "contract won",
 }
+
+# Word-boundary patterns for short keywords that cause substring false positives
+_HIGH_WORD_PATTERNS = [
+    _re.compile(r'\bfir\b'),        # FIR (not "confirmation", "first", "firm")
+    _re.compile(r'\bloa\b'),        # LOA (not "float", "loan")
+    _re.compile(r'\bloi\b'),        # LOI (not "exploit")
+    _re.compile(r'\bmd\b'),         # MD (not "amended", "cmd")
+    _re.compile(r'\bdirector\b'),   # director appointment/resignation
+]
 
 
 def _classify_filing_impact(headline: str, category: str) -> str:
     """Return HIGH / MEDIUM / LOW based on headline and category keywords."""
-    # NSE stopped populating attchmntType — treat the headline as the primary signal
     text = (headline + " " + category).lower()
+
+    # Substring-safe HIGH keywords
     for kw in _HIGH_IMPACT_CATEGORIES:
         if kw in text:
             return "HIGH"
+
+    # Word-boundary HIGH patterns (short tokens that cause false positives as substrings)
+    for pat in _HIGH_WORD_PATTERNS:
+        if pat.search(text):
+            return "HIGH"
+
     medium_kws = {
         "agreement", "mou", "joint venture", "subsidiary", "investment",
-        "capacity", "expansion", "order", "contract", "award",
+        "capacity", "expansion", "contract", "collaboration",
         "rating", "credit", "debt", "ncd", "debenture",
-        "press release", "investor presentation", "analyst",
-        "strategic", "technical", "manufacturing",
-        "arrangements", "collaboration", "partnership",
+        "press release", "investor presentation",
+        "strategic", "manufacturing",
+        "arrangements", "partnership",
     }
     for kw in medium_kws:
         if kw in text:
@@ -1321,12 +1362,11 @@ def _check_nse_high_impact_filings():
     def _parse_nse_ts(ts_str: str) -> float:
         if not ts_str:
             return 0.0
-        from datetime import datetime as _dt, timezone
-        import pytz as _pytz
-        _ist = _pytz.timezone("Asia/Kolkata")
+        from datetime import datetime as _dt
         for fmt in ("%d-%b-%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d-%b-%Y"):
             try:
-                return _ist.localize(_dt.strptime(ts_str.strip(), fmt)).timestamp()
+                # Parse as IST (UTC+5:30 = +19800s)
+                return _dt.strptime(ts_str.strip(), fmt).timestamp() - 19800
             except ValueError:
                 continue
         return 0.0
@@ -1389,6 +1429,31 @@ def _check_nse_high_impact_filings():
             )
             notified += 1
 
+            # Async PDF analysis in background thread (non-blocking)
+            try:
+                import threading
+                from app.services.filing_pdf_analyzer import analyze_filing, store_filing_analysis
+
+                def _analyse_and_store(sym, comp, hl, cat, imp, purl, pub, dk):
+                    try:
+                        result = analyze_filing(
+                            symbol=sym, company=comp, headline=hl,
+                            category=cat, impact=imp, pdf_url=purl,
+                            published_at=pub, dedup_key=dk,
+                        )
+                        store_filing_analysis(result)
+                    except Exception as _e:
+                        logger.warning("Filing PDF analysis failed [%s]: %s", sym, _e)
+
+                threading.Thread(
+                    target=_analyse_and_store,
+                    args=(symbol, company, headline, category, impact, pdf_url, published_at, dedup_key),
+                    daemon=True,
+                    name=f"filing-pdf-{symbol}",
+                ).start()
+            except Exception as _te:
+                logger.warning("Could not start filing PDF analysis thread: %s", _te)
+
         if notified:
             logger.info("NSE filing alerts sent: %d", notified)
         else:
@@ -1396,6 +1461,7 @@ def _check_nse_high_impact_filings():
 
         # Advance poll cursor so next run only sees genuinely new filings
         _LAST_FILING_POLL_AT = _new_poll_at
+        _save_last_poll_at(_new_poll_at)
         _IS_FIRST_FILING_RUN = False
 
     except Exception:
@@ -1427,12 +1493,20 @@ def _nse_snapshot_job():
 
     _run("vix",               "/api/allIndices",                    "/market-data-pre-open/")
     _run("block_deals",       "/api/block-deal",                    "/market-data-pre-open/block-deal")
-    _run("fo_ban",            "/api/fo-sec-ban",                    "/market-data-pre-open/fo-sec-ban")
+    # F&O ban — try all known paths
+    for _ban_path in ("/api/fo-sec-ban", "/api/foBanList", "/api/fo-ban-list"):
+        try:
+            d = _nse_get(_ban_path, "/market-data-pre-open/fo-sec-ban")
+            if d is not None:
+                _persist_nse_snapshot("fo_ban", d)
+                _persist_nse_snapshot("ban_history", d)
+                break
+        except Exception as _e:
+            logger.warning("NSE snapshot fo_ban %s failed: %s", _ban_path, _e)
     _run("corporate_actions", "/api/corporates-corporateActions",   "/companies-listing/corporate-filings-corporate-actions", {"index": "equities"})
     _run("announcements",     "/api/corporate-announcements",       "/companies-listing/corporate-filings-announcements",     {"index": "equities"})
     _run("insider_trading",   "/api/corporate-announcements",       "/companies-listing/corporate-filings-announcements",     {"index": "sast"})
     _run("market_turnover",   "/api/market-turnover",               "/market-data-pre-open/")
-    _run("ban_history",       "/api/fo-sec-ban",                    "/market-data-pre-open/fo-sec-ban")
     logger.info("✅ NSE snapshot job complete")
 
 
@@ -1473,13 +1547,13 @@ def start_nse_filing_alerts_scheduler():
     from apscheduler.triggers.interval import IntervalTrigger
     import threading
 
-    # Every 30 min during market + post-market hours
+    # Every 2 min during market + post-market hours
     scheduler.add_job(
         func=_check_nse_high_impact_filings,
         trigger="cron",
         day_of_week="mon-fri",
         hour="9-16",
-        minute="*/30",
+        minute="*/2",
         id="nse_filing_alerts_job",
         replace_existing=True,
         max_instances=1,
@@ -1505,4 +1579,4 @@ def start_nse_filing_alerts_scheduler():
     )
 
     threading.Thread(target=_check_nse_high_impact_filings, name="nse-filing-initial", daemon=True).start()
-    logger.info("NSE filing alerts scheduler started (pre-market 8:30 AM + every 30 min 9 AM-4 PM, Mon-Fri)")
+    logger.info("NSE filing alerts scheduler started (pre-market 8:30 AM + every 2 min 9 AM-4 PM, Mon-Fri)")

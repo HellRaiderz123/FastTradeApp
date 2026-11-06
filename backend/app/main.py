@@ -3,10 +3,17 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from backend directory (before any other imports!)
-backend_dir = Path(__file__).parent.parent
-env_path = backend_dir / ".env"
-load_dotenv(dotenv_path=env_path, override=True)
+# Load .env — check multiple locations so it works both locally and in Docker
+# Docker: env_file in docker-compose injects vars directly, load_dotenv is a no-op
+# Local: loads from backend/.env
+for _env_candidate in [
+    Path(__file__).parent.parent / ".env",   # backend/.env  (local dev)
+    Path("/app/.env"),                        # Docker WORKDIR /app/.env
+    Path(".env"),                             # cwd fallback
+]:
+    if _env_candidate.exists():
+        load_dotenv(dotenv_path=_env_candidate, override=False)  # don't override real env vars
+        break
 
 # Now do all the imports
 import asyncio
@@ -54,11 +61,10 @@ async def lifespan(app: FastAPI):
     _start_instruments_sync()
 
     # Initialize schedulers
-    if engine:
-        try:
-            initialize_schedulers(engine)
-        except Exception as e:
-            logger.warning("⚠️ Schedulers failed to start: %s", e)
+    try:
+        initialize_schedulers(engine)
+    except Exception as e:
+        logger.warning("⚠️ Schedulers failed to start: %s", e)
 
     # Wire event loop into trading_agents
     _wire_trading_agents_loop()
@@ -110,45 +116,71 @@ def _restore_db_backup() -> None:
 
 
 def _initialize_database():
-    """Initialize database tables and run migrations."""
+    """Initialize database tables and run migrations.
+
+    Each model import is wrapped individually so a missing/broken module
+    never prevents the engine from being returned and schedulers from starting.
+    """
+    from app.db.session import engine
+    from app.db.models import Base
+
+    # Import each model separately — a bad import logs a warning but doesn't abort
+    _optional_models = [
+        "app.db.models_notification",
+        "app.db.models_alexa",
+        "app.db.models_risk",
+        "app.db.models_auto_trader",
+        "app.db.models_signal_outcome",
+        "app.db.models_scanner_signal",
+        "app.db.models_zerodha",
+        "app.db.models_indmoney",
+        "app.db.models_ai_decisions",
+        "app.db.models_stock_holding",
+        "app.db.models_instruments",
+        "app.db.models_fundamentals",
+        "app.db.models_nse",
+        "app.db.models_fii_dii",
+        "app.db.models_latency",
+    ]
+    for _mod in _optional_models:
+        try:
+            __import__(_mod)
+        except Exception as _e:
+            logger.warning("DB model import skipped (%s): %s", _mod, _e)
+
     try:
-        from app.db.session import engine
-        from app.db.models import Base
-        from app.db.models_notification import Notification  # noqa: F401
-        from app.db.models_alexa import AlexaMemory, AlexaInteractionLog  # noqa: F401
-        from app.db.models_risk import RiskLimitConfig  # noqa: F401
-        from app.db.models_auto_trader import AutoTraderConfig, AutoTraderLog, ensure_auto_trader_schema  # noqa: F401
-        from app.db.models_signal_outcome import SignalOutcome  # noqa: F401
-        from app.db.models_scanner_signal import ScannerSignalHistory  # noqa: F401
-        from app.db.models_zerodha import ZerodhaSession  # noqa: F401
-        from app.db.models_indmoney import INDMoneySession  # noqa: F401
-        from app.db.models_ai_decisions import AIDecision, ensure_ai_decisions_schema  # noqa: F401
-        from app.db.models_stock_holding import StockHolding  # noqa: F401
-        from app.db.models_instruments import IndstocksInstrument  # noqa: F401
-        from app.db.models_fundamentals import FundamentalsCache  # noqa: F401
-        from app.db.models_nse import NseSnapshot  # noqa: F401
-        from app.db.models_fii_dii import FiiDiiDaily  # noqa: F401
-
         Base.metadata.create_all(bind=engine)
-        ensure_auto_trader_schema(engine)
-        ensure_ai_decisions_schema(engine)
+    except Exception as e:
+        logger.error("❌ create_all failed: %s", e)
 
-        # Run column migrations
+    # Schema helpers — each wrapped so one failure doesn't block the next
+    try:
+        from app.db.models_auto_trader import ensure_auto_trader_schema
+        ensure_auto_trader_schema(engine)
+    except Exception as e:
+        logger.warning("ensure_auto_trader_schema skipped: %s", e)
+
+    try:
+        from app.db.models_ai_decisions import ensure_ai_decisions_schema
+        ensure_ai_decisions_schema(engine)
+    except Exception as e:
+        logger.warning("ensure_ai_decisions_schema skipped: %s", e)
+
+    # Column migrations
+    try:
         from app.db.init_db import _MIGRATIONS_COMMON
         from sqlalchemy import text
-
         for stmt in _MIGRATIONS_COMMON:
             try:
                 with engine.begin() as conn:
                     conn.execute(text(stmt))
             except Exception as e:
                 logger.warning("Migration skipped (already applied or N/A): %s", e)
-
-        logger.info("✅ Database tables initialized")
-        return engine
     except Exception as e:
-        logger.error("❌ Failed to initialize database: %s", e)
-        return None
+        logger.warning("Migrations skipped: %s", e)
+
+    logger.info("✅ Database tables initialized")
+    return engine  # always return engine — never None
 
 
 def _start_instruments_sync() -> None:
@@ -224,6 +256,14 @@ register_all_routers(app)
 # Register metrics router
 from app.api.routes.metrics import router as metrics_router
 app.include_router(metrics_router)
+
+# Register latency router
+from app.api.routes.latency import router as latency_router
+app.include_router(latency_router)
+
+# Register broker latency middleware
+from app.core.latency_middleware import BrokerLatencyMiddleware
+app.add_middleware(BrokerLatencyMiddleware)
 
 
 @app.get("/")

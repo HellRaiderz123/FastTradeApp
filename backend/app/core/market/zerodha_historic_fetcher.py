@@ -16,39 +16,33 @@ logger = logging.getLogger(__name__)
 
 def fetch_vix_from_zerodha_live() -> Optional[float]:
     """
-    Fetch current India VIX from Zerodha Kiteconnect.
-    
-    Returns:
-        India VIX value or None if unavailable
+    Fetch current India VIX. Tries Zerodha token 264969 first, then NSE scrape.
     """
+    # Try Zerodha instrument token 264969 (INDIA VIX)
     try:
         from app.core.broker.zerodha.client import get_kite_client
-        
         kite = get_kite_client()
-        
-        # Try to fetch NIFTY VIX or INDIA VIX
-        try:
-            data = kite.ltp(["NSE:NIFTY VIX"])
-            vix_value = data["NSE:NIFTY VIX"]["last_price"]
-            logger.info(f"✅ Fetched NIFTY VIX from Zerodha: {vix_value}")
-            return float(vix_value)
-        except Exception as e:
-            logger.warning(f"Could not fetch NIFTY VIX: {e}")
-        
-        # Try INDIA VIX
-        try:
-            data = kite.ltp(["NSE:INDIA VIX"])
-            vix_value = data["NSE:INDIA VIX"]["last_price"]
-            logger.info(f"✅ Fetched INDIA VIX from Zerodha: {vix_value}")
-            return float(vix_value)
-        except Exception as e:
-            logger.warning(f"Could not fetch INDIA VIX: {e}")
-        
-        return None
-        
+        data = kite.ltp([264969])
+        entry = data.get(264969) or data.get("264969")
+        if entry:
+            vix = float(entry["last_price"])
+            if vix > 0:
+                logger.info("Fetched INDIA VIX from Zerodha token 264969: %s", vix)
+                return vix
     except Exception as e:
-        logger.warning(f"Zerodha live VIX fetch error: {e}")
-        return None
+        logger.warning("Zerodha VIX token fetch failed: %s", e)
+
+    # Fallback: NSE allIndices scrape
+    try:
+        from app.core.market.vix_iv_api import get_india_vix_from_nse_scrape
+        vix = get_india_vix_from_nse_scrape()
+        if vix:
+            logger.info("Fetched INDIA VIX from NSE scrape: %s", vix)
+            return vix
+    except Exception as e:
+        logger.warning("NSE VIX scrape fallback failed: %s", e)
+
+    return None
 
 
 def fetch_vix_historic_from_zerodha(
@@ -57,99 +51,90 @@ def fetch_vix_historic_from_zerodha(
     force_refresh: bool = False
 ) -> dict:
     """
-    Fetch historic India VIX data from Zerodha and store in database.
-    
-    Uses Zerodha's historical data API to fetch candles for VIX index.
-    
-    Args:
-        db: Database session
-        days_back: How many days of history to fetch (default: 365 = 1 year)
-        force_refresh: If True, overwrite existing data
-        
-    Returns:
-        Dict with fetch results: {
-            'success': bool,
-            'records_fetched': int,
-            'records_stored': int,
-            'date_range': str
-        }
+    Fetch historic India VIX from NSE chart-databyindex (reliable, no broker token needed).
+    Falls back to Zerodha historical API with correct token 264969.
     """
+    result = {
+        'success': False,
+        'records_fetched': 0,
+        'records_stored': 0,
+        'date_range': None,
+        'error': None
+    }
+
+    from datetime import date as _date
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days_back)
+
+    # Primary: NSE chart-databyindex returns full VIX series
+    try:
+        import requests
+        NSE_BASE = "https://www.nseindia.com"
+        MAC_UA = (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+        headers = {
+            "User-Agent": MAC_UA,
+            "Accept": "application/json, */*",
+            "Referer": f"{NSE_BASE}/market-data-pre-open/",
+        }
+        r = requests.get(
+            f"{NSE_BASE}/api/chart-databyindex",
+            headers=headers,
+            params={"index": "INDIAVIX"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            gd = r.json().get("grapthData") or r.json().get("graphData") or []
+            for point in gd:
+                if not isinstance(point, list) or len(point) < 2:
+                    continue
+                try:
+                    ts_ms, vix_val = point[0], float(point[1])
+                    trade_date = _date.fromtimestamp(ts_ms / 1000)
+                    if trade_date < start_date:
+                        continue
+                    update_daily_iv_rank(db, vix_val, trade_date)
+                    result['records_stored'] += 1
+                except Exception:
+                    continue
+            result['records_fetched'] = len(gd)
+            result['date_range'] = f"{start_date} to {end_date}"
+            result['success'] = result['records_stored'] > 0
+            if result['success']:
+                logger.info("Stored %d VIX records from NSE chart API", result['records_stored'])
+                return result
+    except Exception as e:
+        logger.warning("NSE VIX history fetch failed: %s", e)
+
+    # Fallback: Zerodha historical with correct token 264969
     try:
         from app.core.broker.zerodha.client import get_kite_client
-        from datetime import date, timedelta
-        
         kite = get_kite_client()
-        
-        result = {
-            'success': False,
-            'records_fetched': 0,
-            'records_stored': 0,
-            'date_range': None,
-            'error': None
-        }
-        
-        # Calculate date range
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=days_back)
-        
-        logger.info(f"Fetching VIX historic data from {start_date} to {end_date}")
-        
-        # Zerodha instrument token for INDIA VIX (or NIFTY VIX)
-        # You may need to find the correct token
-        # Common tokens: NIFTY VIX, INDIA VIX
-        
-        vix_symbols = ["NSE:NIFTY VIX", "NSE:INDIA VIX"]
-        vix_token = None
-        
-        # Try to get the correct VIX instrument
-        for symbol in vix_symbols:
+        candles = kite.historical_data(
+            instrument_token=264969,
+            from_date=start_date,
+            to_date=end_date,
+            interval="day",
+        )
+        for candle in candles:
             try:
-                # Fetch historical candle data (daily closes)
-                candles = kite.historical_data(
-                    instrument_token=0,  # Will be replaced by correct token
-                    from_date=start_date,
-                    to_date=end_date,
-                    interval="day"
-                )
-                if candles:
-                    logger.info(f"✅ Found {len(candles)} candles for {symbol}")
-                    result['records_fetched'] = len(candles)
-                    
-                    # Process and store candles
-                    for candle in candles:
-                        try:
-                            trade_date = candle['date'].date() if isinstance(candle['date'], datetime) else candle['date']
-                            india_vix = candle['close']  # Use closing price as daily VIX
-                            
-                            # Update IV Rank in database
-                            iv_rank = update_daily_iv_rank(db, india_vix, trade_date)
-                            result['records_stored'] += 1
-                            
-                        except Exception as e:
-                            logger.warning(f"Could not store candle data: {e}")
-                            continue
-                    
-                    result['date_range'] = f"{start_date} to {end_date}"
-                    result['success'] = True
-                    return result
-                    
-            except Exception as e:
-                logger.warning(f"Could not fetch historical data for {symbol}: {e}")
+                trade_date = candle['date'].date() if isinstance(candle['date'], datetime) else candle['date']
+                update_daily_iv_rank(db, candle['close'], trade_date)
+                result['records_stored'] += 1
+            except Exception:
                 continue
-        
-        # Fallback: If Zerodha API doesn't work, we can populate with dummy/estimated data
-        logger.warning("Could not fetch from Zerodha API, attempting fallback")
-        result['error'] = "Zerodha historical API not available"
-        return result
-        
+        result['records_fetched'] = len(candles)
+        result['date_range'] = f"{start_date} to {end_date}"
+        result['success'] = result['records_stored'] > 0
+        if result['success']:
+            logger.info("Stored %d VIX records from Zerodha token 264969", result['records_stored'])
     except Exception as e:
-        logger.error(f"Error fetching VIX historic data: {e}")
-        return {
-            'success': False,
-            'records_fetched': 0,
-            'records_stored': 0,
-            'error': str(e)
-        }
+        logger.warning("Zerodha VIX historical fetch failed: %s", e)
+        result['error'] = str(e)
+
+    return result
 
 
 def fetch_and_store_daily_vix(db: Session) -> bool:

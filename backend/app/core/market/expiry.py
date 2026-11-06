@@ -76,17 +76,13 @@ def get_next_weekly_expiry_from_kite(underlying: str = "NIFTY", skip_monthly: bo
 
 def get_next_weekly_expiry(today: date | None = None) -> date:
     """
-    Returns next Thursday expiry.
+    Returns next Thursday expiry (NIFTY default).
     """
     today = today or date.today()
-    days_ahead = (1 - today.weekday()) % 7  # Tuesday = 1
-    expiry = today + timedelta(days=days_ahead)
-    
-    # If today is Tuesday and market already closed, move to next week
+    days_ahead = (3 - today.weekday()) % 7  # Thursday = 3
     if days_ahead == 0:
-        expiry = expiry + timedelta(days=7)
-
-    return expiry
+        days_ahead = 7
+    return today + timedelta(days=days_ahead)
 
 def _is_last_weekday_of_month(expiry: date) -> bool:
     """Return True if expiry is the last occurrence of its weekday in the month."""
@@ -117,26 +113,24 @@ def format_zerodha_expiry(expiry: date) -> str:
     return f"{year}{month_code}{expiry.day:02d}"
 
 
-# NSE weekly expiry mapping
+# NSE weekly expiry mapping (Python weekday: Mon=0 … Sun=6)
 WEEKLY_EXPIRY_WEEKDAY = {
-    "NIFTY": 1,        # Tuesday
-    "FINNIFTY": 1,     # Tuesday
-    "BANKNIFTY": 2,    # Wednesday
-    "MIDCPNIFTY": 0,   # Monday (verify when trading)
+    "NIFTY": 3,        # Thursday
+    "FINNIFTY": 2,     # Wednesday (moved from Tuesday post-2024 restructure)
+    "BANKNIFTY": 3,    # Thursday (moved from Wednesday post-2024 restructure)
+    "MIDCPNIFTY": 1,   # Tuesday
 }
 
 
 def get_current_weekly_expiry(underlying: str) -> date:
     """
-    Returns next WEEKLY expiry date for the given underlying (skips monthly expiries).
-    
-    Weekly expiry days:
-    - NIFTY: Tuesday
-    - FINNIFTY: Tuesday
-    - BANKNIFTY: Wednesday
-    - MIDCPNIFTY: Monday
-    
-    Note: Always returns at least the nearest expiry, even if it's monthly.
+    Returns next WEEKLY expiry date for the given underlying.
+
+    Weekly expiry days (post-2024 NSE restructure):
+    - NIFTY:      Thursday
+    - FINNIFTY:   Wednesday
+    - BANKNIFTY:  Thursday
+    - MIDCPNIFTY: Tuesday
     """
     today = date.today()
     weekday_today = today.weekday()  # Monday=0

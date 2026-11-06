@@ -365,12 +365,11 @@ async def check_trade_risk(
         
         manager = get_risk_guard_manager()
         
-        # Get current VIX
+        # Get current VIX — use vix_iv_api which has Zerodha → Yahoo → NSE fallback
         current_vix = None
         try:
-            from app.core.market.provider import fetch_ltp as _fetch_ltp
-            _vix_prices = _fetch_ltp(["NIFTYVIX"])
-            current_vix = float(_vix_prices.get("NIFTYVIX") or 0) or None
+            from app.core.market.vix_iv_api import get_vix_iv_data_cached
+            current_vix = get_vix_iv_data_cached().get("india_vix")
         except Exception:
             pass
         

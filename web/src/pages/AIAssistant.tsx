@@ -53,6 +53,7 @@ const ACTION_LABELS: Record<string, string> = {
   watchlist_symbol_added: 'Symbol Added',
   watchlist_symbol_removed: 'Symbol Removed',
   watchlist_remove_confirmation_required: 'Confirmation Required',
+  nse_news_watchlist: 'NSE News Stocks Added to Watchlist',
 };
 
 const OMIT_ACTION_KEYS = [
@@ -296,6 +297,54 @@ function PlaybookResultCard({ action }: { action: ActionResult }) {
     );
   }
 
+  if (action.tool === 'add_nse_news_to_watchlist') {
+    const added = (action.result.added as Array<Record<string, unknown>> | undefined) ?? [];
+    const high = added.filter(i => String(i.impact) === 'HIGH');
+    const medium = added.filter(i => String(i.impact) === 'MEDIUM');
+    return (
+      <div className="mt-2 rounded-xl border border-blue-800 bg-slate-900/80 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm font-semibold text-white">NSE News → Watchlist</div>
+          <div className="flex items-center gap-1.5">
+            {high.length > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-950 border border-red-700 text-red-300">
+                {high.length} HIGH
+              </span>
+            )}
+            {medium.length > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-950 border border-amber-700 text-amber-300">
+                {medium.length} MEDIUM
+              </span>
+            )}
+            <span className="text-[10px] text-slate-400">{String(action.result.watchlist ?? '')}</span>
+          </div>
+        </div>
+        {added.length > 0 && (
+          <div className="space-y-1">
+            {added.map((item, idx) => (
+              <div key={idx} className={`flex items-start gap-2 text-xs rounded px-2 py-1 ${
+                String(item.impact) === 'HIGH'
+                  ? 'bg-red-950/40 border border-red-900/50'
+                  : 'bg-amber-950/30 border border-amber-900/40'
+              }`}>
+                <span className={`font-bold flex-shrink-0 w-16 truncate ${
+                  String(item.impact) === 'HIGH' ? 'text-red-300' : 'text-amber-300'
+                }`}>{String(item.symbol)}</span>
+                <span className={`text-[9px] font-semibold flex-shrink-0 px-1 rounded ${
+                  String(item.impact) === 'HIGH' ? 'text-red-400' : 'text-amber-400'
+                }`}>{String(item.impact)}</span>
+                <span className="text-slate-400 line-clamp-1 text-[11px]">{String(item.headline ?? '')}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {added.length === 0 && (
+          <div className="text-xs text-slate-500">{String(action.result.message ?? 'No new symbols added.')}</div>
+        )}
+      </div>
+    );
+  }
+
   if (action.tool === 'get_recent_scanner_signals') {
     const signals = (action.result.signals as Array<Record<string, unknown>> | undefined) ?? [];
     return (
@@ -438,6 +487,7 @@ const SUGGESTIONS = [
   'What scanner signals fired this week?',
   'How much am I spending on brokerage?',
   "today's market news summary",
+  'Add high-impact NSE news stocks to my watchlist',
   'Show me trending market topics',
   'What is my profit factor?',
   'Give me geopolitical impact on NIFTY and crude',
@@ -553,6 +603,9 @@ function BotMessageText({ text, isLatest }: { text: string; isLatest: boolean })
 interface NewsHeadline { title: string; source?: string; sentiment?: string; link?: string; description?: string }
 interface TrendingTopic { keyword: string; sentiment?: string | number; count?: number; mentions?: number }
 interface NewsAlert { type?: string; message?: string; priority?: string }
+interface NseAnnouncement { symbol: string; company?: string; headline: string; category?: string; date?: string; pdf_url?: string }
+interface NseCorpAction { symbol: string; company?: string; action_type: string; ex_date?: string; record_date?: string; details?: string }
+interface NseInsider { symbol: string; company?: string; headline: string; direction?: string; date?: string }
 
 function NewsRadarPanel() {
   const [headlines, setHeadlines] = useState<NewsHeadline[]>([]);
@@ -562,6 +615,12 @@ function NewsRadarPanel() {
   const [liveConnected, setLiveConnected] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [nseTab, setNseTab] = useState<'news' | 'nse'>('news');
+  const [nseAnnouncements, setNseAnnouncements] = useState<NseAnnouncement[]>([]);
+  const [nseCorpActions, setNseCorpActions] = useState<NseCorpAction[]>([]);
+  const [nseInsider, setNseInsider] = useState<NseInsider[]>([]);
+  const [nseFetching, setNseFetching] = useState(false);
+  const [nseFetched, setNseFetched] = useState(false);
 
   const fetchNews = useCallback(async () => {
     setFetching(true);
@@ -583,11 +642,32 @@ function NewsRadarPanel() {
     }
   }, []);
 
+  const fetchNse = useCallback(async () => {
+    setNseFetching(true);
+    try {
+      const [annResp, corpResp, insiderResp] = await Promise.all([
+        api.get('/nse/announcements').catch(() => ({ data: {} })),
+        api.get('/nse/corporate-actions').catch(() => ({ data: {} })),
+        api.get('/nse/insider-trading').catch(() => ({ data: {} })),
+      ]);
+      setNseAnnouncements((annResp.data.data || []).slice(0, 15));
+      setNseCorpActions((corpResp.data.actions || []).slice(0, 15));
+      setNseInsider((insiderResp.data.data || []).slice(0, 10));
+      setNseFetched(true);
+    } catch { /* silent */ } finally {
+      setNseFetching(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchNews();
     const t = setInterval(fetchNews, 3 * 60 * 1000);
     return () => clearInterval(t);
   }, [fetchNews]);
+
+  useEffect(() => {
+    if (nseTab === 'nse' && !nseFetched && !nseFetching) fetchNse();
+  }, [nseTab, nseFetched, nseFetching, fetchNse]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
@@ -689,8 +769,8 @@ function NewsRadarPanel() {
             </span>
           )}
           <button
-            onClick={fetchNews}
-            disabled={fetching}
+            onClick={nseTab === 'news' ? fetchNews : fetchNse}
+            disabled={nseTab === 'news' ? fetching : nseFetching}
             className="p-1 rounded text-slate-500 hover:text-amber-300 transition disabled:opacity-40"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -698,6 +778,37 @@ function NewsRadarPanel() {
         </div>
       </div>
 
+      {/* News / NSE tab switcher */}
+      <div className="flex gap-1 mb-3">
+        <button
+          onClick={() => setNseTab('news')}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+            nseTab === 'news'
+              ? 'bg-amber-900/40 border-amber-700 text-amber-200'
+              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Newspaper className="w-3 h-3" /> Market News
+        </button>
+        <button
+          onClick={() => setNseTab('nse')}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+            nseTab === 'nse'
+              ? 'bg-blue-900/40 border-blue-700 text-blue-200'
+              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Activity className="w-3 h-3" /> NSE Actions
+          {(nseAnnouncements.length + nseCorpActions.length + nseInsider.length) > 0 && (
+            <span className="ml-1 rounded-full bg-blue-600 text-white text-[9px] px-1.5 py-0.5">
+              {nseAnnouncements.length + nseCorpActions.length + nseInsider.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* ── Market News tab ── */}
+      {nseTab === 'news' && (<>
       {marqueeAlerts.length > 0 && (
         <div className="mb-3 rounded-lg border border-red-900/60 bg-red-950/20 overflow-hidden">
           <div className="px-2 py-1 text-[10px] uppercase tracking-widest text-red-300 border-b border-red-900/50">Breaking Tape</div>
@@ -792,6 +903,90 @@ function NewsRadarPanel() {
         <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
           <Activity className="w-3.5 h-3.5" />
           No news data available. Make sure the news feed service is running.
+        </div>
+      )}
+      </>)}
+
+      {/* ── NSE Actions tab ── */}
+      {nseTab === 'nse' && (
+        <div className="space-y-3">
+          {nseFetching && (
+            <div className="flex items-center gap-2 text-xs text-slate-400 py-2">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Fetching NSE data…
+            </div>
+          )}
+
+          {/* Corporate Actions */}
+          {nseCorpActions.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-blue-400 mb-1.5 flex items-center gap-1">
+                <TrendingUp className="w-3 h-3" /> Corporate Actions ({nseCorpActions.length})
+              </div>
+              <div className="space-y-1">
+                {nseCorpActions.map((a, i) => (
+                  <div key={i} className="rounded-lg border border-blue-900/40 bg-blue-950/20 px-2.5 py-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-blue-200">{a.symbol}</span>
+                      <span className="text-[10px] text-slate-400">{a.ex_date || a.record_date || ''}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 mt-0.5">{a.action_type}</div>
+                    {a.details && <div className="text-[10px] text-slate-500 mt-0.5 truncate">{a.details}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Announcements */}
+          {nseAnnouncements.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-amber-400 mb-1.5 flex items-center gap-1">
+                <Radio className="w-3 h-3" /> Announcements ({nseAnnouncements.length})
+              </div>
+              <div className="space-y-1">
+                {nseAnnouncements.map((a, i) => (
+                  <div key={i} className="rounded-lg border border-amber-900/40 bg-amber-950/10 px-2.5 py-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-amber-200">{a.symbol}</span>
+                      <span className="text-[10px] text-slate-500">{a.category || ''}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 mt-0.5 line-clamp-2">{a.headline}</div>
+                    {a.pdf_url && (
+                      <a href={a.pdf_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-400 hover:underline mt-0.5 inline-block">View PDF</a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Insider Trading */}
+          {nseInsider.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-emerald-400 mb-1.5 flex items-center gap-1">
+                <Activity className="w-3 h-3" /> Insider / SAST ({nseInsider.length})
+              </div>
+              <div className="space-y-1">
+                {nseInsider.map((a, i) => (
+                  <div key={i} className="rounded-lg border border-emerald-900/40 bg-emerald-950/10 px-2.5 py-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-emerald-200">{a.symbol}</span>
+                      <span className={`text-[10px] font-semibold ${
+                        a.direction === 'BUY' ? 'text-emerald-400' : a.direction === 'SELL' ? 'text-red-400' : 'text-slate-400'
+                      }`}>{a.direction || ''}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 mt-0.5 line-clamp-2">{a.headline}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!nseFetching && nseFetched && nseAnnouncements.length === 0 && nseCorpActions.length === 0 && nseInsider.length === 0 && (
+            <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
+              <Activity className="w-3.5 h-3.5" /> No NSE actions available right now.
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -919,7 +1114,6 @@ export default function AIAssistant() {
   const [activeMode, setActiveMode] = useState<InteractionMode>('general');
   const [currentPrompt, setCurrentPrompt] = useState('');
   const [responseTick, setResponseTick] = useState(0);
-  const [panelTab, setPanelTab] = useState<'playbooks' | 'voice'>('playbooks');
   const [panelOpen, setPanelOpen] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -1000,12 +1194,13 @@ export default function AIAssistant() {
       const history = updatedMessages
         .slice(1)
         .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }));
+      const userId = (() => { try { return localStorage.getItem('fasttrade_user_id') || 'default'; } catch { return 'default'; } })();
       const { data } = await api.post('/ai-chat/query', {
         message: text,
         history,
         voice_mode: voiceEnabled || jarvisMode,
         assistant_style: jarvisMode ? 'jarvis' : undefined,
-      });
+      }, { headers: { 'x-user-id': userId } });
       setMessages((prev) => [...prev, {
         role: 'bot',
         text: data.answer,
@@ -1197,7 +1392,7 @@ export default function AIAssistant() {
   };
 
   return (
-    <div className="flex flex-col h-full max-w-5xl mx-auto overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
 
       {/* ── Compact header bar ── */}
       <motion.div
@@ -1287,143 +1482,15 @@ export default function AIAssistant() {
         </div>
       )}
 
-      {/* ── Chat tab content ── */}
+      {/* ── Chat tab: two-column layout ── */}
       {activeTab === 'chat' && (
-      <>
-      <AnimatePresence initial={false}>
-        {panelOpen && (
-          <motion.div
-            key="panel"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.25 }}
-            className="flex-none overflow-hidden mb-3"
-          >
-            {/* Tab row */}
-            <div className="flex gap-1 mb-2">
-              {([
-                { key: 'playbooks', label: 'Playbooks', icon: BarChart3 },
-                { key: 'voice', label: 'Voice', icon: Mic },
-              ] as const).map(({ key, label, icon: Icon }) => (
-                <button
-                  key={key}
-                  onClick={() => setPanelTab(key)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-                    panelTab === key
-                      ? 'bg-slate-700 border-slate-600 text-white'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  {label}
-                </button>
-              ))}
-            </div>
+      <div className="flex-1 min-h-0 flex gap-3 overflow-hidden">
 
-            {/* Tab: Playbooks */}
-            {panelTab === 'playbooks' && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                {PLAYBOOKS.map((playbook) => {
-                  const Icon = playbook.icon;
-                  return (
-                    <motion.button
-                      key={playbook.title}
-                      onClick={() => send(playbook.prompt)}
-                      disabled={loading}
-                      whileHover={{ y: -2, scale: 1.01 }}
-                      whileTap={{ scale: 0.99 }}
-                      className={`text-left rounded-2xl border bg-gradient-to-br ${playbook.accent} p-3 hover:border-slate-500 transition disabled:opacity-60`}
-                    >
-                      <div className="flex items-start justify-between gap-3 mb-2">
-                        <div className="w-8 h-8 rounded-xl bg-slate-900/70 border border-slate-700 flex items-center justify-center">
-                          <Icon className="w-4 h-4 text-white" />
-                        </div>
-                        <ArrowRight className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
-                      </div>
-                      <h3 className="text-xs font-semibold text-white">{playbook.title}</h3>
-                      <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">{playbook.description}</p>
-                      <div className="mt-2 text-[10px] text-blue-300">{playbook.prompt}</div>
-                    </motion.button>
-                  );
-                })}
-              </div>
-            )}
+        {/* ── LEFT: Chat column ── */}
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
 
-            {/* Tab: Voice */}
-            {panelTab === 'voice' && (
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4">
-                <div className="flex gap-4 flex-wrap items-center">
-                  <button
-                    onClick={engageJarvis}
-                    className={`relative h-16 w-16 rounded-full border flex items-center justify-center transition-all shadow-lg flex-shrink-0 ${isListening ? 'border-amber-400 bg-amber-500/15 text-amber-200 shadow-amber-500/20 scale-105' : 'border-blue-500 bg-blue-500/15 text-blue-100 hover:scale-105 shadow-blue-500/20'}`}
-                  >
-                    <span className={`absolute inset-0 rounded-full ${isListening ? 'animate-ping bg-amber-500/20' : 'bg-blue-500/5'}`} />
-                    {isListening ? <MicOff className="w-6 h-6 relative z-10" /> : <Mic className="w-6 h-6 relative z-10" />}
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">Voice status</div>
-                    <div className={`rounded-xl border px-3 py-2 text-xs ${voiceStatusTone} mb-2`}>{voiceStatus}</div>
-                    <div className="flex flex-wrap gap-2">
-                      <button onClick={() => setJarvisMode((p) => !p)} className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${jarvisMode ? 'bg-blue-600/20 border-blue-500 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>
-                        {jarvisMode ? '🤖 Jarvis ON' : '🤖 Jarvis OFF'}
-                      </button>
-                      <button
-                        onClick={() => { if (voiceEnabled && typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel(); setVoiceEnabled((p) => !p); }}
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border flex items-center gap-1 ${voiceEnabled ? 'bg-emerald-600/20 border-emerald-500 text-emerald-200' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
-                      >
-                        {voiceEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
-                        {voiceEnabled ? 'Replies Spoken' : 'Replies Muted'}
-                      </button>
-                      <button onClick={() => setHandsFreeMode((p) => !p)} className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${handsFreeMode ? 'bg-violet-600/20 border-violet-500 text-violet-200' : 'bg-slate-800 border-slate-700 text-slate-300'}`}>
-                        {handsFreeMode ? '🎙️ Hands-Free ON' : '🎙️ Hands-Free OFF'}
-                      </button>
-                      <button
-                        onClick={() => setContinuousConversation((p) => !p)}
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${continuousConversation ? 'bg-cyan-600/20 border-cyan-500 text-cyan-200' : 'bg-slate-800 border-slate-700 text-slate-300'}`}
-                      >
-                        {continuousConversation ? '🧠 Conversation ON' : '🧠 Conversation OFF'}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="w-full md:w-auto rounded-xl border border-slate-800 bg-slate-900/80 p-3 text-xs text-slate-300">
-                    <div className="font-semibold text-white mb-1">Full Jarvis flow</div>
-                    <ul className="space-y-1 list-disc pl-4 text-slate-400">
-                      <li>Press <span className="text-blue-300 font-semibold">Engage Jarvis</span> and speak</li>
-                      <li>Replies spoken aloud, hands-free loops</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── Dedicated Radar + Future Deck ── */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.06 }}
-        className="flex-none grid grid-cols-1 xl:grid-cols-[1.3fr_0.7fr] gap-3 mb-3"
-      >
-        <div>
-          <div className="flex items-center gap-2 mb-2">
-            <Newspaper className="w-4 h-4 text-amber-300" />
-            <span className="text-[11px] uppercase tracking-widest text-amber-300">Dedicated News Radar</span>
-          </div>
-          <NewsRadarPanel />
-        </div>
-        <FutureOpsPanel
-          activeMode={activeMode}
-          isListening={isListening}
-          loading={loading}
-          onRun={(prompt) => send(prompt)}
-        />
-      </motion.div>
-
-      {/* ── Chat window — takes all remaining space ── */}
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1 pb-2">
+          {/* Chat messages */}
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1 pb-2">
         {(currentPrompt || loading) && (
           <motion.div
             key={`mission-${responseTick}`}
@@ -1529,64 +1596,153 @@ export default function AIAssistant() {
           )}
         </AnimatePresence>
         <div ref={bottomRef} />
-      </div>
+        </div>
 
-      {/* ── Suggestions (horizontal scroll) ── */}
-      <div className="flex-none mt-2">
-        <div className="flex items-center justify-between gap-3 mb-1.5">
-          <div className="text-[10px] uppercase tracking-wide text-slate-500">Quick actions + AI protocols</div>
-          <div className={`text-[10px] px-2 py-0.5 rounded-full border ${MODE_STYLES[activeMode].badge}`}>
-            {MODE_STYLES[activeMode].title}
+          {/* ── Suggestions ── */}
+          <div className="flex-none mt-2">
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+              {SUGGESTIONS.map((s) => (
+                <motion.button
+                  key={s}
+                  onClick={() => send(s)}
+                  whileHover={{ y: -1 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition"
+                >
+                  {s}
+                </motion.button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Input bar ── */}
+          <div className="flex-none mt-2">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                placeholder="Ask Jarvis anything about your trades, news, NSE actions…"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && send(input)}
+                disabled={loading}
+              />
+              <button
+                onClick={engageJarvis}
+                disabled={loading}
+                className={`px-3 py-2.5 rounded-xl transition border ${isListening ? 'bg-amber-600/20 border-amber-500' : 'bg-slate-800 hover:bg-slate-700 border-slate-700'} disabled:opacity-40`}
+              >
+                {isListening ? <MicOff className="w-4 h-4 text-amber-300" /> : <Mic className="w-4 h-4 text-slate-200" />}
+              </button>
+              <button
+                onClick={() => send(input)}
+                disabled={loading || !input.trim()}
+                className="px-3 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-xl transition"
+              >
+                <Send className="w-4 h-4 text-white" />
+              </button>
+            </div>
           </div>
         </div>
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
-          {SUGGESTIONS.map((s) => (
-            <motion.button
-              key={s}
-              onClick={() => send(s)}
-              whileHover={{ y: -1 }}
-              whileTap={{ scale: 0.98 }}
-              className="flex-shrink-0 text-xs px-3 py-1.5 rounded-full bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition"
-            >
-              {s}
-            </motion.button>
-          ))}
-        </div>
-      </div>
+        {/* end LEFT chat column */}
 
-      {/* ── Input bar ── */}
-      <div className="flex-none mt-2">
-        <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1.5">
-          {activeMode === 'news' ? 'Ask for news insight' : 'Type or use voice above'}
-        </div>
-        <div className="flex gap-2">
-          <input
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-            placeholder={activeMode === 'news' ? 'Ask: what is latest market news for my watchlist?' : 'Optional typed command...'}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send(input)}
-            disabled={loading}
-          />
-          <button
-            onClick={engageJarvis}
-            disabled={loading}
-            className={`px-3 py-2.5 rounded-xl transition border ${isListening ? 'bg-amber-600/20 border-amber-500' : 'bg-slate-800 hover:bg-slate-700 border-slate-700'} disabled:opacity-40`}
-          >
-            {isListening ? <MicOff className="w-4 h-4 text-amber-300" /> : <Mic className="w-4 h-4 text-slate-200" />}
-          </button>
-          <button
-            onClick={() => send(input)}
-            disabled={loading || !input.trim()}
-            className="px-3 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-xl transition"
-          >
-            <Send className="w-4 h-4 text-white" />
-          </button>
-        </div>
-      </div>
+        {/* ── RIGHT: Sidebar ── */}
+        {panelOpen && (
+          <div className="flex-none w-72 xl:w-80 flex flex-col gap-3 overflow-y-auto">
 
-      </>
+            {/* News Radar */}
+            <div>
+              <div className="flex items-center gap-2 mb-1.5">
+                <Newspaper className="w-3.5 h-3.5 text-amber-300" />
+                <span className="text-[10px] uppercase tracking-widest text-amber-300">News Radar</span>
+              </div>
+              <NewsRadarPanel />
+            </div>
+
+            {/* Playbooks */}
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Playbooks</div>
+              <div className="space-y-2">
+                {PLAYBOOKS.map((playbook) => {
+                  const Icon = playbook.icon;
+                  return (
+                    <motion.button
+                      key={playbook.title}
+                      onClick={() => send(playbook.prompt)}
+                      disabled={loading}
+                      whileHover={{ x: 2 }}
+                      whileTap={{ scale: 0.98 }}
+                      className={`w-full text-left rounded-xl border bg-gradient-to-br ${playbook.accent} p-2.5 hover:border-slate-500 transition disabled:opacity-60`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-lg bg-slate-900/70 border border-slate-700 flex items-center justify-center flex-shrink-0">
+                          <Icon className="w-3 h-3 text-white" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold text-white truncate">{playbook.title}</div>
+                          <div className="text-[10px] text-slate-400 truncate">{playbook.description}</div>
+                        </div>
+                        <ArrowRight className="w-3 h-3 text-slate-500 flex-shrink-0 ml-auto" />
+                      </div>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Future Ops / Macros */}
+            <FutureOpsPanel
+              activeMode={activeMode}
+              isListening={isListening}
+              loading={loading}
+              onRun={(prompt) => send(prompt)}
+            />
+
+            {/* Voice controls */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-widest text-slate-500">Voice</div>
+                <button
+                  onClick={async () => {
+                    try {
+                      const userId = localStorage.getItem('fasttrade_user_id') || 'default';
+                      await api.delete('/ai-chat/memory', { headers: { 'x-user-id': userId } });
+                      setMessages([{ role: 'bot', text: 'Memory cleared. Starting fresh.' }]);
+                    } catch { /* silent */ }
+                  }}
+                  className="text-[10px] px-2 py-0.5 rounded-full border border-slate-700 bg-slate-800 text-slate-400 hover:text-red-300 hover:border-red-700 transition"
+                  title="Clear conversation memory"
+                >
+                  🧹 Clear Memory
+                </button>
+              </div>
+              <div className={`rounded-lg border px-2.5 py-1.5 text-[11px] mb-2 ${voiceStatusTone}`}>{voiceStatus}</div>
+              <div className="flex flex-wrap gap-1.5">
+                <button onClick={() => setJarvisMode((p) => !p)} className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${jarvisMode ? 'bg-blue-600/20 border-blue-500 text-blue-200' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                  {jarvisMode ? '🤖 ON' : '🤖 OFF'}
+                </button>
+                <button
+                  onClick={() => { if (voiceEnabled && typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel(); setVoiceEnabled((p) => !p); }}
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 ${voiceEnabled ? 'bg-emerald-600/20 border-emerald-500 text-emerald-200' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
+                >
+                  {voiceEnabled ? <Volume2 className="w-2.5 h-2.5" /> : <VolumeX className="w-2.5 h-2.5" />}
+                  {voiceEnabled ? 'Spoken' : 'Muted'}
+                </button>
+                <button onClick={() => setHandsFreeMode((p) => !p)} className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${handsFreeMode ? 'bg-violet-600/20 border-violet-500 text-violet-200' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                  {handsFreeMode ? 'Free ON' : 'Free OFF'}
+                </button>
+                <button onClick={() => setContinuousConversation((p) => !p)} className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${continuousConversation ? 'bg-cyan-600/20 border-cyan-500 text-cyan-200' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>
+                  {continuousConversation ? '🧠 Loop' : '🧠 Off'}
+                </button>
+              </div>
+            </div>
+
+          </div>
+        )}
+        {/* end RIGHT sidebar */}
+
+      </div>
       )}
+      {/* end chat tab */}
 
       {/* ── Floating mic FAB (always visible) ── */}
       <motion.button

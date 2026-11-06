@@ -43,9 +43,9 @@ async def get_overall_sentiment() -> Dict[str, Any]:
         
         # 1. VIX Analysis (30% weight)
         try:
-            from app.core.market.provider import fetch_ltp
-            prices = fetch_ltp(["NIFTYVIX"])
-            vix_level = float(prices.get("NIFTYVIX") or 16.0)
+            from app.api.routes.nse_data import get_vix as _nse_get_vix
+            nse_vix = await _nse_get_vix()
+            vix_level = float(nse_vix.get("current") or 16.0)
             
             # VIX interpretation
             if vix_level < 12:
@@ -233,69 +233,48 @@ async def get_overall_sentiment() -> Dict[str, Any]:
 
 @router.get("/vix")
 async def get_vix_analysis() -> Dict[str, Any]:
-    """
-    Get VIX (India VIX) analysis and interpretation
-    
-    Returns:
-        {
-            "current": 15.8,
-            "change": -0.5,
-            "change_percent": -3.1,
-            "interpretation": "LOW_VOLATILITY",
-            "regime": "CALM",
-            "implications": "...",
-            "historical_percentile": 35,
-            "timestamp": "2024-01-09T15:30:00"
-        }
-    """
+    """Get VIX (India VIX) analysis — fetched from NSE with real prev_close for change."""
     try:
-        from app.core.market.provider import fetch_ltp
-        prices = fetch_ltp(["NIFTYVIX"])
-        current_vix = float(prices.get("NIFTYVIX") or 0)
+        # Delegate to nse_data which fetches real VIX from NSE allIndices
+        from app.api.routes.nse_data import get_vix as _nse_get_vix
+        nse_result = await _nse_get_vix()
+
+        current_vix = nse_result.get("current")
         if not current_vix:
             raise HTTPException(status_code=404, detail="VIX data not available")
-        vix_ohlc = {}
-        prev_close = current_vix  # no prev close from LTP-only call
-        
-        change = current_vix - prev_close
-        change_pct = (change / prev_close * 100) if prev_close > 0 else 0
-        
-        # VIX regime classification
+
+        # NSE allIndices provides previousClose — extract it for real change
+        prev_close = nse_result.get("prev_close") or current_vix
+        change = round(current_vix - prev_close, 2)
+        change_pct = round((change / prev_close * 100) if prev_close > 0 else 0, 2)
+
+        regime = nse_result.get("regime", "NORMAL")
+        implications = nse_result.get("implications", "")
+
         if current_vix < 12:
-            regime = "VERY_CALM"
             interpretation = "VERY_LOW_VOLATILITY"
-            implications = "Market complacency. Low options premiums. Risk of sudden spike."
         elif current_vix < 15:
-            regime = "CALM"
             interpretation = "LOW_VOLATILITY"
-            implications = "Stable market. Good for selling premium strategies."
         elif current_vix < 20:
-            regime = "NORMAL"
             interpretation = "MODERATE_VOLATILITY"
-            implications = "Average volatility. Balanced risk environment."
         elif current_vix < 25:
-            regime = "ELEVATED"
             interpretation = "ELEVATED_VOLATILITY"
-            implications = "Increased uncertainty. Higher options premiums."
         else:
-            regime = "HIGH_STRESS"
             interpretation = "HIGH_VOLATILITY"
-            implications = "Market fear. Ideal for buying premium strategies."
-        
-        # Mock historical percentile (in production, calculate from historical data)
-        historical_percentile = 35
-        
+
         return {
             "current": round(current_vix, 2),
-            "change": round(change, 2),
-            "change_percent": round(change_pct, 2),
+            "change": change,
+            "change_percent": change_pct,
             "interpretation": interpretation,
             "regime": regime,
             "implications": implications,
-            "historical_percentile": historical_percentile,
-            "timestamp": datetime.now().isoformat()
+            "historical_percentile": 35,
+            "timestamp": datetime.now().isoformat(),
         }
-    
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error fetching VIX analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -303,51 +282,51 @@ async def get_vix_analysis() -> Dict[str, Any]:
 
 @router.get("/pcr")
 async def get_pcr_analysis() -> Dict[str, Any]:
-    """
-    Get Put-Call Ratio analysis for NIFTY
-    
-    Returns:
-        {
-            "pcr": 0.85,
-            "interpretation": "NEUTRAL_BULLISH",
-            "put_oi": 8500000,
-            "call_oi": 10000000,
-            "implications": "...",
-            "timestamp": "2024-01-09T15:30:00"
-        }
-    """
+    """Get Put-Call Ratio from real NIFTY option chain (OI-based, volume fallback)."""
     try:
-        # In production, calculate from actual option chain
-        # For now, return mock PCR data
-        pcr_value = 0.85
-        put_oi = 8500000
-        call_oi = 10000000
-        
-        if pcr_value < 0.7:
-            interpretation = "BULLISH"
-            implications = "More calls than puts. Strong bullish sentiment."
-        elif pcr_value < 0.85:
-            interpretation = "NEUTRAL_BULLISH"
-            implications = "Slightly more calls. Moderately bullish outlook."
-        elif pcr_value < 1.0:
-            interpretation = "NEUTRAL"
-            implications = "Balanced put-call distribution."
-        elif pcr_value < 1.15:
-            interpretation = "NEUTRAL_BEARISH"
-            implications = "Slightly more puts. Cautiously bearish."
+        from app.api.routes.options_real import get_real_option_chain
+        chain = await get_real_option_chain("NIFTY")
+
+        strikes = chain.get("strikes") or []
+        call_oi = sum((s.get("call") or {}).get("oi") or 0 for s in strikes)
+        put_oi = sum((s.get("put") or {}).get("oi") or 0 for s in strikes)
+        call_vol = sum((s.get("call") or {}).get("volume") or 0 for s in strikes)
+        put_vol = sum((s.get("put") or {}).get("volume") or 0 for s in strikes)
+
+        # OI-based PCR preferred; fall back to volume
+        if call_oi > 0:
+            pcr_value = round(put_oi / call_oi, 2)
+            basis = "OI"
+        elif call_vol > 0:
+            pcr_value = round(put_vol / call_vol, 2)
+            basis = "Volume"
         else:
-            interpretation = "BEARISH"
-            implications = "More puts than calls. Strong bearish sentiment or hedging."
-        
+            pcr_value = 0.0
+            basis = "Unavailable"
+
+        if pcr_value < 0.7:
+            interpretation, implications = "BULLISH", "More calls than puts. Strong bullish sentiment."
+        elif pcr_value < 0.85:
+            interpretation, implications = "NEUTRAL_BULLISH", "Slightly more calls. Moderately bullish outlook."
+        elif pcr_value < 1.0:
+            interpretation, implications = "NEUTRAL", "Balanced put-call distribution."
+        elif pcr_value < 1.15:
+            interpretation, implications = "NEUTRAL_BEARISH", "Slightly more puts. Cautiously bearish."
+        else:
+            interpretation, implications = "BEARISH", "More puts than calls. Strong bearish sentiment or hedging."
+
         return {
-            "pcr": round(pcr_value, 2),
+            "pcr": pcr_value,
+            "basis": basis,
             "interpretation": interpretation,
             "put_oi": put_oi,
             "call_oi": call_oi,
+            "put_volume": put_vol,
+            "call_volume": call_vol,
             "implications": implications,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-    
+
     except Exception as e:
         logger.error(f"Error calculating PCR: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -1679,14 +1679,14 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
       const spot = Number(trade?.spot || trade?.entry_credit || 0);
       const expiryStr: string = trade?.expiry || trade?.ticket?.expiry || '';
 
-      // Compute days to expiry from stored expiry string
       let expiryDays = 7;
       if (expiryStr) {
-        const exp = new Date(expiryStr);
+        // Handle both 'YYYY-MM-DD' and full ISO strings
+        const exp = new Date(expiryStr.length <= 10 ? expiryStr + 'T00:00:00' : expiryStr);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const diff = Math.round((exp.getTime() - today.getTime()) / 86400000);
-        expiryDays = Math.max(1, diff);
+        if (diff > 0) expiryDays = diff;
       }
 
       // Default IV: 15% for NIFTY/FINNIFTY, 18% for BANKNIFTY
@@ -1719,7 +1719,8 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
   const pnl = Number(trade?.pnl ?? trade?.unrealized_pnl ?? 0);
   const tp = trade?.tp !== null && trade?.tp !== undefined ? Number(trade.tp) : null;
   const sl = trade?.sl !== null && trade?.sl !== undefined ? Number(trade.sl) : null;
-  const trailing = trade?.trailing_sl !== null && trade?.trailing_sl !== undefined ? Number(trade.trailing_sl) : null;
+  const trailing = trade?.trailing_sl ?? trade?.trailing_sl_pct;
+  const trailingSl = trailing !== null && trailing !== undefined ? Number(trailing) : null;
   const entryCredit = Number(trade?.entry_credit ?? trade?.entry_price ?? 0);
   const marginRequired = Number(trade?.margin_required ?? 0);
 
@@ -1731,7 +1732,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
   const isProfitable = pnl >= 0;
   const tpHit = tp !== null ? pnl >= tp : false;
   const slHit = sl !== null ? pnl <= sl : false;
-  const trailingActive = trailing !== null && trailing !== undefined;
+  const trailingActive = trailingSl !== null && trailingSl !== undefined;
 
   const openedAtRaw = trade?.created_at ?? trade?.entry_time ?? trade?.filled_at;
   const openedAtLabel = openedAtRaw ? new Date(openedAtRaw).toLocaleString() : '-';
@@ -1773,8 +1774,6 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
     e.preventDefault();
     setEditLoading(true);
     try {
-      // Real API call to update TP/SL/trailing for this position
-      // @ts-ignore
       const { positionsAPI } = await import('../lib/api');
       await positionsAPI.updateTPSL(trade.intent_id, {
         tp: editTp !== '' ? Number(editTp) : undefined,
@@ -1782,9 +1781,8 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
         trailing_sl: editTrailing !== '' ? Number(editTrailing) : undefined,
       });
       setEditOpen(false);
-      // Optionally, refresh positions here (reload page or trigger parent refresh)
-      window.location.reload();
-    } catch (err) {
+      onRefresh?.();
+    } catch {
       showToast('error', 'Update Failed', 'Failed to update TP/SL/Trailing');
     } finally {
       setEditLoading(false);
@@ -1877,36 +1875,37 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
           </p>
         </div>
         <div>
-          <p className="text-xs text-slate-400">Trailing SL: {trailingActive ? trailing : '-'}</p>
+          <p className="text-xs text-slate-400">Trailing SL: {trailingActive ? trailingSl : '-'}</p>
           <p className={`font-semibold ${trailingActive ? 'text-blue-400' : 'text-slate-300'}`}>
             {trailingActive ? 'Active' : '-'}
           </p>
         </div>
-            {/* Edit TP/SL/Trailing Modal */}
-            {editOpen && (
-              <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                <form onSubmit={handleEditSubmit} className="bg-card border border-border rounded-lg p-6 w-80 space-y-4">
-                  <h3 className="text-lg font-bold text-foreground mb-2">Edit TP / SL / Trailing</h3>
-                  <div className="space-y-2">
-                    <label className="block text-xs text-muted-foreground">Take Profit (TP)</label>
-                    <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editTp} onChange={e => setEditTp(e.target.value)} placeholder="e.g. 1000" />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="block text-xs text-muted-foreground">Stop Loss (SL)</label>
-                    <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editSl} onChange={e => setEditSl(e.target.value)} placeholder="e.g. -1000" />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="block text-xs text-muted-foreground">Trailing Stop</label>
-                    <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editTrailing} onChange={e => setEditTrailing(e.target.value)} placeholder="e.g. 500" />
-                  </div>
-                  <div className="flex gap-2 mt-4">
-                    <button type="submit" disabled={editLoading} className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded font-semibold transition">{editLoading ? 'Saving...' : 'Save'}</button>
-                    <button type="button" onClick={() => setEditOpen(false)} className="flex-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded transition">Cancel</button>
-                  </div>
-                </form>
-              </div>
-            )}
       </div>
+
+      {/* Edit TP/SL/Trailing Modal — rendered outside the grid */}
+      {editOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <form onSubmit={handleEditSubmit} className="bg-card border border-border rounded-lg p-6 w-80 space-y-4">
+            <h3 className="text-lg font-bold text-foreground mb-2">Edit TP / SL / Trailing</h3>
+            <div className="space-y-2">
+              <label className="block text-xs text-muted-foreground">Take Profit (TP)</label>
+              <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editTp} onChange={e => setEditTp(e.target.value)} placeholder="e.g. 1000" />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-xs text-muted-foreground">Stop Loss (SL)</label>
+              <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editSl} onChange={e => setEditSl(e.target.value)} placeholder="e.g. -1000" />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-xs text-muted-foreground">Trailing Stop (%)</label>
+              <input type="number" className="w-full px-2 py-1 bg-background border border-border rounded text-foreground text-sm" value={editTrailing} onChange={e => setEditTrailing(e.target.value)} placeholder="e.g. 5" />
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button type="submit" disabled={editLoading} className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded font-semibold transition">{editLoading ? 'Saving...' : 'Save'}</button>
+              <button type="button" onClick={() => setEditOpen(false)} className="flex-1 px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded transition">Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Legs Section - Expandable */}
       {legs.length > 0 && (
@@ -2032,6 +2031,31 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
           <button
             onClick={() => setHedgeOpen(true)}
             className="px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 text-xs border border-blue-500/30 rounded transition flex items-center justify-center gap-2"
+          >
+            🛡️ Hedge
+          </button>
+          <button
+            onClick={() => setAdjustOpen(true)}
+            className="px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 text-xs border border-purple-500/30 rounded transition flex items-center justify-center gap-2"
+          >
+            🔧 Adjust
+          </button>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="px-3 py-2 bg-green-600/20 hover:bg-green-600/30 text-green-300 text-xs border border-green-500/30 rounded transition flex items-center justify-center gap-2"
+          >
+            ➕ Add
+          </button>
+          <button
+            onClick={() => setShareOpen(true)}
+            className="px-3 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 text-xs border border-amber-500/30 rounded transition flex items-center justify-center gap-2"
+          >
+            📤 Share
+          </button>
+        </div>
+      </div>
+
+      {/* Hedge Position Modal */}
           >
             <span>🛡️</span> Hedge
           </button>

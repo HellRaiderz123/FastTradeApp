@@ -32,7 +32,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+# Copy .env if present (optional — docker-compose env_file is the primary source)
+COPY .env* ./
+
+# Default env vars — overridden by docker-compose env_file
+ENV SCHEDULERS_ENABLED=true \
+    LOG_LEVEL=INFO
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use --workers 1 so APScheduler runs in a single process (avoids duplicate jobs)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

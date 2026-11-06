@@ -10,6 +10,7 @@ import {
   Command,
   Database,
   DollarSign,
+  FileSearch,
   Filter,
   GitCompare,
   Grid,
@@ -28,6 +29,7 @@ import {
   Zap,
   Newspaper,
   ArrowUpDown,
+  MonitorDot,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -93,6 +95,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/signal-reconciliation', icon: RefreshCw, label: 'Signal Reconciliation' },
       { path: '/fii-dii', icon: ArrowUpDown, label: 'FII / DII' },
       { path: '/stock-research', icon: Newspaper, label: 'Stock Research' },
+      { path: '/filing-analysis', icon: FileSearch, label: 'Filing Analysis' },
     ],
   },
   {
@@ -101,6 +104,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: '/finance', icon: Wallet, label: 'Finance' },
       { path: '/scheduled-jobs', icon: Activity, label: 'Scheduled Jobs' },
+      { path: '/system-metrics', icon: MonitorDot, label: 'System Metrics' },
       { path: '/settings', icon: Settings, label: 'Settings' },
     ],
   },

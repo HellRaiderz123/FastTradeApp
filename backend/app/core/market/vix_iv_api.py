@@ -25,21 +25,22 @@ logger = logging.getLogger(__name__)
 
 def get_india_vix_from_zerodha() -> Optional[float]:
     """
-    Fetch India VIX from Zerodha LTP if available.
+    Fetch India VIX from Zerodha using instrument token 264969 (INDIA VIX).
     """
     try:
         from app.core.broker.zerodha.client import get_kite_client
-
         kite = get_kite_client()
-        data = kite.ltp(["NSE:INDIA VIX"])
-        vix = data["NSE:INDIA VIX"]["last_price"]
-
-        logger.info(f"✅ India VIX fetched from Zerodha: {vix}")
-        return float(vix)
-
+        # Zerodha instrument token for INDIA VIX = 264969
+        data = kite.ltp([264969])
+        entry = data.get(264969) or data.get("264969")
+        if entry:
+            vix = float(entry["last_price"])
+            if vix > 0:
+                logger.info("India VIX fetched from Zerodha token 264969: %s", vix)
+                return vix
     except Exception as e:
-        logger.warning(f"⚠️ Zerodha VIX fetch failed: {e}")
-        return None
+        logger.warning("Zerodha VIX fetch failed: %s", e)
+    return None
 
 
 def get_india_vix_from_yahoo() -> Optional[float]:
@@ -158,11 +159,10 @@ def get_vix_iv_data() -> Dict[str, Optional[float]]:
                 result["india_vix"] = vix
                 result["vix_source"] = "nse_scrape"
 
-    # Hard fallback (safe default)
+    # Hard fallback — return None so callers can decide whether to skip
     if result["india_vix"] is None:
-        result["india_vix"] = 18.0
-        result["vix_source"] = "hardcoded"
-        logger.warning("⚠️ Using fallback India VIX = 18.0")
+        logger.warning("All VIX sources failed (Zerodha token, Yahoo, NSE scrape) — india_vix unavailable")
+        result["vix_source"] = "unavailable"
 
     # ---- VIX Rank ----
     vix_rank = get_vix_rank_from_db()

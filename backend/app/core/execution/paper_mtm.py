@@ -95,8 +95,32 @@ def update_paper_mtm(db: Session):
         lots = ticket.get("lots", 1)
         quantity = lot_size * lots
 
+        from app.core.market.provider import is_indstocks
+        from app.core.broker.option_symbols import build_option_symbol as _build_sym
+
+        # When broker=INDMONEY, stored leg["symbol"] is Zerodha-format (e.g. NIFTY26N1024000PE).
+        # Rebuild via build_option_symbol() so INDstocks gets a scrip-code directly.
+        sym_map: dict = {}
+        if is_indstocks() and intent.expiry:
+            try:
+                from datetime import date as _date
+                exp = intent.expiry if isinstance(intent.expiry, _date) else intent.expiry.date()
+                for leg in ticket["legs"]:
+                    strike = leg.get("strike")
+                    opt_type = leg.get("type") or leg.get("option_type")
+                    if strike and opt_type:
+                        sym = _build_sym(
+                            underlying=intent.underlying or "NIFTY",
+                            expiry=exp,
+                            strike=int(strike),
+                            option_type=str(opt_type),
+                        )
+                        sym_map[id(leg)] = sym
+            except Exception:
+                pass
+
         symbols = [
-            leg.get("symbol") or leg.get("tradingsymbol") or ""
+            sym_map.get(id(leg)) or leg.get("symbol") or leg.get("tradingsymbol") or ""
             for leg in ticket["legs"]
         ]
         symbols = [s for s in symbols if s]
@@ -110,14 +134,24 @@ def update_paper_mtm(db: Session):
 
         # ---- MTM PER LEG ----
         for leg in ticket["legs"]:
-            symbol = leg.get("symbol") or leg.get("tradingsymbol")
+            symbol = sym_map.get(id(leg)) or leg.get("symbol") or leg.get("tradingsymbol")
             if not symbol:
                 continue
-            entry_price = leg.get("price") or leg.get("premium")
-            current_price = ltp_map.get(symbol)
-
-            if entry_price is None or current_price is None or float(current_price) <= 0:
+            # Explicit None check — price=0 is valid (deep OTM / expired leg)
+            entry_price = leg.get("price") if leg.get("price") is not None else leg.get("premium")
+            raw_current = ltp_map.get(symbol)
+            # Reject 0 and negative LTP — brokers send 0 for "no trade yet".
+            try:
+                current_price = float(raw_current) if raw_current is not None else None
+            except (TypeError, ValueError):
+                current_price = None
+            if entry_price is None or current_price is None or current_price <= 0:
                 continue
+
+            # Backfill entry price if it was stored as 0 at execution (LTP unavailable then)
+            if float(entry_price) == 0.0:
+                leg["price"] = round(current_price, 2)
+                entry_price = current_price
 
             # Respect lots_multiplier (butterfly middle = 2x, ratio backspread long = 2x)
             m = int(leg.get("lots_multiplier", 1) or 1)

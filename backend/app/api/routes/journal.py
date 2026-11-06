@@ -287,10 +287,21 @@ def list_execution_intents(
                     pnl = 0.0
                     for leg in ticket.get("legs", []):
                         symbol = leg.get("symbol") or f'{leg.get("strike", "")}{leg.get("type", "")}'
-                        current = ltp_map.get(symbol, 0.0)
-                        entry = leg.get("price")
+                        raw_current = ltp_map.get(symbol)
+                        # Reject 0 and negative LTP — brokers send 0 for "no trade yet"
+                        try:
+                            current = float(raw_current) if raw_current is not None else None
+                        except (TypeError, ValueError):
+                            current = None
+                        if current is None or current <= 0:
+                            continue
+                        entry = leg.get("price") if leg.get("price") is not None else leg.get("premium")
                         if entry is None:
                             continue
+                        # Backfill entry price if stored as 0 at execution
+                        if float(entry) == 0.0:
+                            leg["price"] = round(current, 2)
+                            entry = current
                         leg_qty = paper._resolve_leg_qty(leg, ticket_qty)
                         sign = 1.0 if leg["side"] == "SELL" else -1.0
                         pnl += (float(entry) - float(current)) * sign * leg_qty

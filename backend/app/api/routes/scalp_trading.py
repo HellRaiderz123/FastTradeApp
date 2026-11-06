@@ -84,9 +84,8 @@ def _get_spot(underlying: str) -> float:
 
 def _get_vix() -> float:
     try:
-        from app.core.market.provider import fetch_ltp
-        prices = fetch_ltp(["NIFTYVIX"])
-        return float(prices.get("NIFTYVIX") or 16.0)
+        from app.core.market.vix_iv_api import get_vix_iv_data_cached
+        return get_vix_iv_data_cached().get("india_vix") or 16.0
     except Exception:
         return 16.0
 

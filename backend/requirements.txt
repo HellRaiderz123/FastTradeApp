@@ -18,12 +18,21 @@ scipy==1.12.0
 ta==0.11.0
 
 # ===============================
-# ML - lightweight only
-# xgboost, lightgbm, shap, optuna, tensorflow removed (~2.5 GB)
-# ML routes gracefully return "not_trained" without these
+# ML - full stack (daily timeframe)
+# scikit-learn: GBM, RandomForest, HistGradientBoosting (stock_model + ensemble)
+# xgboost: XGBClassifier used in ensemble
+# lightgbm: LGBMClassifier (lazy-imported in ensemble)
+# shap: global + per-symbol feature importance (shap_explainer)
+# optuna: hyperparameter tuning in walk_forward
+# tensorflow: LSTM model (optional — comment out to save ~1.5 GB)
 # ===============================
 scikit-learn==1.4.1.post1
 joblib==1.3.2
+xgboost>=2.0.0
+lightgbm>=4.3.0
+shap>=0.45.0
+optuna>=3.6.0
+tensorflow>=2.16.0
 
 # ===============================
 # HTTP / Broker / Utils

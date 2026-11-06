@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import HeaderSearch from './HeaderSearch';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -115,6 +116,9 @@ const Header: React.FC<HeaderProps> = ({ onToggleSidebar, systemEnabled, onSyste
         </Button>
         <span className="hidden font-semibold text-sm sm:inline-block text-foreground">FastTrade Pro</span>
       </div>
+
+      {/* Centre: page search */}
+      <HeaderSearch />
 
       {/* Right: controls */}
       <div className="ml-auto flex items-center gap-2">

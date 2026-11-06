@@ -180,6 +180,7 @@ def run_walk_forward(
                     verbosity=0, random_state=42, **best_params,
                 )
             except ImportError:
+                logger.warning("XGBoost not installed — falling back to GBM for walk-forward")
                 clf = GradientBoostingClassifier(random_state=42, **best_params)
         elif model_name == "rf":
             from sklearn.ensemble import RandomForestClassifier

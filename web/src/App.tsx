@@ -11,6 +11,7 @@ import { SignalAlertMonitor } from './components/SignalAlertMonitor';
 import CommandPalette from './components/CommandPalette';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { ToastProvider } from './components/Toast';
+import NSEFlashAlerts from './components/NSEFlashAlerts';
 
 // Lazy-loaded pages — code splitting for faster initial load
 const Terminal = lazy(() => import('./pages/TerminalBloomberg'));
@@ -45,6 +46,8 @@ const ScheduledJobs = lazy(() => import('./pages/ScheduledJobs'));
 const QuantBot = lazy(() => import('./pages/QuantBot'));
 const FiiDii = lazy(() => import('./pages/FiiDii'));
 const StockResearch = lazy(() => import('./pages/StockResearch'));
+const SystemMetrics = lazy(() => import('./pages/SystemMetrics'));
+const FilingAnalysis = lazy(() => import('./pages/FilingAnalysis'));
 const Login = lazy(() => import('./pages/Login'));
 
 // Page loader fallback
@@ -142,6 +145,7 @@ function AppInner() {
                 />
                 <SignalAlertMonitor />
                 <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+                <NSEFlashAlerts />
                 <main className="flex-1 overflow-auto p-6">
                   <Suspense fallback={<PageLoader />}>
                     <Routes>
@@ -178,6 +182,8 @@ function AppInner() {
                       <Route path="/scheduled-jobs" element={<ScheduledJobs />} />
                       <Route path="/fii-dii" element={<FiiDii />} />
                       <Route path="/stock-research" element={<StockResearch />} />
+                      <Route path="/system-metrics" element={<SystemMetrics />} />
+                      <Route path="/filing-analysis" element={<FilingAnalysis />} />
                     </Routes>
                   </Suspense>
                 </main>

@@ -226,16 +226,18 @@ async def ws_positions(websocket: WebSocket):
                             "pnl": mtm,
                             "unrealized_pnl": mtm,
                             "entry_credit": intent.entry_credit,
-                            "margin_required": getattr(intent, "margin_required", None),  # Margin blocked by broker
+                            "margin_required": getattr(intent, "margin_required", None),
                             "status": intent.status,
                             "strategy": intent.strategy,
                             "underlying": intent.underlying,
+                            "expiry": intent.expiry,
                             "created_at": created_at.isoformat() if created_at is not None else None,
                             "tp": intent.tp,
                             "sl": intent.sl,
-                            "ticket": ticket,  # Include full ticket with legs
+                            "trailing_sl": intent.trailing_sl_pct,
+                            "ticket": ticket,
                             "legs_metrics": legs_metrics,
-                            "mode": mode,  # Include execution mode
+                            "mode": mode,
                             "smart_suggestion": _suggestion_cache.get(intent.intent_id),
                         }
                     )

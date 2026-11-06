@@ -80,6 +80,7 @@ def _manual_run_allowed(job_id: str) -> bool:
 
 def _serialize_job(job: Any) -> dict[str, Any]:
     manual_state = _scheduler_runs.get(job.id, {})
+    paused = job.next_run_time is None
     return {
         "id": job.id,
         "label": _JOB_LABELS.get(job.id, job.name or job.id.replace("_", " ").title()),
@@ -88,6 +89,7 @@ def _serialize_job(job: Any) -> dict[str, Any]:
         "trigger": _trigger_summary(job.trigger),
         "next_run_time": _iso(job.next_run_time),
         "pending": bool(getattr(job, "pending", False)),
+        "paused": paused,
         "max_instances": getattr(job, "max_instances", None),
         "coalesce": getattr(job, "coalesce", None),
         "manual_run_allowed": _manual_run_allowed(job.id),
@@ -219,3 +221,27 @@ def run_scheduler_job_now(job_id: str) -> dict[str, Any]:
         "status": "queued",
         "message": f"Manual execution queued for {job_id}",
     }
+
+
+@router.post("/scheduler/jobs/{job_id}/pause")
+def pause_scheduler_job(job_id: str) -> dict[str, Any]:
+    """Pause a scheduled job — stops it from firing on its cron schedule."""
+    job = market_scheduler.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Scheduler job '{job_id}' not found")
+    if job.next_run_time is None:
+        return {"ok": True, "job_id": job_id, "paused": True, "message": "Already paused"}
+    market_scheduler.pause_job(job_id)
+    return {"ok": True, "job_id": job_id, "paused": True, "message": f"Job '{job_id}' paused"}
+
+
+@router.post("/scheduler/jobs/{job_id}/resume")
+def resume_scheduler_job(job_id: str) -> dict[str, Any]:
+    """Resume a paused job — restores its cron schedule."""
+    job = market_scheduler.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Scheduler job '{job_id}' not found")
+    if job.next_run_time is not None:
+        return {"ok": True, "job_id": job_id, "paused": False, "message": "Already running"}
+    market_scheduler.resume_job(job_id)
+    return {"ok": True, "job_id": job_id, "paused": False, "message": f"Job '{job_id}' resumed"}

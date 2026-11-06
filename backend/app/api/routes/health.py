@@ -9,7 +9,7 @@ import logging
 
 from app.db.session import SessionLocal
 from app.services.health_monitor import HealthMonitor, performance_tracker
-from app.core.rate_limiter import zerodha_limiter
+from app.core.rate_limiter import broker_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/health", tags=["Health"])
@@ -155,30 +155,28 @@ def endpoint_performance(endpoint: str):
 @router.get("/rate-limiter")
 def get_rate_limiter_status():
     """
-    Get current Zerodha API rate limiter status
-    
-    Returns:
-        - tokens_available: Number of API tokens currently available
-        - wait_time_ms: Milliseconds to wait before next request
-        - cache_stats: Cache performance metrics
+    Get current broker API rate limiter status.
     """
     try:
-        tokens = zerodha_limiter.global_limiter.tokens
-        wait_time = zerodha_limiter.get_wait_time()
-        cache_stats = zerodha_limiter.cache.get_stats()
-        
+        from app.core.broker.registry import get_active_broker
+        active_broker = get_active_broker()
+
+        tokens = broker_limiter.global_limiter.tokens
+        wait_time = broker_limiter.get_wait_time()
+        cache_stats = broker_limiter.cache.get_stats()
+
         return {
             "status": "ok",
             "timestamp": datetime.now().isoformat(),
+            "broker": active_broker,
             "rate_limiter": {
                 "tokens_available": round(tokens, 2),
-                "max_tokens": zerodha_limiter.global_limiter.max_requests,
+                "max_tokens": broker_limiter.global_limiter.max_requests,
                 "wait_time_seconds": round(wait_time, 3),
-                "requests_per_second": zerodha_limiter.global_limiter.max_requests,
-                "window_seconds": zerodha_limiter.global_limiter.window_seconds
+                "requests_per_second": broker_limiter.global_limiter.max_requests,
+                "window_seconds": broker_limiter.global_limiter.window_seconds,
             },
             "cache": cache_stats,
-            "message": "Rate limiter active: 3 requests/second max"
         }
     except Exception as e:
         logger.error(f"Error fetching rate limiter status: {e}")
@@ -189,15 +187,15 @@ def get_rate_limiter_status():
 def get_cache_stats():
     """Get detailed cache statistics"""
     try:
-        stats = zerodha_limiter.cache.get_stats()
-        
+        stats = broker_limiter.cache.get_stats()
+
         return {
             "status": "ok",
             "timestamp": datetime.now().isoformat(),
             "cache": {
                 **stats,
-                "ttl_seconds": zerodha_limiter.cache.ttl_seconds
-            }
+                "ttl_seconds": broker_limiter.cache.ttl_seconds,
+            },
         }
     except Exception as e:
         logger.error(f"Error fetching cache stats: {e}")
