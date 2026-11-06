@@ -1,0 +1,63 @@
+{
+  "model_type": "LSTM",
+  "seq_length": 20,
+  "n_features": 45,
+  "decision_threshold": 0.55,
+  "train_accuracy": 0.6286,
+  "accuracy": 0.6322,
+  "precision": 0.298,
+  "recall": 0.1712,
+  "f1_score": 0.2175,
+  "roc_auc": 0.5002,
+  "train_samples": 163430,
+  "val_samples": 35808,
+  "test_samples": 35896,
+  "epochs_trained": 24,
+  "training_date": "2026-11-06T19:47:24.150041",
+  "overfitting": {
+    "verdict": "NOT_USABLE",
+    "verdict_message": "2 critical issue(s) found. Do NOT use this model for live or paper trading.",
+    "usability_score": 34,
+    "critical_count": 2,
+    "warning_count": 2,
+    "flags": [
+      {
+        "level": "critical",
+        "code": "LOW_ROC_AUC",
+        "message": "ROC-AUC 0.500 is near random (0.50). Model has no discriminative power.",
+        "value": 0.5002,
+        "threshold": 0.52
+      },
+      {
+        "level": "critical",
+        "code": "VERY_LOW_PRECISION",
+        "message": "Precision 29.8% \u2014 more than 60% of BUY signals are wrong. This will generate losing trades.",
+        "value": 0.298,
+        "threshold": 0.4
+      },
+      {
+        "level": "warning",
+        "code": "LOW_F1",
+        "message": "F1 score 21.7% is below minimum threshold. Model is not reliable enough for trading signals.",
+        "value": 0.2175,
+        "threshold": 0.35
+      },
+      {
+        "level": "warning",
+        "code": "CLASS_IMBALANCE_BIAS",
+        "message": "Class accuracy gap 65.7% \u2014 model is biased toward UP signals. (UP acc=17.1%, DOWN acc=82.8%)",
+        "value": 0.6571,
+        "threshold": 0.4
+      }
+    ],
+    "metrics_summary": {
+      "train_accuracy": 0.6286,
+      "test_accuracy": 0.6322,
+      "train_test_gap": -0.0036,
+      "roc_auc": 0.5002,
+      "precision": 0.298,
+      "recall": 0.1712,
+      "f1": 0.2175
+    }
+  }
+}

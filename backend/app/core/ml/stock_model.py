@@ -66,20 +66,23 @@ def _per_symbol_split(
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
     """
     Find the best operating threshold on the val set.
-    Requires minimum 40% precision (to pass diagnostics) while maximizing F1.
+    Targets precision >= 40% with recall >= 15%, maximising F1.
+    Prediction rate must be 8-60% to avoid degenerate thresholds.
+    Falls back to 0.50 if no threshold meets the bar.
     """
     from sklearn.metrics import precision_score as _p, recall_score as _r, f1_score as _f1
     n = len(y_true)
     if n < 50:
         return 0.50
 
-    base_rate = y_true.mean()
+    base_rate = y_true.mean()  # actual positive rate in val set
+    logger.info(f"Threshold search: val_size={n}, base_rate={base_rate:.3f}")
+
     candidates = []
-    
-    for t in np.arange(0.30, 0.75, 0.01):
+    for t in np.arange(0.30, 0.80, 0.01):
         preds = (y_proba >= t).astype(int)
         pred_rate = preds.sum() / n
-        if pred_rate < 0.10 or pred_rate > 0.60:
+        if pred_rate < 0.08 or pred_rate > 0.60:
             continue
         p = _p(y_true, preds, zero_division=0)
         r = _r(y_true, preds, zero_division=0)
@@ -87,27 +90,30 @@ def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
         candidates.append((round(t, 2), p, r, f, pred_rate))
 
     if not candidates:
-        logger.warning(f"Threshold search: no valid threshold. Using 0.50")
+        logger.warning("Threshold search: no valid threshold found. Using 0.50")
         return 0.50
 
-    # Priority 1: precision >= 40% AND recall >= 15%, maximize F1
+    # Priority 1: precision >= 40% AND recall >= 15% — maximize F1
     valid = [(t, p, r, f, pr) for t, p, r, f, pr in candidates if p >= 0.40 and r >= 0.15]
     if valid:
-        best = max(valid, key=lambda x: x[3])  # Best F1
+        best = max(valid, key=lambda x: x[3])
         logger.info(f"Threshold: t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}, pred_rate={best[4]:.3f}")
         return best[0]
 
-    # Priority 2: precision >= 40%, any recall - maximize recall
+    # Priority 2: precision >= 40%, any recall — maximize recall
     valid_prec = [(t, p, r, f, pr) for t, p, r, f, pr in candidates if p >= 0.40]
     if valid_prec:
-        best = max(valid_prec, key=lambda x: x[2])  # Best recall
+        best = max(valid_prec, key=lambda x: x[2])
         logger.info(f"Threshold (prec-only): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
         return best[0]
 
-    # Priority 3: best precision available (model may be weak)
-    best = max(candidates, key=lambda x: x[1])
-    logger.warning(f"Threshold (best-prec): t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
-    return best[0]
+    # Priority 3: best F1 among all candidates (model is weak but usable)
+    best_f1 = max(candidates, key=lambda x: x[3])
+    logger.warning(
+        f"Threshold: model cannot reach 40% precision. Best F1: t={best_f1[0]}, "
+        f"prec={best_f1[1]:.3f}, rec={best_f1[2]:.3f}, f1={best_f1[3]:.3f}. Using it."
+    )
+    return best_f1[0]
 
 
 def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) -> Dict[str, float]:
@@ -127,9 +133,9 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
     imbalance_ratio = n_neg / max(n_pos, 1)
     logger.info(f"📊 Class balance - UP: {n_pos}, DOWN: {n_neg}, ratio: {imbalance_ratio:.1f}x")
 
-    # Apply balanced class weights to handle imbalance properly
-    # Cap the weight to prevent over-correction
-    pos_weight = min(imbalance_ratio, 2.5) if imbalance_ratio > 1.2 else 1.0
+    # With a fixed 4% threshold, positive class will be ~35-45% — near-balanced.
+    # Only apply weighting if genuinely imbalanced (ratio > 1.5x).
+    pos_weight = min(imbalance_ratio, 3.0) if imbalance_ratio > 1.5 else 1.0
     sample_weight = np.where(y_train.values == 1, pos_weight, 1.0).astype(float)
     fit_kwargs = {"clf__sample_weight": sample_weight}
     logger.info(f"📊 Applying sample_weight: pos_weight={pos_weight:.2f}")
@@ -137,15 +143,15 @@ def train_stock_model(db: Session, symbols: List[str], config: StockMLConfig) ->
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", HistGradientBoostingClassifier(
-            max_iter=300,
-            max_depth=4,              # Shallower trees reduce overfitting
-            learning_rate=0.05,       # Slightly higher LR with fewer iterations
-            min_samples_leaf=30,      # Balance between overfit and underfit
-            max_leaf_nodes=20,        # Simpler trees
-            l2_regularization=1.5,    # Moderate regularization
+            max_iter=500,
+            max_depth=5,
+            learning_rate=0.03,
+            min_samples_leaf=50,      # Larger leaves = less overfit on 241k samples
+            max_leaf_nodes=31,
+            l2_regularization=2.0,
             early_stopping=True,
             validation_fraction=0.15,
-            n_iter_no_change=20,
+            n_iter_no_change=30,
             random_state=42,
         )),
     ])

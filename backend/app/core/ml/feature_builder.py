@@ -62,6 +62,13 @@ FEATURE_COLUMNS: List[str] = [
     # New: Trend quality
     "trend_consistency",
     "breakout_strength",
+    # 52-week position (proven momentum factor — Jegadeesh & Titman 1993)
+    "pos_52w",
+    "dist_52w_high",
+    # ATR regime (vol expansion/contraction)
+    "atr_regime",
+    # Overnight gap (institutional activity)
+    "gap",
 ]
 
 
@@ -198,6 +205,22 @@ def build_features_from_df(df: pd.DataFrame, config: StockMLConfig) -> pd.DataFr
     range_20 = rolling_high - rolling_low
     data["breakout_strength"] = (data["close"] - rolling_low) / (range_20 + 1e-8) - 0.5
     data["breakout_strength"] = data["breakout_strength"].clip(-1, 1)
+
+    # --- 52-week high/low position (proven momentum factor in academic literature) ---
+    rolling_high_252 = data["high"].rolling(252, min_periods=60).max().shift(1)
+    rolling_low_252 = data["low"].rolling(252, min_periods=60).min().shift(1)
+    range_252 = rolling_high_252 - rolling_low_252
+    data["pos_52w"] = ((data["close"] - rolling_low_252) / (range_252 + 1e-8)).clip(0, 1)
+    # Distance from 52w high — negative = below high (mean reversion / momentum signal)
+    data["dist_52w_high"] = (data["close"] - rolling_high_252) / (rolling_high_252 + 1e-8)
+    data["dist_52w_high"] = data["dist_52w_high"].clip(-0.5, 0.1)
+
+    # --- ATR regime: current ATR vs its own 60-day average (vol expansion/contraction) ---
+    atr_60_avg = data["atr_norm"].rolling(60, min_periods=20).mean()
+    data["atr_regime"] = (data["atr_norm"] / (atr_60_avg + 1e-8) - 1.0).clip(-1, 2)
+
+    # --- Price gap (overnight gap — institutional activity signal) ---
+    data["gap"] = ((data["open"] - data["close"].shift(1)) / (data["close"].shift(1) + 1e-8)).clip(-0.1, 0.1)
 
     data = data.replace([np.inf, -np.inf], np.nan).dropna()
     return data

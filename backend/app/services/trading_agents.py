@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import threading
@@ -995,6 +996,9 @@ def _compute_indicators(candles: list[dict], timeframe: str = "15m") -> dict:
 # LLM agent calls — each returns a dict (parsed from LLM JSON output)
 # ---------------------------------------------------------------------------
 
+_LLM_AGENT_TIMEOUT = max(float(os.getenv("LLM_AGENT_TIMEOUT_SEC", "90") or 90), 30.0)
+
+
 def _llm_agent(
     agent_name: str,
     system_prompt: str,
@@ -1016,7 +1020,7 @@ def _llm_agent(
         system_prompt=system_prompt,
         max_tokens=max_tokens,
         temperature=0.15,
-        timeout=60.0,
+        timeout=_LLM_AGENT_TIMEOUT,
         caller=agent_name,
     )
     if not raw:

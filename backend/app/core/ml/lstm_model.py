@@ -36,13 +36,15 @@ _check_tf()
 
 
 def _create_sequences(X: np.ndarray, y: np.ndarray, seq_length: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Extract rolling sequences of length seq_length."""
-    if len(X) <= seq_length:
+    """Extract rolling sequences of length seq_length.
+    Sequence i uses X[i:i+seq_length] to predict y[i+seq_length].
+    """
+    n = len(X)
+    if n <= seq_length:
         return np.empty((0, seq_length, X.shape[1])), np.empty((0,))
-    
-    # Vectorized sliding window
-    X_seq = np.lib.stride_tricks.sliding_window_view(X[:-1], window_shape=(seq_length, X.shape[1])).squeeze(1)
-    y_seq = y[seq_length:]
+    num_seq = n - seq_length
+    X_seq = np.stack([X[i:i + seq_length] for i in range(num_seq)])
+    y_seq = y[seq_length:seq_length + num_seq]
     return X_seq, y_seq
 
 
@@ -120,7 +122,7 @@ def _per_symbol_split_lstm(
 
 
 def _build_lstm_model(seq_length: int, n_features: int):
-    """Regularised LSTM architecture to reduce overfitting."""
+    """Regularised LSTM architecture sized for 45 features x seq_length timesteps."""
     import tensorflow as tf
     from tensorflow.keras.models import Sequential
     from tensorflow.keras.layers import LSTM, Dense, Dropout, LayerNormalization, Input
@@ -128,21 +130,27 @@ def _build_lstm_model(seq_length: int, n_features: int):
     from tensorflow.keras.regularizers import l2
     model = Sequential([
         Input(shape=(seq_length, n_features)),
-        LSTM(48, return_sequences=True, dropout=0.25, recurrent_dropout=0.15,
-             kernel_regularizer=l2(5e-5)),
+        LSTM(128, return_sequences=True, dropout=0.20, recurrent_dropout=0.10,
+             kernel_regularizer=l2(1e-4)),
         LayerNormalization(),
 
-        LSTM(24, return_sequences=False, dropout=0.25, recurrent_dropout=0.15,
-             kernel_regularizer=l2(5e-5)),
+        LSTM(64, return_sequences=True, dropout=0.20, recurrent_dropout=0.10,
+             kernel_regularizer=l2(1e-4)),
         LayerNormalization(),
 
-        Dense(16, activation='relu', kernel_regularizer=l2(5e-5)),
-        Dropout(0.2),
+        LSTM(32, return_sequences=False, dropout=0.15, recurrent_dropout=0.10,
+             kernel_regularizer=l2(1e-4)),
+        LayerNormalization(),
+
+        Dense(32, activation='relu', kernel_regularizer=l2(1e-4)),
+        Dropout(0.20),
+        Dense(16, activation='relu', kernel_regularizer=l2(1e-4)),
+        Dropout(0.10),
         Dense(1, activation='sigmoid')
     ])
 
     model.compile(
-        optimizer=Adam(learning_rate=0.0008, clipnorm=1.0),
+        optimizer=Adam(learning_rate=0.0005, clipnorm=1.0),
         loss='binary_crossentropy',
         metrics=['accuracy', tf.keras.metrics.AUC(name='roc_auc')]
     )
@@ -150,27 +158,43 @@ def _build_lstm_model(seq_length: int, n_features: int):
 
 
 def _optimize_threshold_on_val(y_val: np.ndarray, y_proba_val: np.ndarray) -> float:
-    """Find threshold maximising balanced F1 on val set.
-    Pred rate must be 20-55%. Requires minimum recall of 25%.
-    Falls back to 0.45 if no valid threshold found.
+    """Find threshold maximising F1 on val set.
+    Precision floor 40%, recall floor 10%, pred_rate 8-60%.
+    Falls back to best-F1 candidate if no threshold meets the bar.
     """
-    best_t, best_score = 0.45, 0.0
-    for t in np.arange(0.30, 0.65, 0.01):
+    base_rate = y_val.mean()
+    logger.info(f"LSTM threshold search: val_size={len(y_val)}, base_rate={base_rate:.3f}, "
+                f"proba_range=[{y_proba_val.min():.3f}, {y_proba_val.max():.3f}]")
+
+    candidates = []
+    for t in np.arange(0.30, 0.80, 0.01):
         preds = (y_proba_val >= t).astype(int)
         rate = preds.mean()
-        if rate < 0.20 or rate > 0.55:
+        if rate < 0.08 or rate > 0.60:
             continue
         p = precision_score(y_val, preds, zero_division=0)
         r = recall_score(y_val, preds, zero_division=0)
-        if r < 0.25:  # Minimum recall requirement
-            continue
-        f1 = f1_score(y_val, preds, zero_division=0)
-        # Balanced score: F1 with penalty for precision-recall imbalance
-        balance_penalty = abs(p - r) * 0.2
-        score = f1 - balance_penalty
-        if score > best_score:
-            best_score, best_t = score, t
-    return round(float(best_t), 3)
+        f = f1_score(y_val, preds, zero_division=0)
+        candidates.append((round(t, 2), p, r, f, rate))
+
+    if not candidates:
+        logger.warning("LSTM threshold: no valid pred_rate in [8%, 60%]. Using 0.50.")
+        return 0.50
+
+    # Priority 1: precision >= 40% AND recall >= 10% — maximize F1
+    valid = [(t, p, r, f, pr) for t, p, r, f, pr in candidates if p >= 0.40 and r >= 0.10]
+    if valid:
+        best = max(valid, key=lambda x: x[3])
+        logger.info(f"LSTM threshold: t={best[0]}, prec={best[1]:.3f}, rec={best[2]:.3f}, f1={best[3]:.3f}")
+        return best[0]
+
+    # Priority 2: best F1 among all candidates
+    best_f1 = max(candidates, key=lambda x: x[3])
+    logger.warning(
+        f"LSTM threshold: cannot reach 40% precision. Best F1: t={best_f1[0]}, "
+        f"prec={best_f1[1]:.3f}, rec={best_f1[2]:.3f}, f1={best_f1[3]:.3f}"
+    )
+    return best_f1[0]
 
 
 def train_lstm_model(db, symbols, config, seq_length=15, epochs=40, batch_size=256):
@@ -204,8 +228,8 @@ def train_lstm_model(db, symbols, config, seq_length=15, epochs=40, batch_size=2
     model = _build_lstm_model(seq_length, len(FEATURE_COLUMNS))
     
     callbacks = [
-        EarlyStopping(monitor='val_loss', mode='min', patience=12, restore_best_weights=True),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6)
+        EarlyStopping(monitor='val_roc_auc', mode='max', patience=15, restore_best_weights=True),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=6, min_lr=1e-6)
     ]
     
     # Shuffle train sequences to break per-symbol block ordering

@@ -42,8 +42,15 @@ class StockMLConfig:
     max_candles: int = _int_env("STOCK_ML_MAX_CANDLES", 2000)
     min_rows: int = _int_env("STOCK_ML_MIN_ROWS", 300)
 
-    horizon: int = _int_env("STOCK_ML_HORIZON", 5)
-    return_threshold: float = _float_env("STOCK_ML_RETURN_THRESHOLD", 0.015)  # 1.5% threshold for better class balance
+    horizon: int = _int_env("STOCK_ML_HORIZON", 20)
+    return_threshold: float = _float_env("STOCK_ML_RETURN_THRESHOLD", 0.04)  # kept for fallback reference
+
+    # Triple Barrier Label parameters (Lopez de Prado Ch.3)
+    # tp_atr_mult: profit target = entry + tp * ATR(14)
+    # sl_atr_mult: stop loss   = entry - sl * ATR(14)
+    # Asymmetric 2:1 R:R forces the model to only label high-quality setups as BUY
+    tp_atr_mult: float = _float_env("STOCK_ML_TP_ATR_MULT", 2.0)
+    sl_atr_mult: float = _float_env("STOCK_ML_SL_ATR_MULT", 1.0)
 
     min_confidence: int = _int_env("STOCK_ML_MIN_CONFIDENCE", 65)
     bullish_prob_threshold: float = _float_env("STOCK_ML_BULLISH_PROB", 0.60)

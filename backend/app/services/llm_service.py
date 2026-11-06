@@ -93,7 +93,7 @@ def _log_ai_usage(
         logger.debug("AI usage log write failed: %s", _log_err)
 
 # --- Dedicated thread pool for LLM calls (isolated from main app threads) ---
-_LLM_POOL_SIZE = int(os.getenv("LLM_THREAD_POOL_SIZE", "3"))
+_LLM_POOL_SIZE = int(os.getenv("LLM_THREAD_POOL_SIZE", "6"))
 _llm_executor = ThreadPoolExecutor(max_workers=_LLM_POOL_SIZE, thread_name_prefix="llm")
 
 _LLM_BASE = {
@@ -118,6 +118,10 @@ LLM_MODEL_FALLBACKS = [
 LLM_MIN_INTERVAL_SEC = max(float(os.getenv("LLM_MIN_INTERVAL_SEC", "1.5") or 1.5), 0.0)
 LLM_MAX_RETRIES = max(int(os.getenv("LLM_MAX_RETRIES", "3") or 3), 0)
 LLM_RETRY_BASE_DELAY_SEC = max(float(os.getenv("LLM_RETRY_BASE_DELAY_SEC", "2.0") or 2.0), 0.1)
+# Extra seconds added to future.result() timeout to absorb thread-pool queue wait time.
+# With a 3-worker pool and a 9-agent pipeline, a job can wait up to ~3 * LLM_AGENT_TIMEOUT
+# before a worker is free. Setting this to 120s covers the worst-case queue depth.
+LLM_FUTURE_QUEUE_BUFFER_SEC = max(float(os.getenv("LLM_FUTURE_QUEUE_BUFFER_SEC", "120") or 120), 10.0)
 
 # --- Circuit breaker ---
 _CIRCUIT_FAILURE_THRESHOLD = 10
@@ -314,7 +318,7 @@ def request_chat_completion(
         preferred_model=preferred_model,
         caller=caller,
     )
-    return future.result(timeout=timeout + 10)
+    return future.result(timeout=timeout + LLM_FUTURE_QUEUE_BUFFER_SEC)
 
 
 async def request_chat_completion_async(
