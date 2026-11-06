@@ -2056,31 +2056,6 @@ const PositionCard: React.FC<PositionCardProps> = ({ trade, onClose, loading, sm
       </div>
 
       {/* Hedge Position Modal */}
-          >
-            <span>🛡️</span> Hedge
-          </button>
-          <button
-            onClick={() => setAdjustOpen(true)}
-            className="px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 text-xs border border-purple-500/30 rounded transition flex items-center justify-center gap-2"
-          >
-            <span>📊</span> Adjust
-          </button>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="px-3 py-2 bg-green-600/20 hover:bg-green-600/30 text-green-300 text-xs border border-green-500/30 rounded transition flex items-center justify-center gap-2"
-          >
-            <span>➕</span> Add
-          </button>
-          <button
-            onClick={() => setShareOpen(true)}
-            className="px-3 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 text-xs border border-amber-500/30 rounded transition flex items-center justify-center gap-2"
-          >
-            <span>📤</span> Share
-          </button>
-        </div>
-      </div>
-
-      {/* Hedge Position Modal */}
       {hedgeOpen && (
         <HedgeModal
           trade={trade}
