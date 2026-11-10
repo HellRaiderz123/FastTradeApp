@@ -16,6 +16,7 @@ def enrich_signal_with_iv(
     ta_signal: Dict[str, Any],
     *,
     india_vix: Optional[float] = None,
+    vix_prev_close: Optional[float] = None,
     vix_rank: Optional[float] = None,
     iv_regime: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -43,8 +44,19 @@ def enrich_signal_with_iv(
     if india_vix is not None:
         indicators["india_vix"] = round(india_vix, 2)
 
+    if vix_prev_close is not None and vix_prev_close > 0 and india_vix is not None:
+        vix_change_pct = round((india_vix - vix_prev_close) / vix_prev_close * 100, 2)
+        indicators["vix_change_pct"] = vix_change_pct
+        indicators["vix_prev_close"] = round(vix_prev_close, 2)
+
     if vix_rank is not None:
         indicators["vix_rank"] = round(vix_rank, 2)
+
+    # =================================================
+    # VIX availability check
+    # =================================================
+    # vix_ok = False when india_vix is unavailable — prevents false confidence
+    quality_checks["vix_ok"] = india_vix is not None
 
     # =================================================
     # IV Regime (authoritative, do NOT recompute)
@@ -52,9 +64,11 @@ def enrich_signal_with_iv(
     if iv_regime is not None:
         enriched["iv_regime"] = iv_regime
 
-        # Trade permissibility by regime
-        if iv_regime == "LOW":
-            quality_checks["iv_trade_ok"] = True   # spreads allowed, sizing handled elsewhere
+        # Trade permissibility by regime — only valid when VIX is real
+        if india_vix is None:
+            quality_checks["iv_trade_ok"] = False  # can't trust regime without VIX
+        elif iv_regime == "LOW":
+            quality_checks["iv_trade_ok"] = True
         elif iv_regime == "NORMAL":
             quality_checks["iv_trade_ok"] = True
         elif iv_regime == "HIGH":

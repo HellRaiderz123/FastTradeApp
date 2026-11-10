@@ -38,12 +38,24 @@ def decide_strategy(
     rsi = float(indicators.get("rsi", 50))
     stoch_k = float(indicators.get("stoch_k", 50))
     pcr = float(indicators.get("option_pcr", 1.0) or 1.0)
+    vix_change_pct = float(indicators.get("vix_change_pct", 0.0) or 0.0)
 
     day_change_pct = float(ctx.get("day_change_pct", 0.0))
     open_type = ctx.get("open_type", "UNKNOWN")
 
     # OI confirmation from option chain
     oi_confirm = ctx.get("quality_checks", {}).get("oi_bias_confirm", True)
+
+    # ================================================
+    # VIX SPIKE GUARD — block ALL premium selling when VIX is rising fast
+    # A spiking VIX means market expects more movement — bad for short options
+    # ================================================
+    VIX_SPIKE_THRESHOLD = 5.0
+    if vix_change_pct >= VIX_SPIKE_THRESHOLD:
+        return (
+            "NO_TRADE",
+            f"VIX spiking +{vix_change_pct:.1f}% today — short premium too risky",
+        )
 
     # ================================================
     # MEAN REVERSION DETECTION (key for profitability)

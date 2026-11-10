@@ -23,6 +23,45 @@ logger = logging.getLogger(__name__)
 # INDIA VIX FETCHERS
 # ========================================================================
 
+def get_india_vix_from_indstocks() -> Optional[float]:
+    """
+    Fetch India VIX from INDstocks (INDMoney broker) using scrip-code NIDX_40000107.
+    This is the primary source when using INDMoney as broker.
+    """
+    try:
+        from app.core.broker.indstocks.market_data import fetch_full_quotes
+        quotes = fetch_full_quotes(["NIDX_40000107"])
+        entry = quotes.get("NIDX_40000107")
+        if entry:
+            vix = float(entry.get("ltp") or 0)
+            if vix > 0:
+                logger.info("India VIX fetched from INDstocks (NIDX_40000107): %s", vix)
+                return vix
+    except Exception as e:
+        logger.warning("INDstocks VIX fetch failed: %s", e)
+    return None
+
+
+def get_india_vix_prev_close_from_indstocks() -> Optional[float]:
+    """
+    Fetch India VIX previous close from INDstocks for spike detection.
+    Returns None if prev_close equals ltp (fallback case — not real data).
+    """
+    try:
+        from app.core.broker.indstocks.market_data import fetch_full_quotes
+        quotes = fetch_full_quotes(["NIDX_40000107"])
+        entry = quotes.get("NIDX_40000107")
+        if entry:
+            ltp = float(entry.get("ltp") or 0)
+            prev = float(entry.get("prev_close") or 0)
+            # Only return prev_close if it's a real distinct value
+            if prev > 0 and abs(prev - ltp) > 0.001:
+                return prev
+    except Exception as e:
+        logger.warning("INDstocks VIX prev_close fetch failed: %s", e)
+    return None
+
+
 def get_india_vix_from_zerodha() -> Optional[float]:
     """
     Fetch India VIX from Zerodha using instrument token 264969 (INDIA VIX).
@@ -138,13 +177,24 @@ def get_vix_iv_data() -> Dict[str, Optional[float]]:
 
     result = {
         "india_vix": None,
+        "vix_prev_close": None,
+        "vix_change_pct": 0.0,
         "vix_rank": None,
         "vix_source": "fallback",
         "vix_rank_source": "fallback",
     }
 
-    # ---- India VIX ----
-    vix = get_india_vix_from_zerodha()
+    # ---- India VIX (INDstocks first — primary broker) ----
+    vix = get_india_vix_from_indstocks()
+    if vix is not None:
+        result["india_vix"] = vix
+        result["vix_source"] = "indstocks"
+        prev = get_india_vix_prev_close_from_indstocks()
+        if prev and prev > 0:
+            result["vix_prev_close"] = prev
+            result["vix_change_pct"] = round((vix - prev) / prev * 100, 2)
+    else:
+        vix = get_india_vix_from_zerodha()
     if vix is not None:
         result["india_vix"] = vix
         result["vix_source"] = "zerodha"

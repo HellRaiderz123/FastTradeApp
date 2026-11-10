@@ -103,19 +103,29 @@ def update_paper_mtm(db: Session):
         sym_map: dict = {}
         if is_indstocks() and intent.expiry:
             try:
-                from datetime import date as _date
-                exp = intent.expiry if isinstance(intent.expiry, _date) else intent.expiry.date()
-                for leg in ticket["legs"]:
-                    strike = leg.get("strike")
-                    opt_type = leg.get("type") or leg.get("option_type")
-                    if strike and opt_type:
-                        sym = _build_sym(
-                            underlying=intent.underlying or "NIFTY",
-                            expiry=exp,
-                            strike=int(strike),
-                            option_type=str(opt_type),
-                        )
-                        sym_map[id(leg)] = sym
+                from datetime import date as _date, datetime as _datetime
+                raw_expiry = intent.expiry
+                if isinstance(raw_expiry, _date) and not isinstance(raw_expiry, _datetime):
+                    exp = raw_expiry
+                elif isinstance(raw_expiry, _datetime):
+                    exp = raw_expiry.date()
+                elif isinstance(raw_expiry, str):
+                    # Handle both "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats
+                    exp = _date.fromisoformat(raw_expiry.split("T")[0].split(" ")[0])
+                else:
+                    exp = None
+                if exp is not None:
+                    for leg in ticket["legs"]:
+                        strike = leg.get("strike")
+                        opt_type = leg.get("type") or leg.get("option_type")
+                        if strike and opt_type:
+                            sym = _build_sym(
+                                underlying=intent.underlying or "NIFTY",
+                                expiry=exp,
+                                strike=int(strike),
+                                option_type=str(opt_type),
+                            )
+                            sym_map[id(leg)] = sym
             except Exception:
                 pass
 

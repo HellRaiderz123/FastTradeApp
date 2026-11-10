@@ -151,3 +151,5 @@ backend/neon_backup_20261027_183825/*
 
 # B2 upload script with credentials
 upload_to_b2.bat
+backend/data/ml_models/ensemble_model.joblib
+backend/data/ml_models/stock_daily_model.joblib

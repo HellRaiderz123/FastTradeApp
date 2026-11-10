@@ -54,17 +54,19 @@ def build_market_context(sig: Dict[str, Any]) -> Dict[str, Any]:
     # ============================
     # VOLATILITY STATE (INDIA VIX)
     # ============================
-    vol_state = "NORMAL"
+    vol_state = "UNKNOWN"  # unknown until VIX is confirmed
     try:
-        india_vix = indicators.get("india_vix", 15)
+        india_vix = indicators.get("india_vix")
         if india_vix is not None:
             india_vix = float(india_vix)
-            if india_vix >= 20:
+            if india_vix >= 16:
                 vol_state = "HIGH"
-            elif india_vix <= 13:
+            elif india_vix <= 12:
                 vol_state = "LOW"
+            else:
+                vol_state = "NORMAL"
     except (ValueError, TypeError):
-        vol_state = "NORMAL"
+        vol_state = "UNKNOWN"
 
     # ============================
     # IV REGIME (from signal or defaults)

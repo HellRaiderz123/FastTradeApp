@@ -110,6 +110,30 @@ def sync_instruments(force: bool = False) -> int:
                         "source":     source,
                     }
 
+                # For F&O, also store the normalised lookup key UNDERLYING|EXPIRY|STRIKE|TYPE
+                # so option LTP resolution works the same way as the in-memory cache.
+                if source == "fno":
+                    try:
+                        underlying_name = (row.get("UNDERLYING_SCRIP_NAME") or "").strip().upper()
+                        strike_raw = (row.get("STRIKE_PRICE") or "").strip()
+                        opt_type = (row.get("OPTION_TYPE") or "").strip().upper()
+                        expiry_raw = (row.get("EXPIRY_DATE") or "").strip()  # MM/DD/YYYY HH:MM
+                        if underlying_name and strike_raw and opt_type and expiry_raw:
+                            from datetime import datetime as _dt
+                            exp_date = _dt.strptime(expiry_raw.split()[0], "%m/%d/%Y").date()
+                            strike_int = int(float(strike_raw))
+                            lookup_key = f"{underlying_name}|{exp_date}|{strike_int}|{opt_type}"
+                            scrip_code = f"NFO_{sid}"
+                            if lookup_key not in rows_by_sym:
+                                rows_by_sym[lookup_key] = {
+                                    "symbol":     lookup_key,
+                                    "scrip_code": scrip_code,
+                                    "exchange":   exch,
+                                    "source":     source,
+                                }
+                    except Exception:
+                        pass
+
             rows = list(rows_by_sym.values())
 
             if not rows:
@@ -163,6 +187,13 @@ def get_scrip_code_from_db(symbol: str) -> str | None:
     sym = symbol.upper().strip()
     db = SessionLocal()
     try:
+        # F&O lookup keys (UNDERLYING|EXPIRY|STRIKE|TYPE) — query directly without source priority
+        if "|" in sym:
+            row = db.query(IndstocksInstrument.scrip_code).filter(
+                IndstocksInstrument.symbol == sym,
+            ).first()
+            return row[0] if row else None
+
         # For index symbols, scrip_code uses NIDX_/BIDX_ prefix regardless of exchange column
         # Check index source first for known index symbols, then equity, then fno
         source_order = ("index", "equity", "fno") if sym in _INDEX_ALIASES or " " in sym else ("equity", "index", "fno")

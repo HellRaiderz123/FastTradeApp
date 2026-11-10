@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { TrendingUp, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { NAV_SECTIONS, isActiveRoute } from '@/config/navigation';
+import { NAV_SECTIONS, WORKSPACES, isActiveRoute } from '@/config/navigation';
 import { settingsAPI } from '../lib/api';
 
 interface SidebarProps {
@@ -11,25 +11,28 @@ interface SidebarProps {
 }
 
 const COLLAPSED_KEY = 'sidebar_collapsed_sections';
+const WORKSPACE_KEY = 'sidebar_workspace';
 
 function loadCollapsed(): Record<string, boolean> {
-  try {
-    return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '{}');
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function loadWorkspace(): string {
+  return localStorage.getItem(WORKSPACE_KEY) || 'options';
 }
 
 function getModeInfo(mode: string) {
-  if (mode === 'LIVE' || mode === 'ZERODHA_LIVE') return { label: 'Live', color: 'bg-red-500', text: 'text-red-400' };
-  if (mode === 'DRY_RUN' || mode === 'ZERODHA_DRY_RUN') return { label: 'Dry Run', color: 'bg-amber-500', text: 'text-amber-400' };
-  return { label: 'Paper', color: 'bg-emerald-500', text: 'text-emerald-400' };
+  if (mode === 'LIVE' || mode === 'ZERODHA_LIVE') return { label: 'Live', color: 'bg-red-500' };
+  if (mode === 'DRY_RUN' || mode === 'ZERODHA_DRY_RUN') return { label: 'Dry Run', color: 'bg-amber-500' };
+  return { label: 'Paper', color: 'bg-emerald-500' };
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ open }) => {
   const location = useLocation();
   const [executionMode, setExecutionMode] = useState('PAPER_TRADING');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
+  const [activeWorkspace, setActiveWorkspace] = useState<string>(loadWorkspace);
 
   useEffect(() => {
     loadExecutionMode();
@@ -43,9 +46,7 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
       const response = await settingsAPI.getZerodhaSettings();
       const data = response.data || response;
       setExecutionMode(data.execution_mode || 'PAPER_TRADING');
-    } catch {
-      // silent
-    }
+    } catch { /* silent */ }
   };
 
   const toggleSection = (id: string) => {
@@ -56,6 +57,13 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
     });
   };
 
+  const switchWorkspace = (id: string) => {
+    setActiveWorkspace(id);
+    localStorage.setItem(WORKSPACE_KEY, id);
+  };
+
+  const workspace = WORKSPACES.find((w) => w.id === activeWorkspace) ?? WORKSPACES[0];
+  const visibleSections = NAV_SECTIONS.filter((s) => workspace.sectionIds.includes(s.id));
   const mode = getModeInfo(executionMode);
 
   return (
@@ -81,14 +89,70 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
           </Link>
         </div>
 
+        {/* Workspace switcher */}
+        <div className={cn(
+          'shrink-0 border-b border-border',
+          open ? 'px-2 py-2' : 'py-2 flex flex-col items-center gap-1'
+        )}>
+          {open ? (
+            <div className="flex gap-1">
+              {WORKSPACES.map((ws) => {
+                const Icon = ws.icon;
+                const isActive = ws.id === activeWorkspace;
+                return (
+                  <Tooltip key={ws.id}>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => switchWorkspace(ws.id)}
+                        className={cn(
+                          'flex flex-1 flex-col items-center gap-0.5 rounded-md py-1.5 px-1 transition-all duration-150 text-[10px] font-medium',
+                          isActive
+                            ? `bg-primary/10 ${ws.color} border border-primary/20`
+                            : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                        )}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        <span>{ws.label}</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs">{ws.label}</TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          ) : (
+            WORKSPACES.map((ws) => {
+              const Icon = ws.icon;
+              const isActive = ws.id === activeWorkspace;
+              return (
+                <Tooltip key={ws.id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => switchWorkspace(ws.id)}
+                      className={cn(
+                        'flex h-8 w-8 items-center justify-center rounded-md transition-all duration-150',
+                        isActive
+                          ? `bg-primary/10 ${ws.color} border border-primary/20`
+                          : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                      )}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="text-xs">{ws.label}</TooltipContent>
+                </Tooltip>
+              );
+            })
+          )}
+        </div>
+
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-3 no-scrollbar">
-          {NAV_SECTIONS.map((section, sectionIdx) => {
+          {visibleSections.map((section, sectionIdx) => {
             const isCollapsed = !!collapsed[section.id];
 
             return (
               <div key={section.id} className={sectionIdx > 0 ? 'mt-1' : ''}>
-                {/* Section label + toggle */}
                 {open && (
                   <button
                     onClick={() => toggleSection(section.id)}
@@ -106,12 +170,10 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
                   </button>
                 )}
 
-                {/* Divider in collapsed mode */}
                 {!open && sectionIdx > 0 && (
                   <div className="mx-3 my-2 h-px bg-border/60" />
                 )}
 
-                {/* Items */}
                 {(!isCollapsed || !open) && (
                   <div className="px-2 space-y-0.5">
                     {section.items.map((item) => {
@@ -130,14 +192,11 @@ const Sidebar: React.FC<SidebarProps> = ({ open }) => {
                               : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
                           )}
                         >
-                          {/* Active indicator bar */}
                           {active && (
                             <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-full bg-primary" />
                           )}
-                          <Icon className={cn('shrink-0 transition-colors', open ? 'h-4 w-4' : 'h-4 w-4', active ? 'text-primary' : '')} />
-                          {open && (
-                            <span className="truncate text-sm font-medium">{item.label}</span>
-                          )}
+                          <Icon className={cn('shrink-0 transition-colors h-4 w-4', active ? 'text-primary' : '')} />
+                          {open && <span className="truncate text-sm font-medium">{item.label}</span>}
                         </Link>
                       );
 

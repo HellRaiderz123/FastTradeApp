@@ -89,12 +89,41 @@ def _fetch_ltp_indmoney_options(symbols: List[str]) -> Dict[str, float]:
         # Already a scrip code — use directly
         if _is_scrip_code(sym):
             return sym
+        # Try direct symbol key first (INDstocks may index by trading symbol)
+        direct = cache.get(sym.upper())
+        if direct:
+            return direct
         parsed = _parse_zerodha_option_symbol(sym)
         if not parsed:
             return None
         underlying, expiry, strike, opt_type = parsed
         key = f"{underlying}|{expiry}|{strike}|{opt_type}"
-        return cache.get(key)
+        scrip = cache.get(key)
+        if scrip:
+            return scrip
+        # Exact expiry not found (weekly not in INDstocks CSV) —
+        # find nearest available expiry for same underlying+strike+type
+        from datetime import date as _date
+        today = _date.today()
+        prefix = f"{underlying}|"
+        target_key = f"|{strike}|{opt_type}"
+        candidates = [
+            k for k in cache
+            if k.startswith(prefix) and k.endswith(target_key) and k.count("|") == 3
+        ]
+        if candidates:
+            # Pick nearest future expiry to the requested expiry (not just today)
+            def _expiry_date(k):
+                try:
+                    return _date.fromisoformat(k.split("|")[1])
+                except Exception:
+                    return _date.max
+            future = [k for k in candidates if _expiry_date(k) >= today]
+            if future:
+                best = min(future, key=lambda k: abs((_expiry_date(k) - expiry).days))
+                logger.debug("INDMoney: %s expiry not in cache, using nearest: %s", key, best)
+                return cache.get(best)
+        return None
 
     cache = _instruments_cache()
     sym_to_scrip: Dict[str, str] = {}

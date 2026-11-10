@@ -49,7 +49,7 @@ class StockMLConfig:
     # tp_atr_mult: profit target = entry + tp * ATR(14)
     # sl_atr_mult: stop loss   = entry - sl * ATR(14)
     # Asymmetric 2:1 R:R forces the model to only label high-quality setups as BUY
-    tp_atr_mult: float = _float_env("STOCK_ML_TP_ATR_MULT", 2.0)
+    tp_atr_mult: float = _float_env("STOCK_ML_TP_ATR_MULT", 1.5)
     sl_atr_mult: float = _float_env("STOCK_ML_SL_ATR_MULT", 1.0)
 
     min_confidence: int = _int_env("STOCK_ML_MIN_CONFIDENCE", 65)

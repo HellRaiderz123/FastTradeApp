@@ -105,19 +105,43 @@ def create_intent(
         risk_profile: Risk profile for trade limits (conservative/balanced/aggressive)
         db: Database session
     """
-    # 🔹 Fetch real capital from Zerodha if not provided
+    # Fetch capital from active broker if not provided
     if capital is None:
         try:
-            kite = get_kite_client()
-            margins = kite.margins()
-            capital = margins["equity"]["available"]["live_balance"]
-            logger.info(f"📊 Fetched capital from Zerodha: ₹{capital}")
+            from app.core.broker.registry import get_active_broker
+            broker = get_active_broker()
+            if broker == "INDMONEY":
+                from app.core.broker.indmoney.client import get_indmoney_client
+                resp = get_indmoney_client().get_funds()
+                val = (
+                    resp.get("available_balance")
+                    or resp.get("net")
+                    or resp.get("available")
+                    or (resp.get("data") or {}).get("available_balance")
+                    or (resp.get("data") or {}).get("net")
+                )
+                capital = float(val) if val is not None and float(val) > 0 else None
+            else:  # ZERODHA default
+                kite = get_kite_client()
+                margins = kite.margins()
+                capital = margins["equity"]["available"]["live_balance"]
+            logger.info(f"📊 Fetched capital from {broker}: ₹{capital}")
         except Exception as e:
-            logger.error(f"Failed to fetch capital from Zerodha: {str(e)}")
+            logger.error(f"Failed to fetch capital from broker: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to fetch account capital: {str(e)}"
             )
+        # Final fallback — use paper capital so DRY_RUN never blocks
+        if capital is None:
+            from app.core.execution.mode import get_execution_mode, is_live_mode
+            mode = get_execution_mode()
+            if is_live_mode(mode):
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"LIVE mode: cannot fetch capital from broker funds API.",
+                )
+            capital = 20_000_000.0  # ₹2Cr paper fallback
     
     # 🔒 Manual kill switch
     if not is_trading_enabled(db):

@@ -105,6 +105,7 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         db=db,
         symbol=payload["underlying"],
         use_ml=payload.get("use_ml", False),
+        skip_chain_enrichment=bool(payload.get("skip_chain_enrichment")),
     )
 
 
@@ -192,9 +193,10 @@ def run_option_spread(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     # Needed later for lot size
     chain = get_option_chain(underlying)
     
-    # Enrich with live LTP
-    from app.services.market_data import enrich_chain_with_live_oi
-    chain = enrich_chain_with_live_oi(chain)
+    # Enrich with live LTP — skip for suggestions (only leg strikes needed, not full chain)
+    if not payload.get("skip_chain_enrichment"):
+        from app.services.market_data import enrich_chain_with_live_oi
+        chain = enrich_chain_with_live_oi(chain)
     
     # Get lot_size from chain, with fallback based on underlying
     if not chain.empty:

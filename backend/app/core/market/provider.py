@@ -244,23 +244,62 @@ def _get_bulk_quotes_zerodha(symbols: List[str]) -> Dict[str, Dict]:
 
 def _get_bulk_quotes_indstocks(symbols: List[str]) -> Dict[str, Dict]:
     from app.core.broker.indstocks.market_data import fetch_full_quotes_by_symbol
+    from app.core.market.ltp import _is_scrip_code, _is_option_symbol, _fetch_ltp_indmoney_options
 
-    quotes = fetch_full_quotes_by_symbol(symbols)
+    # Strip exchange prefix ("NFO:", "NSE:", "BSE:") before resolving
+    prefix_to_key: Dict[str, str] = {}  # plain -> original (with prefix)
+    plain_symbols: List[str] = []
+    for sym in symbols:
+        plain = sym.split(":", 1)[-1] if ":" in sym else sym
+        prefix_to_key[plain.upper()] = sym
+        plain_symbols.append(plain)
+
     result: Dict[str, Dict] = {}
-    for sym, q in quotes.items():
-        ltp = q.get("ltp", 0)
-        prev_close = q.get("prev_close", 0)
-        result[f"NSE:{sym.upper()}"] = {
-            "last_price": ltp,
-            "ohlc": {
-                "open":  q.get("open", ltp),
-                "high":  q.get("high", ltp),
-                "low":   q.get("low", ltp),
-                "close": prev_close,
-            },
-            "volume": q.get("volume", 0),
-            "average_price": ltp,
-        }
+
+    # Split: scrip-codes and equity go through fetch_full_quotes_by_symbol
+    # Zerodha-format option symbols (e.g. NIFTY26N1224750PE) need cache key resolution
+    option_syms = [s for s in plain_symbols if _is_option_symbol(s) and not _is_scrip_code(s)]
+    other_syms  = [s for s in plain_symbols if s not in option_syms]
+
+    # Resolve option symbols via instruments cache (handles weekly->monthly fallback)
+    if option_syms:
+        ltp_map = _fetch_ltp_indmoney_options(option_syms)
+        for plain, ltp in ltp_map.items():
+            original_key = prefix_to_key.get(plain.upper(), plain)
+            result[original_key] = {
+                "last_price": float(ltp),
+                "ohlc": {"open": ltp, "high": ltp, "low": ltp, "close": ltp},
+                "volume": 0,
+                "average_price": float(ltp),
+                "depth": {
+                    "buy":  [{"price": 0.0, "quantity": 0}],
+                    "sell": [{"price": 0.0, "quantity": 0}],
+                },
+            }
+
+    # Resolve scrip-codes and equity symbols
+    if other_syms:
+        quotes = fetch_full_quotes_by_symbol(other_syms)
+        for plain, q in quotes.items():
+            ltp = q.get("ltp", 0)
+            prev_close = q.get("prev_close", 0)
+            original_key = prefix_to_key.get(plain.upper(), plain)
+            result[original_key] = {
+                "last_price": ltp,
+                "ohlc": {
+                    "open":  q.get("open", ltp),
+                    "high":  q.get("high", ltp),
+                    "low":   q.get("low", ltp),
+                    "close": prev_close,
+                },
+                "volume": q.get("volume", 0),
+                "average_price": ltp,
+                "depth": {
+                    "buy":  [{"price": q.get("bid", 0.0), "quantity": q.get("bid_qty", 0)}],
+                    "sell": [{"price": q.get("ask", 0.0), "quantity": q.get("ask_qty", 0)}],
+                },
+            }
+
     return result
 
 

@@ -32,7 +32,7 @@ from app.core.market.expiry import get_weekly_expiry_for_date
 from app.core.indicators.greeks import GreeksCalculator
 from app.core.indicators.put_call_ratio import OptionChainAnalysis
 from app.core.utils.time import now_ist
-from app.services.market_data import enrich_chain_with_live_oi, get_option_chain, get_spot
+from app.services.market_data import enrich_chain_with_live_oi, get_option_chain, get_spot, get_pcr_fast
 from app.core.signals.base import (
     Signal,
     SignalFactory,
@@ -713,10 +713,11 @@ def generate_signal(
     db: Session,
     symbol: str,
     use_ml: bool = False,
-    vix_rank: Optional[float] = None,     # 🔧 renamed (was iv_rank)
+    vix_rank: Optional[float] = None,
     india_vix: Optional[float] = None,
     iv_regime: Optional[str] = None,
     ml_app_response: Optional[Dict] = None,
+    **kwargs,
 ) -> Dict:
     """
     COMPREHENSIVE signal generation.
@@ -759,8 +760,11 @@ def generate_signal(
                     f"(from {vix_data.get('vix_rank_source')})"
                 )
 
+            vix_prev_close = vix_data.get("vix_prev_close")
+
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch VIX data: {e}")
+            vix_prev_close = None
 
     # =====================================================
     # STEP 3: Determine IV regime (ALWAYS if missing)
@@ -774,8 +778,11 @@ def generate_signal(
 
     # Absolute safety fallback (never return null)
     if iv_regime is None:
+        # india_vix unavailable — use NORMAL but flag it so vix_ok=False propagates
         iv_regime = "NORMAL"
-        logger.warning("⚠️ IV regime unresolved — defaulting to NORMAL")
+        india_vix = None  # keep None so enrich_signal_with_iv sets vix_ok=False
+        vix_prev_close = None
+        logger.warning("⚠️ IV regime unresolved (VIX unavailable) — defaulting to NORMAL, vix_ok=False")
 
     # =====================================================
     # STEP 4: Enrich TA signal with VIX context
@@ -783,10 +790,14 @@ def generate_signal(
     ta_sig = enrich_signal_with_iv(
         ta_sig,
         india_vix=india_vix,
+        vix_prev_close=vix_prev_close,
         vix_rank=vix_rank,
         iv_regime=iv_regime,
     )
-    ta_sig = _enrich_signal_with_option_context(ta_sig, symbol)
+    if kwargs.get("skip_chain_enrichment"):
+        ta_sig = _enrich_signal_with_fast_pcr(ta_sig, symbol)
+    else:
+        ta_sig = _enrich_signal_with_option_context(ta_sig, symbol)
 
     # =====================================================
     # STEP 5: ML Override (optional)
@@ -827,9 +838,38 @@ def generate_signal(
         "iv_regime": iv_regime,
     })
     final_sig["context"] = existing_ctx
-    final_sig = _apply_weekly_option_entry_filter(final_sig, symbol)
+    if not kwargs.get("skip_chain_enrichment"):
+        final_sig = _apply_weekly_option_entry_filter(final_sig, symbol)
 
     return final_sig
+
+
+def _enrich_signal_with_fast_pcr(signal: Dict, symbol: str) -> Dict:
+    """Lightweight PCR enrichment using ATM ± 5 strikes only (no full chain fetch)."""
+    normalized = str(symbol or "").upper().strip()
+    if normalized not in _OPTION_CHAIN_UNDERLYINGS:
+        return signal
+    try:
+        diagnostics = signal.get("diagnostics") if isinstance(signal.get("diagnostics"), dict) else {}
+        spot = _safe_float(diagnostics.get("last_close"), default=0.0)
+        if spot <= 0:
+            spot = _safe_float(get_spot(normalized), default=0.0)
+
+        pcr_data = get_pcr_fast(normalized, spot)
+        if not pcr_data:
+            return signal
+
+        analytics = {
+            "pcr": pcr_data["pcr"],
+            "sentiment": pcr_data["sentiment"],
+            "support_level": pcr_data.get("support"),
+            "resistance_level": pcr_data.get("resistance"),
+            "spot_price": spot,
+        }
+        return _apply_option_context_to_signal(signal, analytics)
+    except Exception as e:
+        logger.warning("⚠️ Fast PCR enrichment failed for %s: %s", normalized, e)
+        return signal
 
 def signal_to_dict(signal: Signal) -> Dict:
     """

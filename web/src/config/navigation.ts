@@ -22,6 +22,7 @@ import {
   Search,
   Settings,
   ShoppingBag,
+  Sigma,
   Star,
   Target,
   TrendingUp,
@@ -30,6 +31,8 @@ import {
   Newspaper,
   ArrowUpDown,
   MonitorDot,
+  Layers,
+  FlaskConical,
 } from 'lucide-react'
 
 export interface NavItem {
@@ -44,7 +47,36 @@ export interface NavSection {
   items: NavItem[]
 }
 
+export interface Workspace {
+  id: string
+  label: string
+  icon: LucideIcon
+  color: string          // tailwind text color for active state
+  sectionIds: string[]   // which NAV_SECTIONS to show
+}
+
 export const NAV_SECTIONS: NavSection[] = [
+  {
+    id: 'options',
+    label: 'Options',
+    items: [
+      { path: '/options', icon: Target, label: 'Options Chain' },
+      { path: '/strategies', icon: Zap, label: 'Spread Strategies' },
+      { path: '/strategy-pnl', icon: PieChart, label: 'Strategy P&L' },
+      { path: '/positions', icon: Briefcase, label: 'Positions' },
+      { path: '/auto-trader', icon: Bot, label: 'Auto Trader' },
+      { path: '/watchlists', icon: Star, label: 'Watchlists' },
+    ],
+  },
+  {
+    id: 'options_ai',
+    label: 'AI',
+    items: [
+      { path: '/ai-analysis', icon: BarChart3, label: 'AI Analysis' },
+      { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
+      { path: '/quant-bot', icon: Activity, label: 'Quant Bot' },
+    ],
+  },
   {
     id: 'market',
     label: 'Market',
@@ -99,6 +131,16 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    id: 'research_ai',
+    label: 'AI',
+    items: [
+      { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
+      { path: '/ai-analysis', icon: BarChart3, label: 'AI Analysis' },
+      { path: '/ml', icon: Brain, label: 'ML Center' },
+      { path: '/quant-bot', icon: Activity, label: 'Quant Bot' },
+    ],
+  },
+  {
     id: 'system',
     label: 'System',
     items: [
@@ -107,6 +149,45 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/system-metrics', icon: MonitorDot, label: 'System Metrics' },
       { path: '/settings', icon: Settings, label: 'Settings' },
     ],
+  },
+  {
+    id: 'system_ai',
+    label: 'AI',
+    items: [
+      { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
+      { path: '/ai-analysis', icon: BarChart3, label: 'AI Analysis' },
+    ],
+  },
+]
+
+export const WORKSPACES: Workspace[] = [
+  {
+    id: 'options',
+    label: 'Options',
+    icon: Sigma,
+    color: 'text-violet-400',
+    sectionIds: ['options', 'options_ai'],
+  },
+  {
+    id: 'research',
+    label: 'Research',
+    icon: FlaskConical,
+    color: 'text-sky-400',
+    sectionIds: ['market', 'intelligence', 'research_ai', 'analytics'],
+  },
+  {
+    id: 'trading',
+    label: 'Trading',
+    icon: Layers,
+    color: 'text-emerald-400',
+    sectionIds: ['market', 'trading', 'analytics', 'system_ai'],
+  },
+  {
+    id: 'system',
+    label: 'System',
+    icon: Settings,
+    color: 'text-slate-400',
+    sectionIds: ['system', 'system_ai'],
   },
 ]
 

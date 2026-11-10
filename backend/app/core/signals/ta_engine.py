@@ -978,13 +978,14 @@ def compute_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int 
 
 
 def compute_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
-    """Stochastic Oscillator"""
+    """Stochastic Oscillator — clamped to [0, 100], NaN-safe."""
     highest_high = high.rolling(period).max()
     lowest_low = low.rolling(period).min()
-    
-    k = ((close - lowest_low) / (highest_high - lowest_low)) * 100
-    d = k.rolling(3).mean()
-    
+    denom = highest_high - lowest_low
+    # Replace zero denominator with NaN to avoid division artifacts, then fill with 50
+    k = ((close - lowest_low) / denom.replace(0, float("nan"))) * 100
+    k = k.clip(0, 100).fillna(50)
+    d = k.rolling(3).mean().fillna(50)
     return k, d
 
 

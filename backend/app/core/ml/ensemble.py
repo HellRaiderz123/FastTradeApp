@@ -110,32 +110,14 @@ class EnsembleModel:
 # Training
 # ---------------------------------------------------------------------------
 
-def _per_symbol_split(
-    x: pd.DataFrame, y: pd.Series, test_ratio: float = 0.2, val_ratio: float = 0.1
+def _chronological_split(
+    x: pd.DataFrame, y: pd.Series,
+    test_ratio: float = 0.20, val_ratio: float = 0.10,
+    embargo_bars: int = 0,
 ) -> Tuple:
-    """Per-symbol chronological split: train=70% / val=10% / test=20%."""
-    train_idx, val_idx, test_idx = [], [], []
-    sym_col = "symbol" if "symbol" in x.columns else None
-    if sym_col is None:
-        n = len(x)
-        t_cut = int(n * (1 - test_ratio - val_ratio))
-        v_cut = int(n * (1 - test_ratio))
-        return x.iloc[:t_cut], x.iloc[t_cut:v_cut], x.iloc[v_cut:], y.iloc[:t_cut], y.iloc[t_cut:v_cut], y.iloc[v_cut:]
-    for _, grp in x.groupby(sym_col, sort=False):
-        idx = grp.index.tolist()
-        n = len(idx)
-        t_cut = int(n * (1 - test_ratio - val_ratio))
-        v_cut = int(n * (1 - test_ratio))
-        train_idx.extend(idx[:t_cut])
-        val_idx.extend(idx[t_cut:v_cut])
-        test_idx.extend(idx[v_cut:])
-    drop = [sym_col]
-    return (
-        x.loc[train_idx].drop(columns=drop),
-        x.loc[val_idx].drop(columns=drop),
-        x.loc[test_idx].drop(columns=drop),
-        y.loc[train_idx], y.loc[val_idx], y.loc[test_idx],
-    )
+    """Global chronological split anchored on timestamp. See stock_model.py."""
+    from app.core.ml.stock_model import _chronological_split as _split
+    return _split(x, y, test_ratio=test_ratio, val_ratio=val_ratio, embargo_bars=embargo_bars)
 
 
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
@@ -248,13 +230,15 @@ def train_ensemble(
         raise ValueError(f"Not enough data ({len(x)} rows, need {config.min_rows})")
 
     class_counts = y.value_counts()
-    logger.info(f"📊 Ensemble dataset: {len(x)} samples, Classes: {dict(class_counts)}")
+    logger.info(f"📊 Ensemble dataset: {len(x)} samples, Labels: {dict(class_counts)}")
 
-    x_train, x_val, x_test, y_train, y_val, y_test = _per_symbol_split(x, y)
+    # Convert 3-class to binary: BULLISH=1 vs (NEUTRAL+BEARISH)=0
+    y_binary = (y == 1).astype(int)
 
-    # Balance training set — undersample majority class
-    # x_train, y_train = _balance_train(x_train, y_train) //as per google
-    logger.info(f"📊 Full chronological train: {len(x_train)} rows")
+    x_train, x_val, x_test, y_train, y_val, y_test = _chronological_split(
+        x, y_binary, embargo_bars=config.horizon
+    )
+    logger.info(f"📊 Ensemble train: {len(x_train)}, val: {len(x_val)}, test: {len(x_test)}")
 
     # Build & fit each pipeline with class balancing
     gbm, gbm_pos_weight = _build_gbm_pipeline(y_train)
@@ -411,23 +395,25 @@ def predict_ensemble(db, symbol: str, config: StockMLConfig) -> Dict[str, Any]:
     per = ensemble.per_model_proba(x)
     per_model = {name: round(float(p[0][1]), 4) for name, p in per.items()}
 
-    if prob_up >= decision_threshold + 0.05:
+    # Correct semantics: binary model trained on BULLISH vs (NEUTRAL+BEARISH)
+    # Low prob_up = "not a clean long setup", NOT a confirmed short
+    if prob_up >= decision_threshold:
         signal, bias = "BULLISH", "BULLISH"
-    elif prob_up <= decision_threshold - 0.05:
-        signal, bias = "BEARISH", "BEARISH"
+        confidence = int((prob_up - decision_threshold) / max(1.0 - decision_threshold, 0.01) * 100)
     else:
         signal, bias = "NO_TRADE", "NEUTRAL"
+        confidence = 0
 
-    confidence = int(abs(prob_up - decision_threshold) / (1 - decision_threshold) * 100)
     confidence = max(0, min(confidence, 100))
 
     return {
         "signal": signal,
         "confidence": confidence,
-        "reason": f"Ensemble prob_up={prob_up:.3f} threshold={decision_threshold} (gbm={per_model.get('gbm',0)}, rf={per_model.get('rf',0)}, xgb={per_model.get('xgb',0)})",
+        "reason": f"Ensemble prob_bullish={prob_up:.3f} threshold={decision_threshold} "
+                  f"(gbm={per_model.get('gbm',0)}, rf={per_model.get('rf',0)}, xgb={per_model.get('xgb',0)})",
         "bias": bias,
         "indicators": {
-            "ensemble_prob_up": round(prob_up, 4),
+            "ensemble_prob_bullish": round(prob_up, 4),
             "decision_threshold": decision_threshold,
             "per_model": per_model,
         },

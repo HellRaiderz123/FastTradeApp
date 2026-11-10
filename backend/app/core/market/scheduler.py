@@ -419,6 +419,18 @@ def _auto_exit_check():
         db.close()
 
 
+def _mtm_update_job():
+    """Update MTM for all open paper positions (runs every 15s during market hours)."""
+    db = SessionLocal()
+    try:
+        from app.core.execution.paper_mtm import update_paper_mtm
+        update_paper_mtm(db)
+    except Exception as e:
+        logger.debug("MTM update skipped: %s", e)
+    finally:
+        db.close()
+
+
 def _update_5m_candles():
     """Update 5-minute candles for intraday strategies."""
     from app.core.market.provider import get_data_broker
@@ -670,6 +682,21 @@ def start_auto_exit_scheduler():
         id="auto_exit_job",
         replace_existing=True,
         max_instances=1,
+    )
+
+    # MTM update: every 15 seconds during market hours.
+    # Websocket periodic_mtm_updates also calls this but only when clients are connected.
+    # This job ensures REST API positions stay fresh even with no WS clients.
+    scheduler.add_job(
+        func=_mtm_update_job,
+        trigger="cron",
+        day_of_week="mon-fri",
+        hour="9-15",
+        second="*/15",
+        id="paper_mtm_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     
     logger.info("Auto-exit scheduler started (every 10 seconds, market hours only)")

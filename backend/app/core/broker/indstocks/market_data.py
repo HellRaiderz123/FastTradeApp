@@ -282,6 +282,7 @@ _INDEX_FALLBACK_SCRIP: Dict[str, str] = {
     "NIFTY BANK":        "NIDX_40000003",  # legacy alias
     "BANKNIFTY":         "NIDX_40000003",
     "NIFTY IT":          "NIDX_40000004",
+    "NIFTY_IT":          "NIDX_40000004",
     "NIFTYFINSRV25 50":  "NIDX_40000076",  # exact CSV name (uppercased)
     "NIFTY FIN SERVICE": "NIDX_40000076",  # legacy alias
     "FINNIFTY":          "NIDX_40000076",
@@ -692,6 +693,34 @@ def fetch_full_quotes(scrip_codes: List[str]) -> Dict[str, Dict]:
                     "prev_close": float(prev_close),
                     "volume":     int(info.get("volume") or info.get("vol") or 0),
                 }
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            if status == 400 and len(batch) > 1:
+                # One or more scrip-codes are invalid/expired — retry individually
+                for code in batch:
+                    try:
+                        _rate_limiter.wait()
+                        r2 = requests.get(
+                            f"{BASE_URL}/market/quotes/full",
+                            params={"scrip-codes": code},
+                            headers=_headers(),
+                            timeout=10,
+                        )
+                        r2.raise_for_status()
+                        info = (r2.json().get("data") or {}).get(code, {})
+                        if info:
+                            ltp = info.get("live_price") or info.get("ltp") or 0.0
+                            prev_close = info.get("prev_close") or info.get("close") or ltp
+                            result[code] = {
+                                "ltp": float(ltp), "open": float(info.get("open") or ltp),
+                                "high": float(info.get("high") or ltp), "low": float(info.get("low") or ltp),
+                                "close": float(info.get("close") or ltp), "prev_close": float(prev_close),
+                                "volume": int(info.get("volume") or info.get("vol") or 0),
+                            }
+                    except Exception:
+                        logger.debug("INDstocks: skipping invalid/expired scrip-code %s", code)
+            else:
+                logger.warning("INDstocks full-quote fetch error (batch %s): %s", batch[:3], exc)
         except Exception as exc:
             logger.warning("INDstocks full-quote fetch error (batch %s): %s", batch[:3], exc)
             # Fall back to LTP-only for this batch
@@ -710,10 +739,16 @@ def fetch_full_quotes(scrip_codes: List[str]) -> Dict[str, Dict]:
 def fetch_full_quotes_by_symbol(symbols: List[str]) -> Dict[str, Dict]:
     """
     Resolve symbols -> scrip-codes -> full quotes -> return keyed by original symbol.
+    Accepts both plain trading symbols (e.g. "RELIANCE") and raw scrip-codes
+    (e.g. "NFO_51234") — scrip-codes are passed through directly.
     Returns {symbol: {ltp, open, high, low, close, prev_close, volume}}.
     """
     sym_to_scrip: Dict[str, str] = {}
     for sym in symbols:
+        # Already a scrip-code (contains underscore segment prefix like NSE_, NFO_, NIDX_)
+        if "_" in sym and sym.split("_")[0] in ("NSE", "NFO", "NIDX", "BIDX", "BSE"):
+            sym_to_scrip[sym] = sym
+            continue
         try:
             sym_to_scrip[sym] = get_scrip_code(sym)
         except KeyError:
@@ -792,9 +827,27 @@ def fetch_ltp(scrip_codes: List[str]) -> Dict[str, float]:
             if status == 429:
                 logger.warning("INDstocks LTP rate limited (429) for batch, skipping")
             elif status == 400:
-                # Bad request - likely invalid scrip code
-                logger.warning("INDstocks LTP bad request (400) for batch %s: %s", 
-                             batch[:3], exc.response.text[:200] if exc.response else "")
+                # Bad request — one or more scrip-codes are invalid/expired
+                if len(batch) > 1:
+                    # Retry individually to salvage valid codes
+                    for code in batch:
+                        try:
+                            _rate_limiter.wait()
+                            r2 = requests.get(
+                                f"{BASE_URL}/market/quotes/ltp",
+                                params={"scrip-codes": code},
+                                headers=_headers(),
+                                timeout=10,
+                            )
+                            r2.raise_for_status()
+                            info = (r2.json().get("data") or {}).get(code, {})
+                            ltp = info.get("live_price")
+                            if ltp is not None:
+                                result[code] = float(ltp)
+                        except Exception:
+                            logger.debug("INDstocks: skipping invalid/expired scrip-code %s", code)
+                else:
+                    logger.debug("INDstocks: skipping invalid/expired scrip-code %s", batch[0])
             else:
                 logger.warning("INDstocks LTP fetch error: %s", exc)
         except Exception as exc:

@@ -28,17 +28,21 @@ def get_next_valid_expiry(instruments: pd.DataFrame, underlying: str):
 def get_next_weekly_expiry_from_kite(underlying: str = "NIFTY", skip_monthly: bool = True) -> date:
     """
     Get the next valid expiry from broker instruments data.
-    Tries Zerodha instruments first, then falls back to naive weekday calculation.
+    For INDMoney: reads nearest expiry from instruments cache (monthly only).
+    For Zerodha: reads from NFO instruments (weekly + monthly).
+    Falls back to naive weekday calculation if broker data unavailable.
     """
     try:
         from app.core.broker.registry import get_active_broker
         broker = get_active_broker()
 
+        if broker == "INDMONEY":
+            return _get_next_expiry_indmoney(underlying)
+
         instruments = None
         if broker == "ZERODHA":
             from app.core.broker.zerodha.instruments import load_instruments
             instruments = load_instruments("NFO")
-        # INDMoney and others: fall through to naive calc below
 
         if instruments is not None and not instruments.empty:
             today = date.today()
@@ -72,6 +76,32 @@ def get_next_weekly_expiry_from_kite(underlying: str = "NIFTY", skip_monthly: bo
     except Exception as e:
         logger.warning("Failed to load broker expiries for %s: %s — using naive calc", underlying, e)
 
+    return get_current_weekly_expiry(underlying)
+
+
+def _get_next_expiry_indmoney(underlying: str) -> date:
+    """
+    Return the nearest future expiry for an underlying from the INDstocks
+    instruments cache. Falls back to naive weekly calc if cache is empty.
+    """
+    try:
+        from app.core.broker.indstocks.market_data import _instruments_cache
+        cache = _instruments_cache()
+        today = date.today()
+        prefix = f"{underlying.upper()}|"
+        expiries = sorted(
+            date.fromisoformat(k.split("|")[1])
+            for k in cache
+            if k.startswith(prefix) and "|" in k
+            and k.split("|")[1] not in ("0", "")
+            and k.count("|") == 3
+        )
+        future = [e for e in expiries if e >= today]
+        if future:
+            logger.info("INDMoney expiry for %s: %s (from cache)", underlying, future[0])
+            return future[0]
+    except Exception as e:
+        logger.warning("INDMoney expiry lookup failed for %s: %s", underlying, e)
     return get_current_weekly_expiry(underlying)
 
 def get_next_weekly_expiry(today: date | None = None) -> date:

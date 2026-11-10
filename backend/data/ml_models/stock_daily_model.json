@@ -1,54 +1,56 @@
 {
   "model_type": "HistGradientBoosting",
+  "label_scheme": "triple_barrier_3class_binary_bullish",
   "timeframe": "daily",
   "horizon": 20,
-  "return_threshold": 0.03,
-  "decision_threshold": 0.6,
-  "train_rows": 167019,
-  "val_rows": 23882,
-  "test_rows": 47793,
-  "total_samples": 238694,
-  "train_accuracy": 0.6564,
-  "accuracy": 0.6832,
-  "precision": 0.359,
-  "recall": 0.0596,
-  "f1_score": 0.1022,
-  "roc_auc": 0.5052,
+  "tp_atr_mult": 1.5,
+  "sl_atr_mult": 1.0,
+  "decision_threshold": 0.52,
+  "train_rows": 8392,
+  "val_rows": 1162,
+  "test_rows": 2384,
+  "total_samples": 12018,
+  "train_accuracy": 0.6422,
+  "accuracy": 0.5931,
+  "precision": 0.341,
+  "recall": 0.4245,
+  "f1_score": 0.3782,
+  "roc_auc": 0.5728,
   "confusion_matrix": [
     [
-      31789,
-      1539
+      1119,
+      570
     ],
     [
-      13603,
-      862
+      400,
+      295
     ]
   ],
   "classification_report": {
     "0": {
-      "precision": 0.7003216425801904,
-      "recall": 0.9538226116178589,
-      "f1-score": 0.8076473577235772,
-      "support": 33328.0
+      "precision": 0.7366688610928243,
+      "recall": 0.6625222024866785,
+      "f1-score": 0.6976309226932669,
+      "support": 1689.0
     },
     "1": {
-      "precision": 0.3590170762182424,
-      "recall": 0.05959211890770826,
-      "f1-score": 0.10221747895173722,
-      "support": 14465.0
+      "precision": 0.34104046242774566,
+      "recall": 0.4244604316546763,
+      "f1-score": 0.3782051282051282,
+      "support": 695.0
     },
-    "accuracy": 0.683175360408428,
+    "accuracy": 0.5931208053691275,
     "macro avg": {
-      "precision": 0.5296693593992163,
-      "recall": 0.5067073652627836,
-      "f1-score": 0.4549324183376572,
-      "support": 47793.0
+      "precision": 0.538854661760285,
+      "recall": 0.5434913170706774,
+      "f1-score": 0.5379180254491975,
+      "support": 2384.0
     },
     "weighted avg": {
-      "precision": 0.5970226123367326,
-      "recall": 0.683175360408428,
-      "f1-score": 0.5941423842664879,
-      "support": 47793.0
+      "precision": 0.6213325619853454,
+      "recall": 0.5931208053691275,
+      "f1-score": 0.6045097284108606,
+      "support": 2384.0
     }
   },
   "feature_importance": {},
@@ -100,69 +102,35 @@
     "gap"
   ],
   "symbols_count": 178,
-  "class_distribution": {
-    "0": 154577,
-    "1": 84117
+  "label_distribution": {
+    "-1": 7152,
+    "1": 4615,
+    "0": 251
   },
-  "training_date": "2026-11-06T19:26:59.019759",
+  "training_date": "2026-11-06T19:59:13.375272",
   "overfitting": {
     "verdict": "NOT_USABLE",
-    "verdict_message": "4 critical issue(s) found. Do NOT use this model for live or paper trading.",
-    "usability_score": 0,
-    "critical_count": 4,
-    "warning_count": 2,
+    "verdict_message": "1 critical issue(s) found. Do NOT use this model for live or paper trading.",
+    "usability_score": 75,
+    "critical_count": 1,
+    "warning_count": 0,
     "flags": [
       {
         "level": "critical",
-        "code": "LOW_ROC_AUC",
-        "message": "ROC-AUC 0.505 is near random (0.50). Model has no discriminative power.",
-        "value": 0.5052,
-        "threshold": 0.52
-      },
-      {
-        "level": "critical",
         "code": "VERY_LOW_PRECISION",
-        "message": "Precision 35.9% \u2014 more than 60% of BUY signals are wrong. This will generate losing trades.",
-        "value": 0.359,
-        "threshold": 0.4
-      },
-      {
-        "level": "critical",
-        "code": "LOW_RECALL",
-        "message": "Recall 6.0% is critically low \u2014 model fires BUY on almost nothing. Precision is meaningless at this signal rate. Threshold is too aggressive.",
-        "value": 0.0596,
-        "threshold": 0.08
-      },
-      {
-        "level": "warning",
-        "code": "LOW_F1",
-        "message": "F1 score 10.2% is below minimum threshold. Model is not reliable enough for trading signals.",
-        "value": 0.1022,
-        "threshold": 0.35
-      },
-      {
-        "level": "critical",
-        "code": "VERY_LOW_PRED_RATE",
-        "message": "Model predicts BUY only 5.0% of the time \u2014 almost never fires.",
-        "value": 0.0502,
-        "threshold": 0.1
-      },
-      {
-        "level": "warning",
-        "code": "CLASS_IMBALANCE_BIAS",
-        "message": "Class accuracy gap 89.4% \u2014 model is biased toward UP signals. (UP acc=6.0%, DOWN acc=95.4%)",
-        "value": 0.8942,
+        "message": "Precision 34.1% \u2014 more than 60% of BUY signals are wrong. This will generate losing trades.",
+        "value": 0.341,
         "threshold": 0.4
       }
     ],
     "metrics_summary": {
-      "train_accuracy": 0.6564,
-      "test_accuracy": 0.6832,
-      "train_test_gap": -0.0267,
-      "roc_auc": 0.5052,
-      "precision": 0.359,
-      "recall": 0.0596,
-      "f1": 0.1022
+      "train_accuracy": 0.6422,
+      "test_accuracy": 0.5931,
+      "train_test_gap": 0.049,
+      "roc_auc": 0.5728,
+      "precision": 0.341,
+      "recall": 0.4245,
+      "f1": 0.3782
     }
   }
 }

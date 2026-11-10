@@ -279,6 +279,79 @@ def _normalize_position(p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+@router.post("/refresh-instruments")
+def refresh_indstocks_instruments() -> Dict[str, Any]:
+    """
+    Force-reload the INDstocks instruments cache (equity + fno + index).
+    Call this after setting a new token, or when option chain LTPs show 0.
+    """
+    from app.core.broker.indstocks.market_data import _refresh_instruments_cache, _instruments_cache
+    try:
+        _refresh_instruments_cache()
+        cache = _instruments_cache()
+        fno_count = sum(1 for k in cache if "|" in k)  # lookup keys are UNDERLYING|EXPIRY|STRIKE|TYPE
+        equity_count = sum(1 for k, v in cache.items() if "|" not in k and v.startswith("NSE_"))
+        index_count = sum(1 for k, v in cache.items() if "|" not in k and v.startswith(("NIDX_", "BIDX_")))
+        return {
+            "status": "ok",
+            "total_symbols": len(cache),
+            "fno_contracts": fno_count,
+            "equity_symbols": equity_count,
+            "index_symbols": index_count,
+        }
+    except Exception as e:
+        logger.error("instruments cache refresh failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/instruments-status")
+def indstocks_instruments_status() -> Dict[str, Any]:
+    """Check current instruments cache size without refreshing."""
+    from app.core.broker.indstocks.market_data import _instruments_cache, _cache_loaded_at
+    import time
+    cache = _instruments_cache()
+    age_seconds = int(time.time() - _cache_loaded_at) if _cache_loaded_at else None
+    fno_count = sum(1 for k in cache if "|" in k)
+    return {
+        "total_symbols": len(cache),
+        "fno_contracts": fno_count,
+        "cache_age_seconds": age_seconds,
+        "is_empty": len(cache) == 0,
+    }
+
+
+@router.get("/debug-option")
+def debug_option_lookup(
+    underlying: str = "BANKNIFTY",
+    expiry: str = "2026-11-12",
+    strike: int = 58300,
+    option_type: str = "PE",
+) -> Dict[str, Any]:
+    """Debug: check if a specific option lookup key exists in the instruments cache."""
+    from app.core.broker.indstocks.market_data import _instruments_cache
+    cache = _instruments_cache()
+    lookup_key = f"{underlying.upper()}|{expiry}|{strike}|{option_type.upper()}"
+    scrip = cache.get(lookup_key)
+    # Show all expiries available for this underlying
+    und_prefix = f"{underlying.upper()}|"
+    expiries = sorted(set(k.split("|")[1] for k in cache if k.startswith(und_prefix) and "|" in k))[:10]
+    # Sample keys for this underlying+expiry
+    prefix = f"{underlying.upper()}|{expiry}|"
+    samples = sorted(k for k in cache if k.startswith(prefix))[:20]
+    # Also check what underlying names exist in cache for BANK
+    bank_underlyings = sorted(set(
+        k.split("|")[0] for k in cache if "BANK" in k.split("|")[0] and "|" in k
+    ))[:10]
+    return {
+        "lookup_key": lookup_key,
+        "scrip_code": scrip,
+        "found": scrip is not None,
+        "available_expiries": expiries,
+        "sample_keys_for_expiry": samples,
+        "bank_underlying_names_in_cache": bank_underlyings,
+    }
+
+
 @router.get("/positions")
 def get_indmoney_positions(
     segment: str = "derivative",

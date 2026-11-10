@@ -176,7 +176,14 @@ export const StrategyManager: React.FC = () => {
       const response = await executionAPI.executeSingle(strategyId);
       const runResult = response.data;
 
-      // 2) Create execution intent from run_id
+      // 2) Guard: only proceed if strategy approved the trade
+      if (!runResult?.approved) {
+        setResults([{ ...runResult, success: false }, ...results]);
+        showToast('warning', 'No Trade', runResult?.reason || 'Strategy did not approve a trade');
+        return;
+      }
+
+      // 3) Create execution intent from run_id
       const runId = runResult?.run_id;
       if (!runId) {
         setResults([runResult, ...results]);
