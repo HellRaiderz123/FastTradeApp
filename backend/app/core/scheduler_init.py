@@ -243,11 +243,12 @@ def _schedule_ai_outcome_evaluation() -> None:
 
 
 def _schedule_instruments_sync() -> None:
-    """Schedule daily INDstocks instruments re-sync."""
+    """Schedule daily INDstocks instruments re-sync and warm cache on startup."""
     try:
         from apscheduler.triggers.cron import CronTrigger
         from app.core.market.scheduler import scheduler
         from app.core.broker.indstocks.instruments_sync import sync_instruments
+        from app.core.broker.registry import get_active_broker
 
         scheduler.add_job(
             lambda: sync_instruments(force=True),
@@ -256,6 +257,23 @@ def _schedule_instruments_sync() -> None:
             replace_existing=True,
         )
         logger.info("✅ INDstocks instruments daily re-sync scheduled (08:00 IST)")
+
+        # On startup: load cache from DB immediately (instant, no API call),
+        # then trigger a background API sync only if DB is stale (> 12h old).
+        if get_active_broker() == "INDMONEY":
+            def _startup_instruments():
+                try:
+                    from app.core.broker.indstocks.instruments_sync import load_cache_from_db, sync_instruments
+                    count = load_cache_from_db()
+                    if count > 0:
+                        logger.info("✅ INDstocks instruments cache loaded from DB: %d symbols", count)
+                    else:
+                        # DB empty — run full sync now
+                        logger.info("INDstocks DB empty — running initial instruments sync")
+                        sync_instruments(force=True)
+                except Exception as exc:
+                    logger.warning("⚠️ INDstocks startup instruments load failed: %s", exc)
+            threading.Thread(target=_startup_instruments, name="indstocks-instruments-startup", daemon=True).start()
     except Exception as e:
         logger.warning("⚠️ INDstocks instruments daily sync scheduler failed: %s", e)
 

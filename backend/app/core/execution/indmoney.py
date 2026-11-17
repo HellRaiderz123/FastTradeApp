@@ -209,7 +209,10 @@ class INDMoneyExecutionAdapter:
         ltp_map = get_ltp(symbols)
         ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
 
-        has_leg_prices = all(leg.get("price") is not None for leg in ticket.get("legs", []))
+        has_leg_prices = all(
+            leg.get("price") is not None and float(leg.get("price", 0)) > 0
+            for leg in ticket.get("legs", [])
+        )
         if has_leg_prices:
             pnl = 0.0
             for leg in ticket.get("legs", []):
@@ -217,10 +220,9 @@ class INDMoneyExecutionAdapter:
                 if not sym:
                     continue
                 ltp = float(ltp_map.get(sym) or 0.0)
-                entry = leg.get("price")
-                if entry is None:
+                if ltp <= 0:
                     continue
-                entry_f = float(entry)
+                entry_f = float(leg["price"])
                 leg_qty = self._resolve_leg_qty(leg, ticket_qty)
                 if leg.get("side") == "SELL":
                     pnl += (entry_f - ltp) * leg_qty
@@ -228,20 +230,16 @@ class INDMoneyExecutionAdapter:
                     pnl += (ltp - entry_f) * leg_qty
             return round(pnl, 2)
 
-        entry_credit = float(getattr(intent, "entry_credit", 0.0) or 0.0)
-        cost_to_close = 0.0
+        # Entry prices are 0 (LTP unavailable at execution time) — backfill from current LTP
+        # and return 0 P&L for this tick (no entry baseline yet)
         for leg in ticket.get("legs", []):
             sym = leg.get("symbol")
             if not sym:
                 continue
             ltp = float(ltp_map.get(sym) or 0.0)
-            leg_qty = self._resolve_leg_qty(leg, ticket_qty)
-            if leg.get("side") == "SELL":
-                cost_to_close += ltp * leg_qty
-            else:
-                cost_to_close -= ltp * leg_qty
-
-        return round(entry_credit - cost_to_close, 2)
+            if ltp > 0 and (leg.get("price") is None or float(leg.get("price", 0)) == 0.0):
+                leg["price"] = round(ltp, 2)
+        return 0.0
 
     def sync_protection(self, intent) -> Dict[str, Any]:
         gtt_supported = bool(getattr(self.client, "gtt_path", "")) and hasattr(self.client, "place_gtt")

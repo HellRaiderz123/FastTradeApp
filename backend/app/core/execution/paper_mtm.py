@@ -98,8 +98,6 @@ def update_paper_mtm(db: Session):
         from app.core.market.provider import is_indstocks
         from app.core.broker.option_symbols import build_option_symbol as _build_sym
 
-        # When broker=INDMONEY, stored leg["symbol"] is Zerodha-format (e.g. NIFTY26N1024000PE).
-        # Rebuild via build_option_symbol() so INDstocks gets a scrip-code directly.
         sym_map: dict = {}
         if is_indstocks() and intent.expiry:
             try:

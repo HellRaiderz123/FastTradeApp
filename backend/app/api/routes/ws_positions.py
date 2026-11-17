@@ -16,6 +16,7 @@ from app.db.models_intent import ExecutionIntent
 from app.db.session import SessionLocal
 from app.services.zerodha_ticker import get_cached_ltp as get_ticker_ltp
 from app.core.exit.broker_reconcile import reconcile_broker_positions
+from app.core.execution.base import get_ticket
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["WebSocket"])
@@ -102,6 +103,36 @@ def _try_get_mtm_with_ticker_cache(adapter: Any, intent: Any, is_zerodha: bool) 
     return adapter.mtm(intent)
 
 
+def _read_leg_metrics_from_ticket(intent: Any) -> List[Dict[str, Any]]:
+    """
+    Read per-leg entry/LTP/P&L directly from the ticket legs.
+    Called AFTER adapter.mtm() has already written leg["ltp"] and leg["leg_pnl"]
+    back into the ticket, so values are always fresh.
+    """
+    ticket = get_ticket(intent)
+    legs = ticket.get("legs", [])
+    if not legs:
+        return []
+    ticket_qty = int(ticket.get("lot_size", 1)) * int(ticket.get("lots", 1))
+    metrics: List[Dict[str, Any]] = []
+    for leg in legs:
+        sym = leg.get("symbol") or leg.get("tradingsymbol") or ""
+        entry = leg.get("price") if leg.get("price") is not None else leg.get("premium")
+        ltp = leg.get("ltp")
+        leg_pnl = leg.get("leg_pnl")
+        side = (leg.get("side") or leg.get("action") or "").upper()
+        leg_qty = _resolve_leg_qty(leg, ticket_qty)
+        metrics.append({
+            "symbol": sym,
+            "side": side,
+            "entry": round(float(entry), 2) if entry is not None and float(entry) > 0 else None,
+            "ltp": round(float(ltp), 2) if ltp is not None and float(ltp) > 0 else None,
+            "pnl": round(float(leg_pnl), 2) if leg_pnl is not None else None,
+            "qty": leg_qty,
+        })
+    return metrics
+
+
 @router.websocket("/ws/positions")
 async def ws_positions(websocket: WebSocket):
     try:
@@ -116,19 +147,27 @@ async def ws_positions(websocket: WebSocket):
     # Initialize adapters
     paper_adapter = PaperExecutionAdapter()
     zerodha_adapter = None
-    
+    indmoney_adapter = None
+
     # Smart suggestion cache (refreshed every _SMART_SUGGESTION_INTERVAL seconds)
     _suggestion_cache: Dict[str, Any] = {}
     _suggestion_last_refresh: float = 0.0
     _broker_reconcile_last: float = 0.0
-    
+
     try:
         kite = get_kite_client()
         zerodha_adapter = ZerodhaExecutionAdapter(kite_client=kite, dry_run=True)
         logger.info("✅ Zerodha adapter initialized")
     except Exception as e:
         logger.warning(f"⚠️  Zerodha adapter failed: {e}, will use paper adapter only")
-        # Zerodha not configured, will use paper adapter as fallback
+
+    try:
+        from app.core.broker.indmoney.client import get_indmoney_client
+        from app.core.execution.indmoney import INDMoneyExecutionAdapter
+        indmoney_adapter = INDMoneyExecutionAdapter(client=get_indmoney_client(), dry_run=True)
+        logger.info("✅ INDMoney adapter initialized")
+    except Exception as e:
+        logger.warning(f"⚠️  INDMoney adapter failed: {e}")
         pass
 
     try:
@@ -167,31 +206,41 @@ async def ws_positions(websocket: WebSocket):
                     if _intent_id.startswith("SCANNER-") or _intent_id.startswith("AI-"):
                         continue
 
-                    # Support PAPER, ZERODHA_DRY_RUN, ZERODHA_LIVE, and ZERODHA_LIVE_DIRECT modes
+                    # Support PAPER, ZERODHA_DRY_RUN, ZERODHA_LIVE, INDMONEY_DRY_RUN, INDMONEY_LIVE
                     mode = None
                     if isinstance(intent.execution_result, dict):
                         mode = intent.execution_result.get("mode")
-                    
-                    # Use appropriate adapter based on mode
-                    is_zerodha_mode = mode and "ZERODHA" in str(mode).upper()
+
+                    mode_str = str(mode or "").upper()
+                    is_zerodha_mode = "ZERODHA" in mode_str
+                    is_indmoney_mode = "INDMONEY" in mode_str
+
                     if is_zerodha_mode and zerodha_adapter:
                         adapter = zerodha_adapter
+                    elif is_indmoney_mode and indmoney_adapter:
+                        adapter = indmoney_adapter
                     else:
                         adapter = paper_adapter
 
                     try:
-                        # For Zerodha, prefer live ticker cache; fallback to REST API
-                        mtm = _try_get_mtm_with_ticker_cache(adapter, intent, is_zerodha_mode)
+                        if is_zerodha_mode:
+                            mtm = _try_get_mtm_with_ticker_cache(adapter, intent, True)
+                        else:
+                            mtm = adapter.mtm(intent)
                         setattr(intent, "pnl", mtm)
                         setattr(intent, "unrealized_pnl", mtm)
                         setattr(intent, "last_mtm_at", now_ist())
+                        # Persist ticket mutations (e.g. entry backfill, leg ltp/pnl)
+                        import json as _json
+                        _ticket = getattr(intent, "ticket", None)
+                        if _ticket is not None:
+                            setattr(intent, "ticket", _ticket)
                         changed = True
                     except Exception as e:
                         logger.error(f"❌ Error calculating MTM for {intent.intent_id}: {e}")
-                        # Continue with last known MTM instead of crashing
                         mtm = getattr(intent, "pnl", 0)
 
-                    # Backfill margin for both Zerodha and paper positions if missing.
+                    # Backfill margin for Zerodha, INDMoney, and paper positions if missing.
                     try:
                         mr = getattr(intent, "margin_required", None)
                         if (mr is None) or (float(mr or 0) <= 0):
@@ -205,17 +254,18 @@ async def ws_positions(websocket: WebSocket):
                                 changed = True
                     except Exception as e:
                         logger.debug(f"⚠️  Margin computation failed for {intent.intent_id}: {e}")
-                        # Non-blocking: margin computation failures should not break WS updates
                         pass
 
                     created_at = getattr(intent, "created_at", None)
                     ticket = getattr(intent, "ticket", {})
                     # Per-leg metrics (entry, LTP, P&L)
+                    # Read from ticket legs AFTER mtm() has backfilled entry prices and ltp.
                     legs_metrics: List[Dict[str, Any]] = []
                     try:
-                        # Only compute via Zerodha adapter (uses real LTP API)
                         if hasattr(adapter, "per_leg_metrics"):
                             legs_metrics = adapter.per_leg_metrics(intent)
+                        elif not is_zerodha_mode:
+                            legs_metrics = _read_leg_metrics_from_ticket(intent)
                     except Exception as e:
                         logger.debug(f"⚠️  Per-leg metrics failed for {intent.intent_id}: {e}")
                         legs_metrics = []

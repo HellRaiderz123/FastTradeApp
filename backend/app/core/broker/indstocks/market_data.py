@@ -165,10 +165,33 @@ _CACHE_TTL = 900  # 15 minutes
 
 
 def _instruments_cache() -> Dict[str, str]:
+    """
+    Return the in-memory symbol → scrip-code map.
+
+    Load order (OpenAlgo-style — DB is the contract store):
+      1. Return existing cache if still fresh (< 15 min old)
+      2. Load from DB (instant, no API call) — populated by sync_instruments()
+      3. Fall back to API refresh only if DB is also empty
+    """
     global _sym_cache, _cache_loaded_at
     if _sym_cache and (time.time() - _cache_loaded_at) < _CACHE_TTL:
         return _sym_cache
-    _refresh_instruments_cache()
+
+    # Try DB first — this is the primary source after startup sync
+    try:
+        from app.core.broker.indstocks.instruments_sync import load_cache_from_db
+        count = load_cache_from_db()
+        if count > 0:
+            return _sym_cache
+    except Exception as exc:
+        logger.warning("INDstocks: DB cache load failed: %s", exc)
+
+    # DB empty or unavailable — fall back to API (first run before any sync)
+    try:
+        _refresh_instruments_cache()
+    except Exception as exc:
+        logger.warning("INDstocks instruments API refresh failed: %s", exc)
+
     return _sym_cache
 
 
@@ -241,6 +264,19 @@ def _refresh_instruments_cache() -> None:
                                     strike_int = int(float(strike_raw))
                                     lookup_key = f"{underlying_name}|{exp_date}|{strike_int}|{opt_type}"
                                     merged[lookup_key] = scrip
+                                    # Also index with common short aliases so
+                                    # NIFTY50->NIFTY, BANKNIFTY->BANKNIFTY etc. all resolve.
+                                    _UND_ALIASES = {
+                                        "NIFTY 50": "NIFTY",
+                                        "NIFTY50": "NIFTY",
+                                        "BANK NIFTY": "BANKNIFTY",
+                                        "NIFTY BANK": "BANKNIFTY",
+                                        "NIFTYFINSRV25 50": "FINNIFTY",
+                                        "NIFTY FIN SERVICE": "FINNIFTY",
+                                    }
+                                    alias = _UND_ALIASES.get(underlying_name)
+                                    if alias:
+                                        merged[f"{alias}|{exp_date}|{strike_int}|{opt_type}"] = scrip
                             except Exception:
                                 pass
             logger.info("INDstocks instruments loaded source=%s: %d rows", source, rows_loaded)

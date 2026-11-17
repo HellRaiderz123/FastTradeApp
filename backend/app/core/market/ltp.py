@@ -78,50 +78,47 @@ def _is_scrip_code(sym: str) -> bool:
 
 def _fetch_ltp_indmoney_options(symbols: List[str]) -> Dict[str, float]:
     """
-    Fetch LTP for F&O option symbols via INDstocks instruments cache.
-    Symbols are in Zerodha format (e.g. NIFTY26N0322500PE).
-    Parses each symbol and looks up the normalised key UNDERLYING|DATE|STRIKE|TYPE
-    built during cache load to get the NFO_ scrip-code.
+    Resolve Zerodha-format option symbols to INDstocks scrip-codes via the
+    in-memory cache (loaded from DB), then fetch LTP from INDstocks API.
+
+    Resolution order per symbol:
+      1. Direct TRADING_SYMBOL key (e.g. NIFTY26N1925600CE stored as-is from FNO CSV)
+      2. UNDERLYING|EXPIRY|STRIKE|TYPE lookup key (built during sync)
+      3. Nearest-expiry fallback for same underlying+strike+type
     """
-    from app.core.broker.indstocks.market_data import _instruments_cache, _refresh_instruments_cache, fetch_ltp as _ind_fetch_ltp
+    from app.core.broker.indstocks.market_data import _instruments_cache, fetch_ltp as _ind_fetch_ltp
 
     def _resolve(cache: Dict[str, str], sym: str):
-        # Already a scrip code — use directly
         if _is_scrip_code(sym):
             return sym
-        # Try direct symbol key first (INDstocks may index by trading symbol)
+        # 1. Direct trading symbol (fastest path)
         direct = cache.get(sym.upper())
         if direct:
             return direct
+        # 2. Parse and build lookup key
         parsed = _parse_zerodha_option_symbol(sym)
         if not parsed:
             return None
         underlying, expiry, strike, opt_type = parsed
-        key = f"{underlying}|{expiry}|{strike}|{opt_type}"
-        scrip = cache.get(key)
+        scrip = cache.get(f"{underlying}|{expiry}|{strike}|{opt_type}")
         if scrip:
             return scrip
-        # Exact expiry not found (weekly not in INDstocks CSV) —
-        # find nearest available expiry for same underlying+strike+type
+        # 3. Nearest expiry fallback
         from datetime import date as _date
         today = _date.today()
         prefix = f"{underlying}|"
-        target_key = f"|{strike}|{opt_type}"
-        candidates = [
-            k for k in cache
-            if k.startswith(prefix) and k.endswith(target_key) and k.count("|") == 3
-        ]
+        suffix = f"|{strike}|{opt_type}"
+        candidates = [k for k in cache if k.startswith(prefix) and k.endswith(suffix) and k.count("|") == 3]
         if candidates:
-            # Pick nearest future expiry to the requested expiry (not just today)
-            def _expiry_date(k):
+            def _exp(k):
                 try:
                     return _date.fromisoformat(k.split("|")[1])
                 except Exception:
                     return _date.max
-            future = [k for k in candidates if _expiry_date(k) >= today]
+            future = [k for k in candidates if _exp(k) >= today]
             if future:
-                best = min(future, key=lambda k: abs((_expiry_date(k) - expiry).days))
-                logger.debug("INDMoney: %s expiry not in cache, using nearest: %s", key, best)
+                best = min(future, key=lambda k: abs((_exp(k) - expiry).days))
+                logger.debug("INDMoney: %s not in cache, using nearest expiry: %s", sym, best)
                 return cache.get(best)
         return None
 
@@ -137,34 +134,11 @@ def _fetch_ltp_indmoney_options(symbols: List[str]) -> Dict[str, float]:
             missing.append(sym)
 
     if missing:
-        try:
-            _refresh_instruments_cache()
-            refreshed = _instruments_cache()
-            still_missing: List[str] = []
-            for sym in missing:
-                scrip = _resolve(refreshed, sym)
-                if scrip:
-                    sym_to_scrip[sym] = scrip
-                else:
-                    still_missing.append(sym)
-            if still_missing:
-                # Last resort: try direct tradingsymbol lookup (symbol may be stored
-                # under its own key in the cache, e.g. NIFTY26N1024000PE directly)
-                cache_after = _instruments_cache()
-                truly_missing: List[str] = []
-                for sym in still_missing:
-                    direct = cache_after.get(sym.upper())
-                    if direct:
-                        sym_to_scrip[sym] = direct
-                    else:
-                        truly_missing.append(sym)
-                if truly_missing:
-                    logger.warning(
-                        "INDMoney: option symbols not found in instruments cache after refresh: %s",
-                        truly_missing,
-                    )
-        except Exception as exc:
-            logger.warning("INDMoney: instruments cache refresh failed: %s", exc)
+        logger.warning(
+            "INDMoney: %d option symbols not found in instruments DB: %s. "
+            "Run POST /indmoney/refresh-instruments to re-sync contracts.",
+            len(missing), missing,
+        )
 
     if not sym_to_scrip:
         return {}
