@@ -48,6 +48,7 @@ const FiiDii = lazy(() => import('./pages/FiiDii'));
 const StockResearch = lazy(() => import('./pages/StockResearch'));
 const SystemMetrics = lazy(() => import('./pages/SystemMetrics'));
 const FilingAnalysis = lazy(() => import('./pages/FilingAnalysis'));
+const StrategyIntelligence = lazy(() => import('./pages/StrategyIntelligence'));
 const Login = lazy(() => import('./pages/Login'));
 
 // Page loader fallback
@@ -184,6 +185,7 @@ function AppInner() {
                       <Route path="/stock-research" element={<StockResearch />} />
                       <Route path="/system-metrics" element={<SystemMetrics />} />
                       <Route path="/filing-analysis" element={<FilingAnalysis />} />
+                      <Route path="/strategy-intelligence" element={<StrategyIntelligence />} />
                     </Routes>
                   </Suspense>
                 </main>

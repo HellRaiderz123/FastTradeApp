@@ -372,6 +372,7 @@ def analyze_filing(
     pdf_url: Optional[str],
     published_at: str,
     dedup_key: str,
+    skip_filter: bool = False,
 ) -> dict:
     """
     Full pipeline: filter → download → extract → classify → store.
@@ -400,13 +401,17 @@ def analyze_filing(
 
     # Step 1: operator filter
     passed, avg_vol, reason = passes_operator_filter(symbol)
-    result["passed_filter"] = passed
     result["avg_volume"] = avg_vol
-    result["filter_reason"] = reason
 
-    if not passed:
-        logger.info("Filing filtered out [%s]: %s", symbol, reason)
-        return result
+    if skip_filter:
+        result["passed_filter"] = True
+        result["filter_reason"] = f"filter_skipped (original: {reason})"
+    else:
+        result["passed_filter"] = passed
+        result["filter_reason"] = reason
+        if not passed:
+            logger.info("Filing filtered out [%s]: %s", symbol, reason)
+            return result
 
     # Step 2: PDF download + extraction
     text = None

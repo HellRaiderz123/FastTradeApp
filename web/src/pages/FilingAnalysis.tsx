@@ -110,7 +110,9 @@ const FilingAnalysis: React.FC = () => {
 
   const rerun = async (id: number) => {
     try {
-      await api.post(`/nse/filing-analysis/rerun/${id}`);
+      await api.post(`/nse/filing-analysis/rerun/${id}`, null, {
+        params: { skip_filter: !passedOnly },
+      });
       openDetail(id);
     } catch (e) { console.error(e); }
   };

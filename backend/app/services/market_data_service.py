@@ -478,7 +478,11 @@ class INDMoneyDataAdapter(BrokerDataAdapter):
 
     def get_option_quotes(self, nfo_symbols: List[str]) -> Dict[str, OptionQuote]:
         try:
-            from app.core.broker.indstocks.market_data import _instruments_cache, fetch_full_quotes
+            from app.core.broker.indstocks.market_data import (
+                _instruments_cache, fetch_full_quotes, _access_token, _rate_limiter, BASE_URL,
+            )
+            import requests as _req
+
             cache = _instruments_cache()
             sym_to_scrip: Dict[str, str] = {}
             for sym in nfo_symbols:
@@ -487,7 +491,40 @@ class INDMoneyDataAdapter(BrokerDataAdapter):
                     sym_to_scrip[sym] = scrip
             if not sym_to_scrip:
                 return {}
-            raw = fetch_full_quotes(list(sym_to_scrip.values()))
+
+            scrips = list(sym_to_scrip.values())
+            raw = fetch_full_quotes(scrips)
+
+            # Fetch OI from /market/quotes/mkt in batches of 50
+            oi_map: Dict[str, int] = {}
+            bid_map: Dict[str, float] = {}
+            ask_map: Dict[str, float] = {}
+            headers = {"Authorization": _access_token()}
+            for i in range(0, len(scrips), 50):
+                batch = scrips[i:i + 50]
+                try:
+                    _rate_limiter.wait()
+                    resp = _req.get(
+                        f"{BASE_URL}/market/quotes/mkt",
+                        params={"scrip-codes": ",".join(batch)},
+                        headers=headers,
+                        timeout=10,
+                    )
+                    resp.raise_for_status()
+                    mkt_data = resp.json().get("data") or {}
+                    for scrip in batch:
+                        entry = mkt_data.get(scrip) or {}
+                        agg = entry.get("aggregate") or entry.get("market_depth", {}).get("aggregate") or {}
+                        oi_map[scrip] = int(_clean_num(agg.get("open_interest") or agg.get("oi"), 0))
+                        depth = entry.get("market_depth", {}).get("depth") or []
+                        if depth:
+                            buy0 = (depth[0].get("buy") or {})
+                            sell0 = (depth[0].get("sell") or {})
+                            bid_map[scrip] = float(_clean_num(buy0.get("price"), 0.0))
+                            ask_map[scrip] = float(_clean_num(sell0.get("price"), 0.0))
+                except Exception as exc:
+                    logger.debug("INDMoney mkt-quotes OI fetch failed for batch: %s", exc)
+
             result: Dict[str, OptionQuote] = {}
             for sym, scrip in sym_to_scrip.items():
                 q = raw.get(scrip)
@@ -502,9 +539,9 @@ class INDMoneyDataAdapter(BrokerDataAdapter):
                     low=float(q.get("low", ltp)),
                     close=float(q.get("prev_close", ltp)),
                     volume=int(q.get("volume", 0)),
-                    oi=0,
-                    bid=0.0,
-                    ask=0.0,
+                    oi=oi_map.get(scrip, 0),
+                    bid=bid_map.get(scrip, 0.0),
+                    ask=ask_map.get(scrip, 0.0),
                 )
             return result
         except Exception as e:

@@ -146,7 +146,11 @@ def get_filing_detail(filing_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/rerun/{filing_id}")
-def rerun_filing_analysis(filing_id: int, db: Session = Depends(get_db)):
+def rerun_filing_analysis(
+    filing_id: int,
+    skip_filter: bool = Query(False, description="Skip NIFTY500+volume filter and force analysis"),
+    db: Session = Depends(get_db),
+):
     """Re-download and re-analyse a specific filing."""
     from app.db.models_filing_analysis import NseFilingAnalysis
     from app.services.filing_pdf_analyzer import analyze_filing
@@ -164,6 +168,7 @@ def rerun_filing_analysis(filing_id: int, db: Session = Depends(get_db)):
         pdf_url=row.pdf_url,
         published_at=row.published_at or "",
         dedup_key=row.dedup_key,
+        skip_filter=skip_filter,
     )
 
     for k, v in result.items():

@@ -108,6 +108,23 @@ def record_exit_outcome(
             db.rollback()
             return None
 
+    # Auto-trigger reflection for SL hits
+    if outcome_label == "LOSS" and "SL" in (outcome.exit_reason or "").upper():
+        try:
+            from app.services.sl_reflection_engine import reflect_on_sl
+            reflect_on_sl(
+                db,
+                intent_id=intent.intent_id,
+                symbol=_safe_str(intent.underlying),
+                strategy=_safe_str(intent.strategy),
+                pnl=pnl,
+                sl_time=outcome.exit_time,
+                signal_json=outcome.signal_json or {},
+                context_json=outcome.context_json or {},
+            )
+        except Exception as _e:
+            logger.warning("Auto SL reflection failed for %s: %s", intent.intent_id, _e)
+
     return outcome
 
 

@@ -141,6 +141,7 @@ def _initialize_database():
         "app.db.models_nse",
         "app.db.models_fii_dii",
         "app.db.models_latency",
+        "app.db.models_sl_reflection",
     ]
     for _mod in _optional_models:
         try:

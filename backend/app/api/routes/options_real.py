@@ -142,7 +142,7 @@ async def get_real_option_chain(symbol: str, expiry: Optional[str] = None):
             expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
 
         cache_key = f"{symbol}:{expiry_date.isoformat()}"
-        cached = _cache_get(_CHAIN_CACHE, cache_key, ttl_seconds=8)
+        cached = _cache_get(_CHAIN_CACHE, cache_key, ttl_seconds=12)
         if cached is not None:
             return cached
 

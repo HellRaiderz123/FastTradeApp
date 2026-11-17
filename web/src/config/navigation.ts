@@ -23,6 +23,7 @@ import {
   Settings,
   ShoppingBag,
   Sigma,
+  Sparkles,
   Star,
   Target,
   TrendingUp,
@@ -128,6 +129,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: '/fii-dii', icon: ArrowUpDown, label: 'FII / DII' },
       { path: '/stock-research', icon: Newspaper, label: 'Stock Research' },
       { path: '/filing-analysis', icon: FileSearch, label: 'Filing Analysis' },
+      { path: '/strategy-intelligence', icon: Sparkles, label: 'Strategy Intelligence' },
     ],
   },
   {

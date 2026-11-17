@@ -93,6 +93,8 @@ const OptionsChain: React.FC = () => {
   useEffect(() => {
     if (expiry) {
       fetchChain();
+      const interval = setInterval(fetchChain, 15000);
+      return () => clearInterval(interval);
     }
   }, [symbol, expiry]);
 

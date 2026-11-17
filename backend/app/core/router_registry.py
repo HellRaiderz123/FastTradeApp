@@ -89,6 +89,7 @@ def register_all_routers(app: "FastAPI") -> None:
         fii_dii as fii_dii_routes,
         nse_data as nse_data_routes,
         filing_analysis as filing_analysis_routes,
+        learning as learning_routes,
     )
     if _ml_enabled:
         from app.api.routes import ml
@@ -178,6 +179,7 @@ def register_all_routers(app: "FastAPI") -> None:
     app.include_router(fii_dii_routes.router, dependencies=auth_dep)
     app.include_router(nse_data_routes.router, dependencies=auth_dep)
     app.include_router(filing_analysis_routes.router, dependencies=auth_dep)
+    app.include_router(learning_routes.router, dependencies=auth_dep)
 
     # ─── Alexa (uses its own auth) ────────────────────────────────────────────
     app.include_router(alexa.router)
